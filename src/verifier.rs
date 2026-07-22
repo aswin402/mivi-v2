@@ -128,10 +128,31 @@ impl CompilerVerifier {
         result
     }
 
+    pub fn compress_prompt(text: &str) -> String {
+        let lines: Vec<&str> = text.lines().map(|l| l.trim_end()).collect();
+        let mut compressed = Vec::new();
+        let mut prev_blank = false;
+
+        for line in lines {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                if !prev_blank {
+                    compressed.push("");
+                    prev_blank = true;
+                }
+            } else {
+                compressed.push(line);
+                prev_blank = false;
+            }
+        }
+        compressed.join("\n")
+    }
+
     pub fn generate_and_verify(&self, task: &str, language: &str, max_retries: usize) -> (Option<String>, String) {
+        let compressed_task = Self::compress_prompt(task);
         let mut prompt = format!(
             "Write ONLY the clean standalone script in {} for the task:\n{}\nReturn ONLY code inside a single ``` code block.",
-            language, task
+            language, compressed_task
         );
         let sys_prompt = "You are a world-class coding expert. Write clean, standalone code.";
 

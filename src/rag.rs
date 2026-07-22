@@ -105,7 +105,7 @@ impl TurboVecRAG {
             return String::new();
         }
 
-        let mut formatted = vec!["# --- REFERENCE CODEBASE CONTEXT (DO NOT COPY OR EXECUTE) ---".to_string()];
+        let mut formatted = vec!["# --- GOOGLE OKF (OPEN KNOWLEDGE FORMAT) CODEBASE CONTEXT ---".to_string()];
         for (i, (chunk, score)) in matches.iter().enumerate() {
             if *score < 1.0 {
                 continue;
@@ -117,15 +117,18 @@ impl TurboVecRAG {
                 .collect::<Vec<String>>()
                 .join("\n");
 
-            formatted.push(format!(
-                "# --- Snippet {} (Source: {} L{}) ---\n{}",
+            let okf_block = format!(
+                "# ---\n# okf_version: 1.0\n# snippet_id: {}\n# source: {}\n# line_start: {}\n# relevance: {:.2}\n# ---\n{}",
                 i + 1,
                 chunk.file_path,
                 chunk.line_start,
+                score,
                 commented_text
-            ));
+            );
+
+            formatted.push(okf_block);
         }
-        formatted.push("# -----------------------------------------------------------".to_string());
+        formatted.push("# -------------------------------------------------------------".to_string());
         formatted.join("\n\n")
     }
 }

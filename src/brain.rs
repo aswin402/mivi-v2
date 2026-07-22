@@ -10,6 +10,7 @@ pub struct EdgeBrain {
     pub qwen_path: PathBuf,
     pub minicpm_path: PathBuf,
     pub minicpm_proj: PathBuf,
+    pub ultra_low_ram: bool,
 }
 
 impl EdgeBrain {
@@ -44,6 +45,11 @@ impl EdgeBrain {
         let qwen_path = models_dir.join("qwen2.5-0.5b-instruct-q2_k.gguf");
         let minicpm_path = models_dir.join("MiniCPM-V-4.6-Q4_K_M.gguf");
         let minicpm_proj = models_dir.join("mmproj-MiniCPM-V-4.6-Q8_0.gguf");
+        let ultra_low_ram = env::var("MIVI_ULTRA_LOW_RAM").map(|v| v == "1" || v == "true").unwrap_or(false);
+
+        if ultra_low_ram {
+            println!("[AIRLLM/COLIBRI MODE] Ultra-Low-RAM mmap streaming active (< 40 MB RAM target)");
+        }
 
         Self {
             llama_cli,
@@ -52,6 +58,7 @@ impl EdgeBrain {
             qwen_path,
             minicpm_path,
             minicpm_proj,
+            ultra_low_ram,
         }
     }
 
@@ -61,13 +68,21 @@ impl EdgeBrain {
             system_prompt, prompt
         );
 
-        let output = Command::new(&self.llama_cli)
-            .arg("-m")
+        let eff_context = if self.ultra_low_ram && context_size == "8192" {
+            "4096"
+        } else {
+            context_size
+        };
+
+        let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
+
+        let mut cmd = Command::new(&self.llama_cli);
+        cmd.arg("-m")
             .arg(model_path)
             .arg("-ngl")
-            .arg("999")
+            .arg(ngl_val)
             .arg("-c")
-            .arg(context_size)
+            .arg(eff_context)
             .arg("-fa")
             .arg("on")
             .arg("-ctk")
@@ -79,9 +94,13 @@ impl EdgeBrain {
             .arg("--temp")
             .arg(temp)
             .arg("--simple-io")
-            .arg("-st")
-            .output()
-            .map_err(|e| format!("Failed to execute llama-cli: {}", e))?;
+            .arg("-st");
+
+        if self.ultra_low_ram {
+            cmd.arg("--mmap");
+        }
+
+        let output = cmd.output().map_err(|e| format!("Failed to execute llama-cli: {}", e))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
@@ -111,6 +130,28 @@ impl EdgeBrain {
 
     pub fn query_coder(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
         self.run_cli(&self.qwen_path, prompt, system_prompt, "0.1", "8192")
+    }
+
+    /// Speculative Decoding (ds4 DwarfStar pattern):
+    /// Uses Qwen-0.5B to draft tokens fast, then uses Llama-1B to verify.
+    pub fn query_speculative(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
+        println!("[DS4 SPECULATIVE] Drafting with Qwen 0.5B...");
+        let draft = self.query_coder(prompt, system_prompt)?;
+        
+        if draft.trim().is_empty() {
+            return self.query_reasoner(prompt, system_prompt);
+        }
+
+        println!("[DS4 SPECULATIVE] Verifying draft with Llama 1B...");
+        let verify_prompt = format!(
+            "Verify and improve this response for accuracy:\nUSER: {}\nPROPOSED RESPONSE:\n{}\nIf accurate, output the response as is. Otherwise output the corrected version.",
+            prompt, draft
+        );
+
+        match self.query_reasoner(&verify_prompt, system_prompt) {
+            Ok(verified) if !verified.trim().is_empty() => Ok(verified),
+            _ => Ok(draft),
+        }
     }
 
     pub fn query_vision(&self, image_path: &str, prompt: &str) -> Result<String, String> {

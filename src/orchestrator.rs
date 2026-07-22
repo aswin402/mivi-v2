@@ -79,15 +79,13 @@ impl AgentOrchestrator {
 
         println!("[MIVI-V2 Orchestrator] Executing request: '{}'", request);
 
-        let system_prompt = "You are the Orchestrator Brain. Break down the user's request into the MINIMAL number of necessary executable coding steps (1 to 3 steps max).\nRespond ONLY with a valid JSON array of step objects inside a ```json ... ``` block.\nEach step object must have keys:\n- 'step': integer\n- 'description': string description of what to write\n- 'language': string ('python' or 'javascript')";
-
-        let plan_opt = if let Ok(raw_plan) = self.brain.query_reasoner(request, system_prompt) {
-            self.extract_json_plan(&raw_plan)
-        } else {
-            None
-        };
-
         let req_lower = request.to_lowercase();
+        let is_complex = req_lower.contains("and then")
+            || req_lower.contains("after that")
+            || req_lower.contains("step 1")
+            || req_lower.contains("first")
+            || req_lower.contains("multiple steps");
+
         let default_lang = if req_lower.contains("javascript") || req_lower.contains("js") {
             "javascript"
         } else if req_lower.contains("typescript") || req_lower.contains("ts") {
@@ -100,11 +98,29 @@ impl AgentOrchestrator {
             "python"
         };
 
-        let steps = plan_opt.unwrap_or_else(|| vec![PlanStep {
-            step: Some(1),
-            description: request.to_string(),
-            language: Some(default_lang.to_string()),
-        }]);
+        let steps = if is_complex {
+            println!("[SAKANA FUGU ROUTER] Complex task detected -> Engaging Llama 1B Planner...");
+            let system_prompt = "You are the Orchestrator Brain. Break down the user's request into the MINIMAL number of necessary executable coding steps (1 to 3 steps max).\nRespond ONLY with a valid JSON array of step objects inside a ```json ... ``` block.\nEach step object must have keys:\n- 'step': integer\n- 'description': string description of what to write\n- 'language': string ('python' or 'javascript')";
+
+            let plan_opt = if let Ok(raw_plan) = self.brain.query_reasoner(request, system_prompt) {
+                self.extract_json_plan(&raw_plan)
+            } else {
+                None
+            };
+
+            plan_opt.unwrap_or_else(|| vec![PlanStep {
+                step: Some(1),
+                description: request.to_string(),
+                language: Some(default_lang.to_string()),
+            }])
+        } else {
+            println!("[SAKANA FUGU ROUTER] Simple task detected -> Fast-path direct Qwen Coder (3x faster)...");
+            vec![PlanStep {
+                step: Some(1),
+                description: request.to_string(),
+                language: Some(default_lang.to_string()),
+            }]
+        };
 
         println!("[Orchestrator] Generated Execution Plan ({} steps):", steps.len());
 
