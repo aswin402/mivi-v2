@@ -1,6 +1,6 @@
 [package]
 name = "mivi"
-version = "2.0.0"
+version = "0.0.3"
 edition = "2021"
 description = "MIVI-V2: Ultra-Compact Low-Resource Pure Rust Local AI Engine"
 

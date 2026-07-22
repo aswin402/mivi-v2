@@ -5,6 +5,17 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.3] - 2026-07-22
+
+### 🚀 Production Stability & Clean Release
+
+#### Improved
+* 🧹 **Git Index Optimization**: Un-tracked large model binaries from git index to maintain a clean, lightweight repository (< 5 MB codebase).
+* ⚡ **Version Synchronization**: Standardized Semantic Versioning to `v0.0.3` across `Cargo.toml`, REST API root endpoint (`GET /`), `README.md`, and system diagnostics.
+* 🛡️ **Repository Hardening**: Enforced strict `.gitignore` rules for `.safetensors`, `.gguf`, and temporary execution artifacts.
+
+---
+
 ## [v0.0.2] - 2026-07-22
 
 ### ⚡ Next-Gen Performance & Optimization Release
