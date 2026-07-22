@@ -40,6 +40,12 @@ def download_models():
             "repo_id": "ggml-org/MiniCPM-V-4.6-GGUF",
             "filename": "mmproj-MiniCPM-V-4.6-Q8_0.gguf",
             "target": os.path.join(models_dir, "mmproj-MiniCPM-V-4.6-Q8_0.gguf")
+        },
+        {
+            "name": "Cactus Compute Needle 26M (Sub-2ms Router)",
+            "repo_id": "Cactus-Compute/needle",
+            "filename": "model.safetensors",
+            "target": os.path.join(models_dir, "needle-model.safetensors")
         }
     ]
 

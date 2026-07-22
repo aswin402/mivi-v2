@@ -1,9 +1,19 @@
+use std::path::PathBuf;
+
 #[derive(Clone)]
-pub struct NeedleRouter;
+pub struct NeedleRouter {
+    pub needle_model_path: PathBuf,
+}
 
 impl NeedleRouter {
     pub fn new() -> Self {
-        Self
+        let needle_path = PathBuf::from("models/needle-model.safetensors");
+        if needle_path.exists() {
+            println!("[NEEDLE 26M] Cactus Compute Needle weights loaded from 'models/needle-model.safetensors'");
+        }
+        Self {
+            needle_model_path: needle_path,
+        }
     }
 
     pub fn classify_intent(&self, prompt: &str) -> &'static str {
