@@ -1,0 +1,18 @@
+[package]
+name = "mivi"
+version = "2.0.0"
+edition = "2021"
+description = "MIVI-V2: Ultra-Compact Low-Resource Pure Rust Local AI Engine"
+
+[workspace]
+
+[dependencies]
+tokio = { version = "1.38", features = ["full"] }
+axum = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+walkdir = "2.5"
+regex = "1.10"
+tower-http = { version = "0.5", features = ["cors"] }
+colored = "2.1"
+inquire = "0.7"

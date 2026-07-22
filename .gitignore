@@ -1,0 +1,20 @@
+# Rust build output
+/target
+
+# Temp run directories & generated code
+/temp_run
+*.tmp
+
+# GGUF Model Checkpoints (downloaded via download_models.py)
+/models/*.gguf
+/models/.cache/
+
+# Generated dataset & telemetry logs
+/dataset
+*.jsonl
+*.log
+
+# OS & Editor files
+.DS_Store
+.vscode/
+.idea/
