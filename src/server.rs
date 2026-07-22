@@ -144,6 +144,10 @@ async fn handle_chat_completions(
                 state.brain.query_reasoner(&user_prompt, "You are a helpful assistant.").unwrap_or_default(),
                 "llama-3.2-1b".to_string(),
             ),
+            _ if intent == "CHAT" => {
+                let res = state.brain.query_reasoner(&user_prompt, "You are a helpful assistant.").unwrap_or_default();
+                (res, "llama-3.2-1b".to_string())
+            }
             _ => {
                 let (_, res) = state.orchestrator.execute_plan(&user_prompt).await;
                 (res, "mivi-v2".to_string())

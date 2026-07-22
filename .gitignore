@@ -18,3 +18,7 @@
 .DS_Store
 .vscode/
 .idea/
+.crush/
+memory.db
+memory.db-shm
+memory.db-wal
