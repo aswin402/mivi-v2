@@ -15,10 +15,16 @@ pub async fn run_system_audit() {
     let brain = EdgeBrain::new();
     let sys_prompt = "You are a helpful assistant.";
     if let Ok(res) = brain.query_reasoner("Reply with 'Reasoner OK'", sys_prompt) {
-        println!("[OK] Reasoner Engine Output: {}", res.lines().next().unwrap_or(""));
+        println!(
+            "[OK] Reasoner Engine Output: {}",
+            res.lines().next().unwrap_or("")
+        );
     }
     if let Ok(res) = brain.query_coder("print('Coder OK')", sys_prompt) {
-        println!("[OK] Coder Engine Output: {}", res.lines().next().unwrap_or(""));
+        println!(
+            "[OK] Coder Engine Output: {}",
+            res.lines().next().unwrap_or("")
+        );
     }
     println!("[Audit 1/4] EdgeBrain Engine: PASSED\n");
 
@@ -32,7 +38,9 @@ pub async fn run_system_audit() {
     // 3. Orchestrator Test
     println!("[Audit 3/4] Checking Multi-Agent Orchestrator...");
     let orchestrator = AgentOrchestrator::new(brain);
-    let (success, res) = orchestrator.execute_plan("Write a python script printing 'Audit OK'").await;
+    let (success, res) = orchestrator
+        .execute_plan("Write a python script printing 'Audit OK'")
+        .await;
     if success {
         println!("[OK] Orchestrator Output Verified:\n{}", res);
     }
@@ -40,6 +48,9 @@ pub async fn run_system_audit() {
 
     let elapsed = start.elapsed();
     println!("=========================================================");
-    println!(" [SUCCESS] ALL MIVI-V2 SYSTEM AUDITS PASSED IN {:.2?}!", elapsed);
+    println!(
+        " [SUCCESS] ALL MIVI-V2 SYSTEM AUDITS PASSED IN {:.2?}!",
+        elapsed
+    );
     println!("=========================================================");
 }

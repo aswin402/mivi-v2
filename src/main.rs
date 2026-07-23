@@ -14,14 +14,17 @@ async fn main() {
     println!("=========================================================");
     println!("  🚀 MIVI-V2: PURE RUST LOW-RESOURCE LOCAL AI ENGINE");
     println!("  RAM Footprint: < 12 MB Server RAM | 0 MB Idle");
-    println!("  Version: 2.0.0 (Pure Rust)");
+    println!("  Version: 0.0.4 (Pure Rust)");
     println!("=========================================================\n");
 
     let brain = EdgeBrain::new();
     let orchestrator = AgentOrchestrator::new(brain.clone());
 
     let cur_dir = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    orchestrator.rag.index_directory(&cur_dir.display().to_string()).await;
+    orchestrator
+        .rag
+        .index_directory(&cur_dir.display().to_string())
+        .await;
 
     match mode {
         "audit" => {

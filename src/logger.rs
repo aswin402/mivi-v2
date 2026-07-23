@@ -42,17 +42,46 @@ impl DatasetLogger {
             instruction: prompt.trim().to_string(),
             language: language.to_string(),
             input: String::new(),
-            output: format!("```python\n{}\n```", code.trim()),
+            output: format!("```{}\n{}\n```", language, code.trim()),
             verified_terminal_output: terminal_output.trim().to_string(),
             verified: true,
             timestamp: now,
         };
 
         if let Ok(json_str) = serde_json::to_string(&sample) {
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&self.file_path) {
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.file_path)
+            {
                 let _ = writeln!(file, "{}", json_str);
-                println!("[DatasetLogger] Saved verified execution sample to '{:?}'", self.file_path);
+                println!(
+                    "[DatasetLogger] Saved verified execution sample to '{:?}'",
+                    self.file_path
+                );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn save_sample_uses_declared_language_in_code_fence() {
+        let file_path = PathBuf::from("target/logger-test-rust-sample.jsonl");
+        let _ = fs::remove_file(&file_path);
+        let logger = DatasetLogger {
+            file_path: file_path.clone(),
+        };
+
+        logger.save_sample("make it", "fn main() {}", "", "rust");
+
+        let content = fs::read_to_string(&file_path).expect("sample should be written");
+        let sample: serde_json::Value =
+            serde_json::from_str(content.trim()).expect("sample should be json");
+        assert_eq!(sample["output"], "```rust\nfn main() {}\n```");
     }
 }

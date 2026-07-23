@@ -1,40 +1,386 @@
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
 
+const CLASS_NAMES: &[&str] = &["CHAT", "VISION", "CODE", "MULTI_STEP"];
+
+const KEYWORD_RULES: &[(&str, &[&str])] = &[
+    (
+        "VISION",
+        &[
+            "image", "photo", "picture", "look at", "see", "png", "jpg", "jpeg", "gif",
+        ],
+    ),
+    (
+        "CODE",
+        &[
+            "code",
+            "write",
+            "script",
+            "function",
+            "implement",
+            "python",
+            "rust",
+            "program",
+            "sql",
+            "debug",
+            "test",
+            "api",
+            "algorithm",
+        ],
+    ),
+    (
+        "MULTI_STEP",
+        &[
+            "step",
+            "first",
+            "then",
+            "after that",
+            "multiple",
+            "each",
+            "process all",
+            "for every",
+        ],
+    ),
+];
+
+const TRAINING_DATA: &[(&str, &str)] = &[
+    // CHAT (25 examples)
+    ("hello how are you", "CHAT"),
+    ("what is the weather today", "CHAT"),
+    ("tell me a joke", "CHAT"),
+    ("good morning", "CHAT"),
+    ("what do you think about", "CHAT"),
+    ("can you explain", "CHAT"),
+    ("i need help with", "CHAT"),
+    ("give me advice", "CHAT"),
+    ("tell me about", "CHAT"),
+    ("how does this work", "CHAT"),
+    ("what is your name", "CHAT"),
+    ("thanks for the help", "CHAT"),
+    ("yes that makes sense", "CHAT"),
+    ("can you clarify", "CHAT"),
+    ("how are you doing", "CHAT"),
+    ("what's up", "CHAT"),
+    ("are you available", "CHAT"),
+    ("could you help me", "CHAT"),
+    ("i have a question", "CHAT"),
+    ("what do you recommend", "CHAT"),
+    ("explain this concept", "CHAT"),
+    ("what is the meaning of", "CHAT"),
+    ("do you understand", "CHAT"),
+    ("let's discuss", "CHAT"),
+    ("what are your thoughts", "CHAT"),
+    // VISION (15 examples)
+    ("look at this image", "VISION"),
+    ("describe this photo", "VISION"),
+    ("what do you see in this picture", "VISION"),
+    ("analyze this image", "VISION"),
+    ("what is shown in the picture", "VISION"),
+    ("read the text in this image", "VISION"),
+    ("identify objects in this photo", "VISION"),
+    ("what does this image contain", "VISION"),
+    ("what's in this screenshot", "VISION"),
+    ("can you see this picture", "VISION"),
+    ("describe what you see", "VISION"),
+    ("what colors are in this image", "VISION"),
+    ("is there a person in this photo", "VISION"),
+    ("what is the text on screen", "VISION"),
+    ("take a look at this diagram", "VISION"),
+    // CODE (20 examples)
+    ("write a python script", "CODE"),
+    ("create a function that sorts", "CODE"),
+    ("implement a fibonacci sequence", "CODE"),
+    ("write code to calculate", "CODE"),
+    ("create a rust program", "CODE"),
+    ("fix this bug", "CODE"),
+    ("generate a sql query", "CODE"),
+    ("write a bash script", "CODE"),
+    ("implement a sorting algorithm", "CODE"),
+    ("debug this code", "CODE"),
+    ("convert this to typescript", "CODE"),
+    ("write a unit test", "CODE"),
+    ("create an api endpoint", "CODE"),
+    ("build a web scraper", "CODE"),
+    ("optimize this function", "CODE"),
+    ("refactor this module", "CODE"),
+    ("write a dockerfile", "CODE"),
+    ("create a react component", "CODE"),
+    ("implement authentication", "CODE"),
+    ("parse this json response", "CODE"),
+    // MULTI_STEP (15 examples)
+    ("first do this then that", "MULTI_STEP"),
+    ("do step 1 and step 2", "MULTI_STEP"),
+    ("then after that execute", "MULTI_STEP"),
+    ("follow these steps", "MULTI_STEP"),
+    ("first calculate then verify", "MULTI_STEP"),
+    ("do this multiple times", "MULTI_STEP"),
+    ("for each item run", "MULTI_STEP"),
+    ("process all files", "MULTI_STEP"),
+    ("first create then test", "MULTI_STEP"),
+    ("step by step process", "MULTI_STEP"),
+    ("repeat this operation", "MULTI_STEP"),
+    ("iterate over all items", "MULTI_STEP"),
+    ("perform these actions in order", "MULTI_STEP"),
+    ("execute the following sequence", "MULTI_STEP"),
+    ("run these commands sequentially", "MULTI_STEP"),
+];
+
+/// Pure Rust Naive Bayes classifier for prompt intent routing.
+/// Uses term-frequency log-probabilities with Laplace smoothing.
 #[derive(Clone)]
 pub struct NeedleRouter {
-    pub needle_model_path: PathBuf,
+    class_log_probs: HashMap<String, f64>,
+    word_log_probs: HashMap<String, HashMap<String, f64>>,
 }
 
 impl NeedleRouter {
     pub fn new() -> Self {
-        let needle_path = PathBuf::from("models/needle-model.safetensors");
-        if needle_path.exists() {
-            println!("[NEEDLE 26M] Cactus Compute Needle weights loaded from 'models/needle-model.safetensors'");
+        let mut vocab_set: HashSet<String> = HashSet::new();
+        let mut class_docs: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+
+        for &(text, class) in TRAINING_DATA {
+            let tokens: Vec<String> = tokenize(text);
+            for t in &tokens {
+                vocab_set.insert(t.clone());
+            }
+            class_docs
+                .entry(class.to_string())
+                .or_default()
+                .push(tokens);
         }
+
+        let mut vocab: Vec<String> = vocab_set.into_iter().collect();
+        vocab.sort();
+        let vocab_size = vocab.len() as f64;
+        let total_docs = TRAINING_DATA.len() as f64;
+
+        let mut class_counts: HashMap<String, f64> = HashMap::new();
+        for (_, class) in TRAINING_DATA {
+            *class_counts.entry(class.to_string()).or_insert(0.0) += 1.0;
+        }
+
+        let mut class_log_probs: HashMap<String, f64> = HashMap::new();
+        for (class, count) in &class_counts {
+            class_log_probs.insert(class.clone(), (count / total_docs).ln());
+        }
+
+        let mut word_class_counts: HashMap<String, HashMap<String, f64>> = HashMap::new();
+        for (class, docs) in &class_docs {
+            let mut counts: HashMap<String, f64> = HashMap::new();
+            for doc in docs {
+                for token in doc {
+                    *counts.entry(token.clone()).or_insert(0.0) += 1.0;
+                }
+            }
+            word_class_counts.insert(class.clone(), counts);
+        }
+
+        let mut word_log_probs: HashMap<String, HashMap<String, f64>> = HashMap::new();
+        for (class, counts) in &word_class_counts {
+            let total_words: f64 = counts.values().sum();
+            let mut log_probs: HashMap<String, f64> = HashMap::new();
+            for word in &vocab {
+                let count = counts.get(word).copied().unwrap_or(0.0);
+                let prob = (count + 1.0) / (total_words + vocab_size);
+                log_probs.insert(word.clone(), prob.ln());
+            }
+            word_log_probs.insert(class.clone(), log_probs);
+        }
+
         Self {
-            needle_model_path: needle_path,
+            class_log_probs,
+            word_log_probs,
         }
     }
 
-    pub fn classify_intent(&self, prompt: &str) -> &'static str {
+    /// Classify prompt intent and return (class, confidence).
+    /// Confidence is the normalized probability (0.0-1.0) of the predicted class.
+    pub fn classify_intent(&self, prompt: &str) -> (&'static str, f64) {
         if prompt.is_empty() {
-            return "CHAT";
+            return ("CHAT", 1.0);
         }
 
-        let p = prompt.to_lowercase();
+        let tokens = tokenize(prompt);
 
-        if p.contains("image") || p.contains("photo") || p.contains("png") || p.contains("jpg") || p.contains("look at") {
-            return "VISION";
+        if tokens.len() < 3 {
+            let class = keyword_classify(prompt);
+            return (class, 1.0);
         }
 
-        if p.contains("and then") || p.contains("after that") || p.contains("step 1") || p.contains("first") || p.contains("multiple") {
-            return "MULTI_STEP";
-        }
+        let mut scores: Vec<(&str, f64)> = CLASS_NAMES
+            .iter()
+            .map(|&class| {
+                let log_prior = self
+                    .class_log_probs
+                    .get(class)
+                    .copied()
+                    .unwrap_or(0.0f64.ln());
+                let mut score = log_prior;
+                if let Some(word_probs) = self.word_log_probs.get(class) {
+                    for token in &tokens {
+                        if let Some(lp) = word_probs.get(token) {
+                            score += lp;
+                        }
+                    }
+                }
+                (class, score)
+            })
+            .collect();
 
-        if p.contains("write") || p.contains("code") || p.contains("python") || p.contains("script") || p.contains("calculate") || p.contains("print") {
-            return "DIRECT_CODE";
-        }
+        // Find best class
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let (best_class, best_score) = scores[0];
 
-        "CHAT"
+        // Convert log-probs to probabilities using softmax
+        let max_score = scores
+            .iter()
+            .map(|(_, s)| *s)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let sum_exp: f64 = scores.iter().map(|(_, s)| (s - max_score).exp()).sum();
+        let confidence = (best_score - max_score).exp() / sum_exp;
+
+        (best_class, confidence)
+    }
+}
+
+fn keyword_classify(prompt: &str) -> &'static str {
+    let p = prompt.to_lowercase();
+    for &(class, patterns) in KEYWORD_RULES {
+        for pat in patterns {
+            if p.contains(pat) {
+                return class;
+            }
+        }
+    }
+    "CHAT"
+}
+
+fn tokenize(text: &str) -> Vec<String> {
+    let cleaned: String = text
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c.is_whitespace() {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    cleaned
+        .split_whitespace()
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.len() > 1)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chat_classification() {
+        let router = NeedleRouter::new();
+        assert_eq!(router.classify_intent("hello how are you").0, "CHAT");
+        assert_eq!(router.classify_intent("tell me a joke").0, "CHAT");
+        assert_eq!(router.classify_intent("what is the weather").0, "CHAT");
+        assert_eq!(router.classify_intent("").0, "CHAT");
+    }
+
+    #[test]
+    fn test_vision_classification() {
+        let router = NeedleRouter::new();
+        assert_eq!(router.classify_intent("look at this image").0, "VISION");
+        assert_eq!(router.classify_intent("describe this photo").0, "VISION");
+        assert_eq!(
+            router.classify_intent("what do you see in this picture").0,
+            "VISION"
+        );
+    }
+
+    #[test]
+    fn test_code_classification() {
+        let router = NeedleRouter::new();
+        assert_eq!(router.classify_intent("write a python script").0, "CODE");
+        assert_eq!(
+            router.classify_intent("implement a sorting algorithm").0,
+            "CODE"
+        );
+        assert_eq!(
+            router.classify_intent("create a function that sorts").0,
+            "CODE"
+        );
+    }
+
+    #[test]
+    fn test_multi_step_classification() {
+        let router = NeedleRouter::new();
+        assert_eq!(
+            router.classify_intent("first do this then that").0,
+            "MULTI_STEP"
+        );
+        assert_eq!(router.classify_intent("follow these steps").0, "MULTI_STEP");
+        assert_eq!(router.classify_intent("process all files").0, "MULTI_STEP");
+    }
+
+    #[test]
+    fn test_short_prompt_keyword_fallback() {
+        let router = NeedleRouter::new();
+        assert_eq!(router.classify_intent("write code").0, "CODE");
+        assert_eq!(router.classify_intent("debug").0, "CODE");
+        assert_eq!(router.classify_intent("look at this").0, "VISION");
+        assert_eq!(router.classify_intent("step by step").0, "MULTI_STEP");
+    }
+
+    #[test]
+    fn test_confidence_values() {
+        let router = NeedleRouter::new();
+        let (_, conf) = router.classify_intent("hello how are you");
+        assert!(
+            conf > 0.5 && conf <= 1.0,
+            "confidence should be >0.5 and <=1.0, got {}",
+            conf
+        );
+
+        let (_, conf) = router.classify_intent("write a python script");
+        assert!(
+            conf > 0.5 && conf <= 1.0,
+            "confidence should be >0.5 and <=1.0, got {}",
+            conf
+        );
+
+        let (_, conf) = router.classify_intent("look at this image");
+        assert!(
+            conf > 0.5 && conf <= 1.0,
+            "confidence should be >0.5 and <=1.0, got {}",
+            conf
+        );
+    }
+
+    #[test]
+    fn test_confidence_normalized() {
+        let router = NeedleRouter::new();
+        let (class, conf) = router.classify_intent("what is the weather today");
+        assert_eq!(class, "CHAT");
+        // Confidence should be a valid probability
+        assert!(
+            (0.0..=1.0).contains(&conf),
+            "confidence {} out of range",
+            conf
+        );
+    }
+
+    #[test]
+    fn test_mixed_known_tokens_keep_confidence_finite() {
+        let router = NeedleRouter::new();
+        let (_, conf) = router.classify_intent("write hello image");
+        assert!(
+            conf.is_finite(),
+            "confidence should be finite, got {}",
+            conf
+        );
+        assert!(
+            (0.0..=1.0).contains(&conf),
+            "confidence {} out of range",
+            conf
+        );
     }
 }

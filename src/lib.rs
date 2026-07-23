@@ -6,6 +6,7 @@ pub mod cli;
 pub mod logger;
 pub mod model_process;
 pub mod orchestrator;
+pub mod prompt_file;
 pub mod rag;
 pub mod router;
 pub mod server;

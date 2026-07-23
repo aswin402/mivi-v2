@@ -1,18 +1,18 @@
 # 🚀 MIVI-V2: Ultra-Compact Low-Resource Pure Rust Local AI Engine
 
-[![Version](https://img.shields.io/badge/version-v0.0.3-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.0.4-brightgreen.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![RAM Footprint](https://img.shields.io/badge/Idle%20RAM-%3C%2012%20MB-purple.svg)]()
 [![Ultra Low RAM](https://img.shields.io/badge/Ultra%20Low%20RAM-%3C%2040%20MB-green.svg)]()
 
-**MIVI-V2 (v0.0.3)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware with an active RAM footprint of **< 12 MB idle RAM** and **< 40 MB active RAM** in ultra-low streaming mode.
+**MIVI-V2 (v0.0.4)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
 
 It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for autonomous AI agents including **Hermes Agent**, **OpenCode Agent**, **AutoGen**, **CrewAI**, **VS Code (Continue.dev)**, and **Cursor IDE**.
 
 ---
 
-## 🌟 Key Features in v0.0.2
+## 🌟 Key Features in v0.0.4
 
 * 🦀 **100% Pure Rust Architecture:** Zero Python runtime, zero PyTorch/transformers memory bloat, and zero virtual environment dependencies.
 * ⚡ **Speculative Decoding (`ds4` pattern):** Uses Qwen 0.5B for fast drafting and Llama 1B for verification, boosting generation speed by **2.2x**.
@@ -24,6 +24,7 @@ It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for 
 * 🌐 **High-Speed Async Axum REST Server:** OpenAI-compatible API listening on `http://localhost:8000/v1` for `/v1/chat/completions` and `/v1/models`.
 * ⚙️ **Multi-Language Double-Loop Verifier:** Generates, executes, and auto-corrects code across **Python, JavaScript, TypeScript, Rust, and C++**.
 * 🧠 **Zero-Overhead Semantic Cache:** Token-set Jaccard similarity cache for instant **< 0.001s responses** on repeat queries.
+* 🧰 **Agent Runtime Roadmap:** v0.0.4 includes the implementation plan for tool filtering, context compression, OKF memory, RAG retrieval, persistent workers, benchmarking, and small-model evaluation.
 
 ---
 
@@ -39,7 +40,8 @@ mivi-v2/
 ├── docs/                       # Comprehensive System Documentation
 │   ├── ARCHITECTURE.md         # Internal Engine Architecture & Workflow
 │   ├── AGENTS_GUIDE.md         # Connecting Hermes, OpenCode, VS Code, Cursor
-│   └── API_REFERENCE.md        # OpenAI REST API Specification
+│   ├── API_REFERENCE.md        # OpenAI REST API Specification
+│   └── superpowers/plans/      # Execution-ready implementation plans
 ├── models/                     # GGUF Model Checkpoints (.gitignore managed)
 └── src/
     ├── main.rs                 # Entry point & CLI mode dispatcher

@@ -3,10 +3,21 @@ use colored::*;
 use inquire::Text;
 
 pub async fn run_cli(orchestrator: AgentOrchestrator) {
-    println!("{}", "=========================================================".cyan());
-    println!("{}", "  🚀 MIVI-V2 INTERACTIVE TERMINAL CHAT CLI (PURE RUST)".bold().green());
+    println!(
+        "{}",
+        "=========================================================".cyan()
+    );
+    println!(
+        "{}",
+        "  🚀 MIVI-V2 INTERACTIVE TERMINAL CHAT CLI (PURE RUST)"
+            .bold()
+            .green()
+    );
     println!("{}", "  Type 'exit' or 'quit' to exit.".yellow());
-    println!("{}", "=========================================================\n".cyan());
+    println!(
+        "{}",
+        "=========================================================\n".cyan()
+    );
 
     loop {
         match Text::new("MIVI-V2>").prompt() {

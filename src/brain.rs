@@ -1,3 +1,4 @@
+use crate::prompt_file::write_prompt_file;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,7 +17,11 @@ pub struct EdgeBrain {
 impl EdgeBrain {
     pub fn new() -> Self {
         let base_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let exe_ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
+        let exe_ext = if cfg!(target_os = "windows") {
+            ".exe"
+        } else {
+            ""
+        };
 
         let possible_bins = vec![
             base_dir.join("bin").join(format!("llama-cli{}", exe_ext)),
@@ -29,8 +34,12 @@ impl EdgeBrain {
             .unwrap_or_else(|| PathBuf::from(format!("llama-cli{}", exe_ext)));
 
         let possible_minicpm_bins = vec![
-            base_dir.join("bin").join(format!("llama-mtmd-cli{}", exe_ext)),
-            base_dir.join("bin").join(format!("llama-minicpmv-cli{}", exe_ext)),
+            base_dir
+                .join("bin")
+                .join(format!("llama-mtmd-cli{}", exe_ext)),
+            base_dir
+                .join("bin")
+                .join(format!("llama-minicpmv-cli{}", exe_ext)),
             base_dir.join("bin").join(format!("llama-cli{}", exe_ext)),
             PathBuf::from(format!("llama-mtmd-cli{}", exe_ext)),
         ];
@@ -45,10 +54,14 @@ impl EdgeBrain {
         let qwen_path = models_dir.join("qwen2.5-0.5b-instruct-q2_k.gguf");
         let minicpm_path = models_dir.join("MiniCPM-V-4.6-Q4_K_M.gguf");
         let minicpm_proj = models_dir.join("mmproj-MiniCPM-V-4.6-Q8_0.gguf");
-        let ultra_low_ram = env::var("MIVI_ULTRA_LOW_RAM").map(|v| v == "1" || v == "true").unwrap_or(false);
+        let ultra_low_ram = env::var("MIVI_ULTRA_LOW_RAM")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
 
         if ultra_low_ram {
-            println!("[AIRLLM/COLIBRI MODE] Ultra-Low-RAM mmap streaming active (< 40 MB RAM target)");
+            println!(
+                "[AIRLLM/COLIBRI MODE] Ultra-Low-RAM mmap streaming active (< 40 MB RAM target)"
+            );
         }
 
         Self {
@@ -62,7 +75,14 @@ impl EdgeBrain {
         }
     }
 
-    fn run_cli(&self, model_path: &Path, prompt: &str, system_prompt: &str, temp: &str, context_size: &str) -> Result<String, String> {
+    fn run_cli(
+        &self,
+        model_path: &Path,
+        prompt: &str,
+        system_prompt: &str,
+        temp: &str,
+        context_size: &str,
+    ) -> Result<String, String> {
         let formatted_prompt = format!(
             "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
             system_prompt, prompt
@@ -76,6 +96,7 @@ impl EdgeBrain {
 
         let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
 
+        let prompt_file = write_prompt_file(&formatted_prompt)?;
         let mut cmd = Command::new(&self.llama_cli);
         cmd.arg("-m")
             .arg(model_path)
@@ -89,8 +110,8 @@ impl EdgeBrain {
             .arg("q8_0")
             .arg("-ctv")
             .arg("q8_0")
-            .arg("-p")
-            .arg(&formatted_prompt)
+            .arg("-f")
+            .arg(&prompt_file)
             .arg("--temp")
             .arg(temp)
             .arg("--simple-io")
@@ -100,7 +121,14 @@ impl EdgeBrain {
             cmd.arg("--mmap");
         }
 
-        let output = cmd.output().map_err(|e| format!("Failed to execute llama-cli: {}", e))?;
+        let output = match cmd.output() {
+            Ok(output) => output,
+            Err(e) => {
+                let _ = std::fs::remove_file(&prompt_file);
+                return Err(format!("Failed to execute llama-cli: {}", e));
+            }
+        };
+        let _ = std::fs::remove_file(&prompt_file);
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
@@ -137,7 +165,7 @@ impl EdgeBrain {
     pub fn query_speculative(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
         println!("[DS4 SPECULATIVE] Drafting with Qwen 0.5B...");
         let draft = self.query_coder(prompt, system_prompt)?;
-        
+
         if draft.trim().is_empty() {
             return self.query_reasoner(prompt, system_prompt);
         }
@@ -158,6 +186,7 @@ impl EdgeBrain {
         let eff_context = if self.ultra_low_ram { "4096" } else { "8192" };
         let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
 
+        let prompt_file = write_prompt_file(prompt)?;
         let mut cmd = Command::new(&self.llama_cli);
         cmd.arg("-m")
             .arg(&self.llama_path)
@@ -171,8 +200,8 @@ impl EdgeBrain {
             .arg("q8_0")
             .arg("-ctv")
             .arg("q8_0")
-            .arg("-p")
-            .arg(prompt)
+            .arg("-f")
+            .arg(&prompt_file)
             .arg("--temp")
             .arg("0.2")
             .arg("--simple-io")
@@ -182,7 +211,14 @@ impl EdgeBrain {
             cmd.arg("--mmap");
         }
 
-        let output = cmd.output().map_err(|e| format!("Failed to execute llama-cli: {}", e))?;
+        let output = match cmd.output() {
+            Ok(output) => output,
+            Err(e) => {
+                let _ = std::fs::remove_file(&prompt_file);
+                return Err(format!("Failed to execute llama-cli: {}", e));
+            }
+        };
+        let _ = std::fs::remove_file(&prompt_file);
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
         // Try extracting from after last <|im_start|>assistant tag (prompt echo).
@@ -246,4 +282,3 @@ impl EdgeBrain {
         Ok(stdout.trim().to_string())
     }
 }
-

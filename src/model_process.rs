@@ -5,6 +5,7 @@
 //! No persistent process — simpler, more reliable, works with any
 //! llama.cpp build.
 
+use crate::prompt_file::write_prompt_file;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -52,10 +53,17 @@ pub fn spawn_streaming(
     let t = temp.to_string();
 
     tokio::spawn(async move {
+        let prompt_file = match write_prompt_file(&prompt) {
+            Ok(path) => path,
+            Err(e) => {
+                let _ = tx.send(format!("[prompt file error: {}]", e)).await;
+                return;
+            }
+        };
         let mut cmd = Command::new(&cli);
         base_args(&mut cmd, &mp, &n, &ctx, &t);
-        cmd.arg("-p")
-            .arg(&prompt)
+        cmd.arg("-f")
+            .arg(&prompt_file)
             .arg("-st") // single-turn: exit after generation
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -63,6 +71,7 @@ pub fn spawn_streaming(
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
+                let _ = std::fs::remove_file(&prompt_file);
                 let _ = tx.send(format!("[spawn error: {}]", e)).await;
                 return;
             }
@@ -77,7 +86,10 @@ pub fn spawn_streaming(
             }
         });
 
-        let stdout = child.stdout.take().expect("[spawn_streaming] stdout not piped");
+        let stdout = child
+            .stdout
+            .take()
+            .expect("[spawn_streaming] stdout not piped");
         let mut lines = BufReader::new(stdout).lines();
 
         enum State {
@@ -117,6 +129,7 @@ pub fn spawn_streaming(
         }
 
         let _ = child.wait().await;
+        let _ = std::fs::remove_file(&prompt_file);
     });
 
     rx

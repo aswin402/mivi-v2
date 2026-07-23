@@ -6,10 +6,21 @@ use inquire::Text;
 /// Run a pure interactive chat session (no orchestrator, no code execution).
 /// Maintains conversation history across turns so MIVI feels like a normal AI.
 pub async fn run_chat_interactive(brain: EdgeBrain, router: NeedleRouter) {
-    println!("{}", "=========================================================".cyan());
-    println!("{}", "  🗣️  MIVI-V2 INTERACTIVE CHAT (PURE CONVERSATIONAL)".bold().green());
+    println!(
+        "{}",
+        "=========================================================".cyan()
+    );
+    println!(
+        "{}",
+        "  🗣️  MIVI-V2 INTERACTIVE CHAT (PURE CONVERSATIONAL)"
+            .bold()
+            .green()
+    );
     println!("{}", "  I can answer questions, explain concepts, write code, or just chat. Type 'exit' to stop.".yellow());
-    println!("{}", "=========================================================\n".cyan());
+    println!(
+        "{}",
+        "=========================================================\n".cyan()
+    );
 
     let mut history: Vec<(String, String)> = Vec::new(); // (user_msg, assistant_reply)
 
@@ -32,8 +43,12 @@ pub async fn run_chat_interactive(brain: EdgeBrain, router: NeedleRouter) {
         let history_context = build_history_context(&history);
 
         // Classify intent
-        let intent = router.classify_intent(&prompt);
-        println!("{} {}", "[MIVI]".dimmed(), format!("Intent: {}", intent).dimmed());
+        let (intent, confidence) = router.classify_intent(&prompt);
+        println!(
+            "{} {}",
+            "[MIVI]".dimmed(),
+            format!("Intent: {} (conf: {:.2})", intent, confidence).dimmed()
+        );
 
         let response = match intent {
             "VISION" => {
@@ -51,13 +66,15 @@ pub async fn run_chat_interactive(brain: EdgeBrain, router: NeedleRouter) {
                     Err(e) => format!("Vision error: {}", e),
                 }
             }
-            "DIRECT_CODE" | "MULTI_STEP" => {
+            "CODE" | "MULTI_STEP" => {
                 // Use Qwen coder model for code requests
                 let system_prompt = format!(
                     "You are MIVI, a helpful coding assistant. You write clean, working code.\n\nConversation history:\n{}",
                     if history_context.is_empty() { "No prior conversation.".to_string() } else { history_context }
                 );
-                brain.query_coder(&prompt, &system_prompt).unwrap_or_else(|e| format!("Error: {}", e))
+                brain
+                    .query_coder(&prompt, &system_prompt)
+                    .unwrap_or_else(|e| format!("Error: {}", e))
             }
             _ => {
                 // Default: use Llama-1B reasoner (conversational)
@@ -65,11 +82,16 @@ pub async fn run_chat_interactive(brain: EdgeBrain, router: NeedleRouter) {
                     "You are MIVI-V2, a helpful, concise AI assistant. Be friendly and informative.\n\nConversation history:\n{}",
                     if history_context.is_empty() { "No prior conversation yet.".to_string() } else { history_context }
                 );
-                brain.query_reasoner(&prompt, &system_prompt).unwrap_or_else(|e| format!("Error: {}", e))
+                brain
+                    .query_reasoner(&prompt, &system_prompt)
+                    .unwrap_or_else(|e| format!("Error: {}", e))
             }
         };
 
-        println!("\n{}", format!("{} {}", "MIVI>".bold().green(), response).bright_white());
+        println!(
+            "\n{}",
+            format!("{} {}", "MIVI>".bold().green(), response).bright_white()
+        );
         println!();
 
         // Store in history
@@ -83,7 +105,12 @@ fn build_history_context(history: &[(String, String)]) -> String {
     }
     let mut ctx = String::new();
     for (i, (user, asst)) in history.iter().enumerate() {
-        ctx.push_str(&format!("Turn {}:\nUser: {}\nAssistant: {}\n\n", i + 1, user, asst));
+        ctx.push_str(&format!(
+            "Turn {}:\nUser: {}\nAssistant: {}\n\n",
+            i + 1,
+            user,
+            asst
+        ));
     }
     ctx
 }

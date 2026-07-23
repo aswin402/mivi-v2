@@ -25,7 +25,7 @@ Returns overall server health and operational metrics.
   "ram_footprint": "< 12 MB RAM",
   "service": "MIVI-V2 Pure Rust High-Speed AI Engine",
   "status": "online",
-  "version": "2.0.0"
+  "version": "0.0.4"
 }
 ```
 

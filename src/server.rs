@@ -23,6 +23,8 @@ use crate::router::NeedleRouter;
 /// Internal SML routing is hidden behind this constant.
 pub const MODEL_NAME: &str = "mivi";
 
+const MIVI_CHAT_SYSTEM_PROMPT: &str = "You are MIVI, a local OpenAI-compatible AI endpoint. Externally your model name is mivi. Internally you route between Llama for chat and reasoning, Qwen for coding, and MiniCPM for vision. Answer concisely and honestly.";
+
 // ──────────────────────────────────────────────
 // OpenAI-compatible tool/function structs
 // ──────────────────────────────────────────────
@@ -157,19 +159,25 @@ async fn handle_root() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "online",
         "service": "MIVI-V2 Pure Rust High-Speed AI Engine",
-        "version": "0.0.3",
+        "version": "0.0.4",
         "ram_footprint": "< 12 MB RAM",
         "openai_endpoint": "/v1/chat/completions"
     }))
 }
 
 async fn handle_models() -> Json<ModelListResponse> {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     Json(ModelListResponse {
         object: "list".to_string(),
-        data: vec![
-            ModelObject { id: MODEL_NAME.to_string(), object: "model".to_string(), created: now, owned_by: MODEL_NAME.to_string() },
-        ],
+        data: vec![ModelObject {
+            id: MODEL_NAME.to_string(),
+            object: "model".to_string(),
+            created: now,
+            owned_by: MODEL_NAME.to_string(),
+        }],
     })
 }
 
@@ -223,7 +231,10 @@ fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
                         ));
                     }
                     if !block.is_empty() {
-                        prompt.push_str(&format!("<|im_start|>assistant\n{}<|im_end|>\n", block.trim()));
+                        prompt.push_str(&format!(
+                            "<|im_start|>assistant\n{}<|im_end|>\n",
+                            block.trim()
+                        ));
                     }
                 } else {
                     let text = msg.content.as_str().unwrap_or("");
@@ -266,7 +277,8 @@ fn build_function_list_block(req: &ChatCompletionRequest) -> String {
     let mut block = String::new();
 
     let first_tool = &tools[0].function;
-    let ex_args = first_tool.parameters
+    let ex_args = first_tool
+        .parameters
         .as_ref()
         .and_then(|p| p.get("properties"))
         .and_then(|props| props.as_object())
@@ -285,7 +297,11 @@ fn build_function_list_block(req: &ChatCompletionRequest) -> String {
 
     for tool in tools {
         let f = &tool.function;
-        block.push_str(&format!("Function: {} - {}\n", f.name, f.description.as_deref().unwrap_or("")));
+        block.push_str(&format!(
+            "Function: {} - {}\n",
+            f.name,
+            f.description.as_deref().unwrap_or("")
+        ));
         if let Some(ref params) = f.parameters {
             block.push_str(&format!("Params: {}\n", params));
         }
@@ -327,52 +343,29 @@ fn strip_available_skills(text: &str) -> String {
     }
 }
 
-/// Extract user prompt text + optional image path for legacy code paths.
+/// Extract the latest real user prompt + optional image path.
 fn extract_content(req: &ChatCompletionRequest) -> (String, Option<String>) {
-    let mut parts: Vec<String> = Vec::new();
-    let mut image_path: Option<String> = None;
-    for msg in &req.messages {
-        if msg.role == "user" {
-            if let Some(text) = msg.content.as_str() {
-                let stripped = strip_available_skills(text);
-                if !stripped.is_empty() {
-                    parts.push(stripped);
-                }
-            } else if let Some(arr) = msg.content.as_array() {
-                let mut last_text = String::new();
-                for item in arr {
-                    if let Some(t) = item.get("type").and_then(|v| v.as_str()) {
-                        if t == "text" {
-                            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                                let stripped = strip_available_skills(text);
-                                if !stripped.is_empty() {
-                                    last_text = stripped;
-                                }
-                            }
-                        } else if t == "image_url" {
-                            if let Some(url) = item.get("image_url").and_then(|v| v.get("url")).and_then(|v| v.as_str()) {
-                                image_path = Some(url.to_string());
-                            }
-                        }
+    let user_prompt = latest_user_prompt_text(req);
+    let image_path = req
+        .messages
+        .iter()
+        .rev()
+        .filter(|m| m.role == "user")
+        .find_map(|msg| {
+            msg.content.as_array().and_then(|arr| {
+                arr.iter().rev().find_map(|item| {
+                    let item_type = item.get("type").and_then(|v| v.as_str())?;
+                    if item_type != "image_url" {
+                        return None;
                     }
-                }
-                if !last_text.is_empty() {
-                    parts.push(last_text);
-                }
-            }
-        } else if msg.role == "system" {
-            if let Some(text) = msg.content.as_str() {
-                if text.len() > 200 {
-                    parts.push(format!("[context: {}]", &text[text.len()-200..]));
-                }
-            }
-        }
-    }
-    let user_prompt = if parts.is_empty() {
-        String::new()
-    } else {
-        parts.join("\n")
-    };
+                    item.get("image_url")
+                        .and_then(|v| v.get("url"))
+                        .and_then(|v| v.as_str())
+                        .map(|url| url.to_string())
+                })
+            })
+        });
+
     (user_prompt, image_path)
 }
 
@@ -457,32 +450,106 @@ fn parse_single_tool_call(json_str: &str) -> Option<ToolCallOut> {
     })
 }
 
+fn strip_tagged_block_prefix<'a>(text: &'a str, tag: &str) -> &'a str {
+    let close = format!("</{}>", tag);
+    if text.trim_start().starts_with(&format!("<{}>", tag)) {
+        if let Some(end) = text.find(&close) {
+            return text[end + close.len()..].trim();
+        }
+    }
+    text.trim()
+}
+
+fn normalize_user_prompt_text(text: &str) -> String {
+    let mut normalized = text.trim();
+    normalized = strip_tagged_block_prefix(normalized, "available-skills");
+    normalized = strip_tagged_block_prefix(normalized, "skill-evaluation-required");
+    normalized = strip_tagged_block_prefix(normalized, "user-prompt-submit-hook");
+    normalized.trim().to_string()
+}
+
+fn user_prompt_text_parts(msg: &ChatMessage) -> Vec<String> {
+    if let Some(text) = msg.content.as_str() {
+        vec![text.to_string()]
+    } else if let Some(arr) = msg.content.as_array() {
+        arr.iter()
+            .filter_map(|item| {
+                let item_type = item.get("type").and_then(|v| v.as_str())?;
+                if item_type != "text" {
+                    return None;
+                }
+                item.get("text")
+                    .and_then(|v| v.as_str())
+                    .map(|text| text.to_string())
+            })
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+fn latest_user_prompt_text(req: &ChatCompletionRequest) -> String {
+    req.messages
+        .iter()
+        .rev()
+        .filter(|m| m.role == "user")
+        .flat_map(|msg| user_prompt_text_parts(msg).into_iter().rev())
+        .map(|text| normalize_user_prompt_text(&text))
+        .find(|text| !text.is_empty())
+        .unwrap_or_default()
+}
+
 /// Check if the request involves tools (either providing tool definitions,
 /// or continuing after a tool call response).
 fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
-    // tool_choice: "none" explicitly disables tool calling.
-    if let Some(ref choice) = req.tool_choice {
-        if let serde_json::Value::String(s) = choice {
-            if s == "none" {
-                return false;
-            }
+    if let Some(serde_json::Value::String(choice)) = &req.tool_choice {
+        if choice == "none" {
+            return false;
         }
-    }
-    // If the client provided tool definitions.
-    if let Some(ref tools) = req.tools {
-        if !tools.is_empty() {
+        if choice == "required" {
             return true;
         }
     }
-    // If there are tool role messages (tool results to process).
+
+    if matches!(req.tool_choice, Some(serde_json::Value::Object(_))) {
+        return true;
+    }
+
     if req.messages.iter().any(|m| m.role == "tool") {
         return true;
     }
-    // If any assistant message has tool_calls (from a previous round).
-    if req.messages.iter().any(|m| m.role == "assistant" && m.tool_calls.is_some()) {
+
+    if req
+        .messages
+        .iter()
+        .any(|m| m.role == "assistant" && m.tool_calls.is_some())
+    {
         return true;
     }
-    false
+
+    let tools = match &req.tools {
+        Some(tools) if !tools.is_empty() => tools,
+        _ => return false,
+    };
+
+    let user_text = latest_user_prompt_text(req).to_lowercase();
+
+    if user_text.contains("use the")
+        && (user_text.contains(" tool") || user_text.contains(" function"))
+    {
+        return true;
+    }
+
+    if user_text.contains("call the")
+        && (user_text.contains(" tool") || user_text.contains(" function"))
+    {
+        return true;
+    }
+
+    tools.iter().any(|tool| {
+        let name = tool.function.name.to_lowercase();
+        !name.is_empty() && user_text.contains(&name)
+    })
 }
 
 // ──────────────────────────────────────────────
@@ -491,14 +558,16 @@ fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
 
 /// One-shot reasoner call (spawns llama-cli per request).
 fn reasoner_chat(brain: &EdgeBrain, user_prompt: &str) -> (String, String) {
-    let res = brain.query_reasoner(user_prompt, "You are a helpful assistant.")
+    let res = brain
+        .query_reasoner(user_prompt, MIVI_CHAT_SYSTEM_PROMPT)
         .unwrap_or_else(|e| format!("Error: {}", e));
     (res, MODEL_NAME.to_string())
 }
 
 /// One-shot coder call (spawns llama-cli per request).
 fn code_chat(brain: &EdgeBrain, user_prompt: &str) -> (String, String) {
-    let res = brain.query_coder(user_prompt, "You are a coding expert.")
+    let res = brain
+        .query_coder(user_prompt, "You are a coding expert.")
         .unwrap_or_else(|e| format!("Error: {}", e));
     (res, MODEL_NAME.to_string())
 }
@@ -512,13 +581,19 @@ fn model_chat(brain: &EdgeBrain, prompt: &str) -> String {
 }
 
 /// Generate tool calls: run the model with tool-aware prompt, parse tool calls.
-fn generate_tool_calls(brain: &EdgeBrain, req: &ChatCompletionRequest) -> (Vec<ToolCallOut>, String) {
+fn generate_tool_calls(
+    brain: &EdgeBrain,
+    req: &ChatCompletionRequest,
+) -> (Vec<ToolCallOut>, String) {
     let prompt = build_chat_prompt(req);
     println!("[MIVI-V2 ToolGen] Prompt length: {} chars", prompt.len());
 
     let raw = model_chat(brain, &prompt);
     let debug_preview: String = raw.chars().take(200).collect();
-    println!("[MIVI-V2 ToolGen] Raw model output (truncated): {:?}", debug_preview);
+    println!(
+        "[MIVI-V2 ToolGen] Raw model output (truncated): {:?}",
+        debug_preview
+    );
 
     // Parse tool calls from output.
     let calls = parse_tool_calls(&raw);
@@ -539,24 +614,42 @@ async fn handle_chat_completions(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Json(req): Json<ChatCompletionRequest>,
 ) -> impl IntoResponse {
-    eprintln!(">>> MIVI REQUEST: model={:?} stream={:?} msgs={} tools={}",
-        req.model, req.stream, req.messages.len(),
-        req.tools.as_ref().map(|t| t.len()).unwrap_or(0));
+    eprintln!(
+        ">>> MIVI REQUEST: model={:?} stream={:?} msgs={} tools={}",
+        req.model,
+        req.stream,
+        req.messages.len(),
+        req.tools.as_ref().map(|t| t.len()).unwrap_or(0)
+    );
 
     for (i, msg) in req.messages.iter().enumerate() {
         let preview = match &msg.content {
             serde_json::Value::String(s) => {
                 let chars: String = s.chars().take(120).collect();
                 format!("str(len={}) {:?}...", s.len(), chars)
-            },
+            }
             other => format!("{:?}", other),
         };
-        let tc = if msg.tool_calls.is_some() { " [has tool_calls]" } else { "" };
-        let ti = if msg.tool_call_id.is_some() { " [has tool_call_id]" } else { "" };
-        eprintln!("  msg[{}]: role={:?} content={}{}{}", i, msg.role, preview, tc, ti);
+        let tc = if msg.tool_calls.is_some() {
+            " [has tool_calls]"
+        } else {
+            ""
+        };
+        let ti = if msg.tool_call_id.is_some() {
+            " [has tool_call_id]"
+        } else {
+            ""
+        };
+        eprintln!(
+            "  msg[{}]: role={:?} content={}{}{}",
+            i, msg.role, preview, tc, ti
+        );
     }
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let target_model = req.model.clone().unwrap_or_else(|| MODEL_NAME.to_string());
     let has_tools = has_tool_involvement(&req);
 
@@ -613,12 +706,17 @@ async fn handle_chat_completions(
 
     // Streaming path.
     if req.stream.unwrap_or(false) {
-        return handle_streaming(state, user_prompt, target_model, now).await.into_response();
+        return handle_streaming(state, user_prompt, target_model, now)
+            .await
+            .into_response();
     }
 
     // Non-streaming path.
-    let intent = state.router.classify_intent(&user_prompt);
-    println!("[MIVI-V2 Server] Intent: {} | Model: '{}' | Prompt: '{}'", intent, target_model, user_prompt);
+    let (intent, confidence) = state.router.classify_intent(&user_prompt);
+    println!(
+        "[MIVI-V2 Server] Intent: {} (conf: {:.2}) | Model: '{}' | Prompt: '{}'",
+        intent, confidence, target_model, user_prompt
+    );
 
     let (response_text, chosen_model) = if image_path.is_some() {
         let path = image_path.unwrap_or_default();
@@ -733,9 +831,8 @@ async fn handle_streaming(
     });
 
     // [DONE] sentinel per OpenAI spec.
-    let done_marker = futures::stream::once(async {
-        Ok::<_, Infallible>(Event::default().data("[DONE]"))
-    });
+    let done_marker =
+        futures::stream::once(async { Ok::<_, Infallible>(Event::default().data("[DONE]")) });
 
     let stream = token_stream.chain(final_chunk).chain(done_marker);
     Sse::new(stream)
@@ -757,6 +854,144 @@ pub async fn start_api_server(brain: EdgeBrain, orchestrator: AgentOrchestrator,
 
     let addr = format!("0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    println!("🚀 MIVI-V2 High-Speed Server listening on http://{} ...", addr);
+    println!(
+        "🚀 MIVI-V2 High-Speed Server listening on http://{} ...",
+        addr
+    );
     axum::serve(listener, app).await.unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn tool_request(
+        content: &str,
+        tool_choice: Option<serde_json::Value>,
+    ) -> ChatCompletionRequest {
+        ChatCompletionRequest {
+            model: Some(MODEL_NAME.to_string()),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: json!(content),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            stream: None,
+            tools: Some(vec![ToolDef {
+                function: FunctionDef {
+                    name: "get_weather".to_string(),
+                    description: Some("Get weather".to_string()),
+                    parameters: None,
+                },
+                r#type: "function".to_string(),
+            }]),
+            tool_choice,
+        }
+    }
+
+    #[test]
+    fn tools_available_does_not_force_tool_generation_for_plain_chat() {
+        let req = tool_request("hi", None);
+        assert!(!has_tool_involvement(&req));
+    }
+
+    #[test]
+    fn opencode_injected_skill_context_does_not_force_tool_generation() {
+        let mut req = tool_request("hi", None);
+        req.messages = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: json!("<available-skills>Use the use_skill and read_skill_file tools</available-skills>"),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: json!([{"type":"text","text":"<user-prompt-submit-hook>tool metadata</user-prompt-submit-hook>"},{"type":"text","text":"hi"}]),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+
+        assert!(!has_tool_involvement(&req));
+    }
+
+    #[test]
+    fn opencode_skill_evaluation_context_does_not_hide_latest_array_prompt() {
+        let mut req = tool_request("so hey", None);
+        req.messages = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: json!("<skill-evaluation-required>SKILL EVALUATION PROCESS use_skill tool may be relevant</skill-evaluation-required>"),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"text","text":"<user-prompt-submit-hook>{}</user-prompt-submit-hook>"},
+                    {"type":"text","text":"so hey"}
+                ]),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+
+        assert_eq!(latest_user_prompt_text(&req), "so hey");
+        assert!(!has_tool_involvement(&req));
+    }
+
+    #[test]
+    fn extract_content_uses_latest_real_opencode_prompt() {
+        let mut req = tool_request("hii", None);
+        req.messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: json!("x".repeat(1000)),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: json!("<available-skills>Use the use_skill tool</available-skills>"),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"text","text":"<user-prompt-submit-hook>{}</user-prompt-submit-hook>"},
+                    {"type":"text","text":"hii"}
+                ]),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+
+        let (prompt, image_path) = extract_content(&req);
+        assert_eq!(prompt, "hii");
+        assert_eq!(image_path, None);
+    }
+
+    #[test]
+    fn mivi_identity_prompt_names_external_and_internal_models() {
+        assert!(MIVI_CHAT_SYSTEM_PROMPT.contains("model name is mivi"));
+        assert!(MIVI_CHAT_SYSTEM_PROMPT.contains("Llama"));
+        assert!(MIVI_CHAT_SYSTEM_PROMPT.contains("Qwen"));
+        assert!(MIVI_CHAT_SYSTEM_PROMPT.contains("MiniCPM"));
+    }
+
+    #[test]
+    fn explicit_tool_request_enters_tool_generation() {
+        let req = tool_request("Use the get_weather tool for Paris", None);
+        assert!(has_tool_involvement(&req));
+    }
+
+    #[test]
+    fn required_tool_choice_enters_tool_generation() {
+        let req = tool_request("weather in Paris", Some(json!("required")));
+        assert!(has_tool_involvement(&req));
+    }
 }

@@ -28,7 +28,11 @@ impl TurboVecRAG {
         for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
             if entry.file_type().is_file() {
                 let path_str = entry.path().display().to_string();
-                if path_str.contains("/target/") || path_str.contains("/.git/") || path_str.contains("/node_modules/") || path_str.contains("/bin/") {
+                if path_str.contains("/target/")
+                    || path_str.contains("/.git/")
+                    || path_str.contains("/node_modules/")
+                    || path_str.contains("/bin/")
+                {
                     continue;
                 }
 
@@ -56,7 +60,10 @@ impl TurboVecRAG {
         let count = all_chunks.len();
         let mut guard = self.chunks.lock().await;
         *guard = all_chunks;
-        println!("[TurboVec RAG] Indexed {} code chunks in workspace (< 1 MB RAM footprint)!", count);
+        println!(
+            "[TurboVec RAG] Indexed {} code chunks in workspace (< 1 MB RAM footprint)!",
+            count
+        );
         count
     }
 
@@ -64,8 +71,12 @@ impl TurboVecRAG {
         let guard = self.chunks.lock().await;
         let stop_words: std::collections::HashSet<&str> = [
             "the", "is", "to", "in", "a", "and", "of", "for", "on", "with", "at", "by", "from",
-            "it", "this", "that", "or", "be", "as", "an", "code", "script", "write", "create", "print"
-        ].iter().cloned().collect();
+            "it", "this", "that", "or", "be", "as", "an", "code", "script", "write", "create",
+            "print",
+        ]
+        .iter()
+        .cloned()
+        .collect();
 
         let query_words: Vec<String> = query
             .to_lowercase()
@@ -105,7 +116,8 @@ impl TurboVecRAG {
             return String::new();
         }
 
-        let mut formatted = vec!["# --- GOOGLE OKF (OPEN KNOWLEDGE FORMAT) CODEBASE CONTEXT ---".to_string()];
+        let mut formatted =
+            vec!["# --- GOOGLE OKF (OPEN KNOWLEDGE FORMAT) CODEBASE CONTEXT ---".to_string()];
         for (i, (chunk, score)) in matches.iter().enumerate() {
             if *score < 1.0 {
                 continue;
@@ -128,8 +140,8 @@ impl TurboVecRAG {
 
             formatted.push(okf_block);
         }
-        formatted.push("# -------------------------------------------------------------".to_string());
+        formatted
+            .push("# -------------------------------------------------------------".to_string());
         formatted.join("\n\n")
     }
 }
-

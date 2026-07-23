@@ -15,8 +15,16 @@ impl SemanticCache {
     }
 
     fn jaccard_similarity(s1: &str, s2: &str) -> f32 {
-        let set1: HashSet<String> = s1.to_lowercase().split_whitespace().map(|s| s.to_string()).collect();
-        let set2: HashSet<String> = s2.to_lowercase().split_whitespace().map(|s| s.to_string()).collect();
+        let set1: HashSet<String> = s1
+            .to_lowercase()
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+        let set2: HashSet<String> = s2
+            .to_lowercase()
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
 
         if set1.is_empty() || set2.is_empty() {
             return 0.0;
@@ -53,7 +61,10 @@ impl SemanticCache {
         }
 
         if best_score >= 0.85 {
-            println!("[SemanticCache] SEMANTIC CACHE HIT! Similarity score: {:.4}", best_score);
+            println!(
+                "[SemanticCache] SEMANTIC CACHE HIT! Similarity score: {:.4}",
+                best_score
+            );
             best_result
         } else {
             None
@@ -65,4 +76,3 @@ impl SemanticCache {
         guard.insert(query.trim().to_string(), result.to_string());
     }
 }
-
