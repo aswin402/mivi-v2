@@ -154,6 +154,68 @@ impl EdgeBrain {
         }
     }
 
+    pub fn query_raw(&self, prompt: &str) -> Result<String, String> {
+        let eff_context = if self.ultra_low_ram { "4096" } else { "8192" };
+        let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
+
+        let mut cmd = Command::new(&self.llama_cli);
+        cmd.arg("-m")
+            .arg(&self.llama_path)
+            .arg("-ngl")
+            .arg(ngl_val)
+            .arg("-c")
+            .arg(eff_context)
+            .arg("-fa")
+            .arg("on")
+            .arg("-ctk")
+            .arg("q8_0")
+            .arg("-ctv")
+            .arg("q8_0")
+            .arg("-p")
+            .arg(prompt)
+            .arg("--temp")
+            .arg("0.2")
+            .arg("--simple-io")
+            .arg("-st");
+
+        if self.ultra_low_ram {
+            cmd.arg("--mmap");
+        }
+
+        let output = cmd.output().map_err(|e| format!("Failed to execute llama-cli: {}", e))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+        // Try extracting from after last <|im_start|>assistant tag (prompt echo).
+        // If not echoed, find the first JSON object or take the last non-empty line.
+        let response = if let Some(pos) = stdout.rfind("<|im_start|>assistant") {
+            let after = &stdout[pos + "<|im_start|>assistant".len()..];
+            if let Some(echo_end) = after.find("<|im_start|>") {
+                &after[..echo_end]
+            } else {
+                after
+            }
+        } else {
+            // Fallback: skip loading banner and take the last non-empty block.
+            let lines: Vec<&str> = stdout.lines().collect();
+            if let Some(&last) = lines.iter().rev().find(|l| !l.trim().is_empty()) {
+                last.trim()
+            } else {
+                &stdout[..]
+            }
+        };
+
+        let clean = response
+            .split("[ Prompt:")
+            .next()
+            .unwrap_or(response)
+            .split("Exiting...")
+            .next()
+            .unwrap_or(response)
+            .trim();
+
+        Ok(clean.to_string())
+    }
+
     pub fn query_vision(&self, image_path: &str, prompt: &str) -> Result<String, String> {
         if !Path::new(image_path).exists() {
             return Err(format!("Image file not found at: {}", image_path));
