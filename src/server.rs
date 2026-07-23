@@ -1,16 +1,27 @@
 use axum::{
     extract::Json,
+    response::sse::{Event, Sse},
+    response::IntoResponse,
     routing::{get, post},
     Router,
 };
+use futures::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::CorsLayer;
 
 use crate::brain::EdgeBrain;
+use crate::model_process::spawn_streaming;
 use crate::orchestrator::AgentOrchestrator;
 use crate::router::NeedleRouter;
+
+/// The single model name exposed to external agents.
+/// Internal SML routing is hidden behind this constant.
+pub const MODEL_NAME: &str = "mivi";
 
 #[derive(Deserialize)]
 pub struct ChatMessage {
@@ -22,6 +33,7 @@ pub struct ChatMessage {
 pub struct ChatCompletionRequest {
     pub model: Option<String>,
     pub messages: Vec<ChatMessage>,
+    pub stream: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -81,22 +93,23 @@ async fn handle_models() -> Json<ModelListResponse> {
     Json(ModelListResponse {
         object: "list".to_string(),
         data: vec![
-            ModelObject { id: "ai-brain".to_string(), object: "model".to_string(), created: now, owned_by: "mivi-v2".to_string() },
-            ModelObject { id: "mivi-v2".to_string(), object: "model".to_string(), created: now, owned_by: "mivi-v2".to_string() },
-            ModelObject { id: "qwen-2.5-0.5b".to_string(), object: "model".to_string(), created: now, owned_by: "mivi-v2".to_string() },
-            ModelObject { id: "llama-3.2-1b".to_string(), object: "model".to_string(), created: now, owned_by: "mivi-v2".to_string() },
-            ModelObject { id: "minicpm-v-4.6".to_string(), object: "model".to_string(), created: now, owned_by: "mivi-v2".to_string() },
+            ModelObject { id: MODEL_NAME.to_string(), object: "model".to_string(), created: now, owned_by: MODEL_NAME.to_string() },
         ],
     })
 }
 
-async fn handle_chat_completions(
-    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    Json(req): Json<ChatCompletionRequest>,
-) -> Json<ChatCompletionResponse> {
+/// Build a chat-formatted prompt (Llama-3 Instruct template).
+fn format_prompt(prompt: &str, system: &str) -> String {
+    format!(
+        "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+        system, prompt
+    )
+}
+
+/// Helper: extract user text + optional image path from request messages.
+fn extract_content(req: &ChatCompletionRequest) -> (String, Option<String>) {
     let mut user_prompt = String::new();
     let mut image_path: Option<String> = None;
-
     for msg in &req.messages {
         if msg.role == "user" {
             if let Some(text) = msg.content.as_str() {
@@ -120,42 +133,57 @@ async fn handle_chat_completions(
             }
         }
     }
+    (user_prompt, image_path)
+}
 
-    let target_model = req.model.unwrap_or_else(|| "ai-brain".to_string());
+/// One-shot reasoner call (spawns llama-cli per request).
+fn reasoner_chat(brain: &EdgeBrain, user_prompt: &str) -> (String, String) {
+    let res = brain.query_reasoner(user_prompt, "You are a helpful assistant.")
+        .unwrap_or_else(|e| format!("Error: {}", e));
+    (res, MODEL_NAME.to_string())
+}
+
+/// One-shot coder call (spawns llama-cli per request).
+fn code_chat(brain: &EdgeBrain, user_prompt: &str) -> (String, String) {
+    let res = brain.query_coder(user_prompt, "You are a coding expert.")
+        .unwrap_or_else(|e| format!("Error: {}", e));
+    (res, MODEL_NAME.to_string())
+}
+
+async fn handle_chat_completions(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(req): Json<ChatCompletionRequest>,
+) -> impl IntoResponse {
+    let (user_prompt, image_path) = extract_content(&req);
+    let target_model = req.model.unwrap_or_else(|| MODEL_NAME.to_string());
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
+    // Streaming path — real-time tokens via SSE.
+    if req.stream.unwrap_or(false) {
+        return handle_streaming(state, user_prompt, target_model, now).await.into_response();
+    }
+
+    // Non-streaming path.
     let intent = state.router.classify_intent(&user_prompt);
     println!("[MIVI-V2 Server] Intent: {} | Model: '{}' | Prompt: '{}'", intent, target_model, user_prompt);
 
-    let (response_text, chosen_model) = if target_model.eq_ignore_ascii_case("minicpm-v-4.6")
-        || target_model.contains("vision")
-        || image_path.is_some()
-    {
+    let (response_text, chosen_model) = if image_path.is_some() {
         let path = image_path.unwrap_or_default();
         match state.brain.query_vision(&path, &user_prompt) {
-            Ok(res) => (res, "minicpm-v-4.6".to_string()),
-            Err(err) => (format!("Vision error: {}", err), "minicpm-v-4.6".to_string()),
+            Ok(res) => (res, MODEL_NAME.to_string()),
+            Err(err) => (format!("Vision error: {}", err), MODEL_NAME.to_string()),
         }
     } else {
         match target_model.to_lowercase().as_str() {
-            "qwen-2.5-0.5b" | "coder" => (
-                state.brain.query_coder(&user_prompt, "You are a coding expert.").unwrap_or_default(),
-                "qwen-2.5-0.5b".to_string(),
-            ),
-            "llama-3.2-1b" | "reasoner" => (
-                state.brain.query_reasoner(&user_prompt, "You are a helpful assistant.").unwrap_or_default(),
-                "llama-3.2-1b".to_string(),
-            ),
-            _ if intent == "CHAT" => {
-                let res = state.brain.query_reasoner(&user_prompt, "You are a helpful assistant.").unwrap_or_default();
-                (res, "llama-3.2-1b".to_string())
-            }
+            "coder" => code_chat(&state.brain, &user_prompt),
+            "reasoner" => reasoner_chat(&state.brain, &user_prompt),
+            _ if intent == "CHAT" => reasoner_chat(&state.brain, &user_prompt),
             _ => {
                 let (_, res) = state.orchestrator.execute_plan(&user_prompt).await;
-                (res, "mivi-v2".to_string())
+                (res, MODEL_NAME.to_string())
             }
         }
     };
-
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
     Json(ChatCompletionResponse {
         id: format!("chatcmpl-v2-{}", now),
@@ -171,9 +199,97 @@ async fn handle_chat_completions(
             finish_reason: "stop".to_string(),
         }],
     })
+    .into_response()
 }
 
-pub async fn start_api_server(state: Arc<AppState>, port: u16) {
+/// SSE streaming handler — spawns llama-cli per request, sends tokens as
+/// they arrive from stdout, then emits a final `finish_reason: stop` chunk
+/// and a `[DONE]` sentinel per the OpenAI streaming spec.
+async fn handle_streaming(
+    state: Arc<AppState>,
+    user_prompt: String,
+    _target_model: String,
+    created: u64,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let (tx, rx) = mpsc::channel::<String>(32);
+    let id = format!("chatcmpl-v2-{}", created);
+
+    // Clone what we need for the background task.
+    let brain = state.brain.clone();
+    let formatted = format_prompt(&user_prompt, "You are a helpful assistant.");
+
+    let cli_path = brain.llama_cli.to_str().unwrap_or("llama-cli").to_string();
+    let model_path = brain.llama_path.to_str().unwrap_or("").to_string();
+
+    tokio::spawn(async move {
+        let mut rx = spawn_streaming(
+            &cli_path,
+            &model_path,
+            &formatted,
+            if brain.ultra_low_ram { "0" } else { "999" },
+            if brain.ultra_low_ram { "4096" } else { "8192" },
+            "0.2",
+        );
+
+        while let Some(token) = rx.recv().await {
+            if tx.send(token).await.is_err() {
+                return; // Receiver dropped (client disconnected).
+            }
+        }
+    });
+
+    // Token events: one SSE chunk per received token.
+    let id_for_tokens = id.clone();
+    let token_stream = ReceiverStream::new(rx).map(move |token| {
+        let chunk = serde_json::json!({
+            "id": id_for_tokens,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": MODEL_NAME,
+            "choices": [{
+                "index": 0,
+                "delta": { "content": token },
+                "finish_reason": null
+            }]
+        });
+        Ok::<_, Infallible>(Event::default().data(chunk.to_string()))
+    });
+
+    // Final chunk: empty delta with finish_reason "stop".
+    let final_chunk = futures::stream::once({
+        let id = id.clone();
+        async move {
+            let chunk = serde_json::json!({
+                "id": id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": MODEL_NAME,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop"
+                }]
+            });
+            Ok::<_, Infallible>(Event::default().data(chunk.to_string()))
+        }
+    });
+
+    // [DONE] sentinel per OpenAI spec.
+    let done_marker = futures::stream::once(async {
+        Ok::<_, Infallible>(Event::default().data("[DONE]"))
+    });
+
+    let stream = token_stream.chain(final_chunk).chain(done_marker);
+    Sse::new(stream)
+}
+
+pub async fn start_api_server(brain: EdgeBrain, orchestrator: AgentOrchestrator, port: u16) {
+    let state = Arc::new(AppState {
+        brain,
+        orchestrator,
+        router: NeedleRouter::new(),
+    });
+
     let app = Router::new()
         .route("/", get(handle_root))
         .route("/v1/models", get(handle_models))

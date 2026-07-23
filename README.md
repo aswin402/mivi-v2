@@ -104,7 +104,7 @@ Configure your agent environment or client to use MIVI-V2 as your local backend:
 
 * **Base URL:** `http://localhost:8000/v1`
 * **API Key:** `local`
-* **Models Available:** `mivi-v2`, `qwen-2.5-0.5b`, `llama-3.2-1b`, `minicpm-v-4.6`
+* **Models Available:** `mivi` (auto-routes internally to best SML)
 
 See [docs/AGENTS_GUIDE.md](docs/AGENTS_GUIDE.md) for full configuration guides.
 

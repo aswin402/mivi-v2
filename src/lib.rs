@@ -1,8 +1,10 @@
 pub mod audit;
 pub mod brain;
 pub mod cache;
+pub mod chat;
 pub mod cli;
 pub mod logger;
+pub mod model_process;
 pub mod orchestrator;
 pub mod rag;
 pub mod router;

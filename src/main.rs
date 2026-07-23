@@ -1,11 +1,10 @@
 use mivi::audit::run_system_audit;
 use mivi::brain::EdgeBrain;
+use mivi::chat::run_chat_interactive;
 use mivi::cli::run_cli;
 use mivi::orchestrator::AgentOrchestrator;
-use mivi::router::NeedleRouter;
-use mivi::server::{start_api_server, AppState};
+use mivi::server::start_api_server;
 use std::env;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
@@ -28,8 +27,11 @@ async fn main() {
         "audit" => {
             run_system_audit().await;
         }
-        "cli" | "chat" => {
+        "cli" => {
             run_cli(orchestrator).await;
+        }
+        "chat" => {
+            run_chat_interactive(brain, orchestrator.router.clone()).await;
         }
         "task" => {
             if let Some(prompt) = args.get(2) {
@@ -40,15 +42,7 @@ async fn main() {
             }
         }
         _ => {
-            let router = NeedleRouter::new();
-
-            let state = Arc::new(AppState {
-                brain,
-                orchestrator,
-                router,
-            });
-
-            start_api_server(state, 8000).await;
+            start_api_server(brain, orchestrator, 8000).await;
         }
     }
 }

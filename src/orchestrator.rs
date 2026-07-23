@@ -2,6 +2,7 @@ use crate::brain::EdgeBrain;
 use crate::cache::SemanticCache;
 use crate::logger::DatasetLogger;
 use crate::rag::TurboVecRAG;
+use crate::router::NeedleRouter;
 use crate::verifier::CompilerVerifier;
 use serde::Deserialize;
 use serde_json::Value;
@@ -20,6 +21,7 @@ pub struct AgentOrchestrator {
     pub cache: SemanticCache,
     pub dataset: DatasetLogger,
     pub rag: TurboVecRAG,
+    pub router: NeedleRouter,
 }
 
 impl AgentOrchestrator {
@@ -28,15 +30,23 @@ impl AgentOrchestrator {
         let cache = SemanticCache::new();
         let dataset = DatasetLogger::new();
         let rag = TurboVecRAG::new();
+        let router = NeedleRouter::new();
         Self {
             brain,
             verifier,
             cache,
             dataset,
             rag,
+            router,
         }
     }
 
+    /// Check if prompt is conversational (not a coding task).
+    /// Returns true if the intent is CHAT — meaning route to Llama-1B directly,
+    /// not through the code-generation pipeline.
+    fn is_conversational(&self, request: &str) -> bool {
+        self.router.classify_intent(request) == "CHAT"
+    }
 
     fn extract_json_plan(&self, text: &str) -> Option<Vec<PlanStep>> {
         let json_str = if let Some(start) = text.find("```json") {
@@ -72,6 +82,18 @@ impl AgentOrchestrator {
     }
 
     pub async fn execute_plan(&self, request: &str) -> (bool, String) {
+        // --- Conversational fast-path ---
+        // If the prompt is a chat/QA intent, route directly to Llama-1B
+        // instead of trying to generate + execute code.
+        if self.is_conversational(request) {
+            println!("[Orchestrator] Conversational prompt detected -> routing to Llama-1B directly");
+            let response = self.brain
+                .query_reasoner(request, "You are a helpful, concise AI assistant. Answer the user's question directly.")
+                .unwrap_or_else(|e| format!("Error: {}", e));
+            return (true, response);
+        }
+
+        // --- Code execution path (existing logic) ---
         if let Some(cached) = self.cache.get(request).await {
             println!("[Orchestrator] Exact cache hit (< 0.001s)!");
             return (true, cached);

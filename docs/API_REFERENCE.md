@@ -40,14 +40,12 @@ Returns available models in OpenAI list format.
 {
   "object": "list",
   "data": [
-    { "id": "ai-brain", "object": "model", "owned_by": "mivi-v2" },
-    { "id": "mivi-v2", "object": "model", "owned_by": "mivi-v2" },
-    { "id": "qwen-2.5-0.5b", "object": "model", "owned_by": "mivi-v2" },
-    { "id": "llama-3.2-1b", "object": "model", "owned_by": "mivi-v2" },
-    { "id": "minicpm-v-4.6", "object": "model", "owned_by": "mivi-v2" }
+    { "id": "mivi", "object": "model", "created": 1742600000, "owned_by": "mivi" }
   ]
 }
 ```
+
+> **Note:** Internal SMLs (qwen-2.5-0.5b, llama-3.2-1b, minicpm-v-4.6) exist but are not exposed. MIVI auto-routes `mivi` requests to the right model internally.
 
 ---
 
@@ -58,7 +56,7 @@ Generates chat completions or verified code execution.
 **Request Body:**
 ```json
 {
-  "model": "mivi-v2",
+  "model": "mivi",
   "messages": [
     { "role": "user", "content": "Write a python line printing Hello World" }
   ]
@@ -68,7 +66,7 @@ Generates chat completions or verified code execution.
 **Multimodal Vision Request Body:**
 ```json
 {
-  "model": "minicpm-v-4.6",
+  "model": "mivi",
   "messages": [
     {
       "role": "user",
@@ -81,13 +79,15 @@ Generates chat completions or verified code execution.
 }
 ```
 
+> MIVI auto-detects multimodal input and routes to vision model internally.
+
 **Response Body:**
 ```json
 {
   "id": "chatcmpl-v2-1784699136",
   "object": "chat.completion",
   "created": 1784699136,
-  "model": "mivi-v2",
+  "model": "mivi",
   "choices": [
     {
       "index": 0,
