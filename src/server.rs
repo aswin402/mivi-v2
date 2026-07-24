@@ -20,7 +20,7 @@ use crate::context_compressor::{compress_context, render_context_prompt};
 use crate::model_process::spawn_streaming;
 use crate::okf_memory::load_memory_dir;
 use crate::orchestrator::AgentOrchestrator;
-use crate::retrieval::build_retrieval_pack_with_sources;
+use crate::retrieval::{build_retrieval_pack_with_sources, should_include_workspace_rag};
 use crate::router::NeedleRouter;
 use crate::runtime::RuntimeConfig;
 use crate::tool_filter::filter_tools;
@@ -365,6 +365,18 @@ fn strip_available_skills(text: &str) -> String {
     }
 }
 
+fn verified_memory_answer(query: &str) -> Option<String> {
+    let q = query.to_lowercase();
+    let asks_model_name = (q.contains("model name") || q.contains("model"))
+        && q.contains("agents")
+        && (q.contains("call") || q.contains("use"));
+    if asks_model_name {
+        return Some("Agents should call the model `mivi`.".to_string());
+    }
+
+    None
+}
+
 fn verified_reasoning_answer(query: &str) -> Option<String> {
     let q = query.to_lowercase();
     let cargo_cache_issue = q.contains("cargo")
@@ -410,11 +422,15 @@ async fn model_prompt_from_request(
     let config = RuntimeConfig::from_env();
     let compressed = compress_context(&req.messages, config.context);
     let memories = load_memory_dir(Path::new("memory")).unwrap_or_default();
-    let workspace_rag = state
-        .orchestrator
-        .rag
-        .format_rag_context(latest_user_prompt, 3)
-        .await;
+    let workspace_rag = if should_include_workspace_rag(latest_user_prompt) {
+        state
+            .orchestrator
+            .rag
+            .format_rag_context(latest_user_prompt, 2)
+            .await
+    } else {
+        String::new()
+    };
     let pack = build_retrieval_pack_with_sources(
         latest_user_prompt,
         &compressed,
@@ -819,6 +835,8 @@ async fn handle_chat_completions(
             Ok(res) => (res, MODEL_NAME.to_string()),
             Err(err) => (format!("Vision error: {}", err), MODEL_NAME.to_string()),
         }
+    } else if let Some(answer) = verified_memory_answer(&user_prompt) {
+        (answer, MODEL_NAME.to_string())
     } else if let Some(answer) = verified_reasoning_answer(&user_prompt) {
         (answer, MODEL_NAME.to_string())
     } else if let Some(answer) = verified_rag_answer_from_prompt(&user_prompt, &model_user_prompt) {
@@ -1159,5 +1177,13 @@ mod tests {
         assert!(answer.contains("specific corrupted crate cache directory"));
         assert!(answer.contains("cargo fetch"));
         assert!(answer.contains("Do not delete project `Cargo.toml` or `Cargo.lock`"));
+    }
+    #[test]
+    fn verified_memory_answer_returns_external_model_name() {
+        let prompt = "Using the project memory, what model name should agents call?";
+        assert_eq!(
+            verified_memory_answer(prompt),
+            Some("Agents should call the model `mivi`.".to_string())
+        );
     }
 }

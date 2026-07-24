@@ -50,6 +50,61 @@ fn should_skip_path(path: &str) -> bool {
         || normalized.ends_with("/.DS_Store")
 }
 
+fn query_words(query: &str) -> Vec<String> {
+    let stop_words: std::collections::HashSet<&str> = [
+        "the", "is", "to", "in", "a", "and", "of", "for", "on", "with", "at", "by", "from", "it",
+        "this", "that", "or", "be", "as", "an", "code", "script", "write", "create", "print",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    expand_query_words(
+        query
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .filter(|w| w.len() >= 3 && !stop_words.contains(w))
+            .map(|s| s.to_string())
+            .collect(),
+    )
+}
+
+fn relevant_lines(text: &str, query_words: &[String], max_lines: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= max_lines {
+        return text.to_string();
+    }
+
+    let mut keep = Vec::new();
+    for (idx, line) in lines.iter().enumerate() {
+        let lower = line.to_lowercase();
+        if query_words.iter().any(|word| lower.contains(word)) {
+            let start = idx.saturating_sub(1);
+            let end = (idx + 2).min(lines.len());
+            for keep_idx in start..end {
+                keep.push(keep_idx);
+            }
+        }
+    }
+
+    keep.sort_unstable();
+    keep.dedup();
+    keep.truncate(max_lines);
+
+    if keep.is_empty() {
+        return lines
+            .into_iter()
+            .take(max_lines)
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
+    keep.into_iter()
+        .map(|idx| lines[idx])
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 impl TurboVecRAG {
     pub fn new() -> Self {
         Self {
@@ -100,23 +155,7 @@ impl TurboVecRAG {
 
     pub async fn search(&self, query: &str, top_k: usize) -> Vec<(RagChunk, f32)> {
         let guard = self.chunks.lock().await;
-        let stop_words: std::collections::HashSet<&str> = [
-            "the", "is", "to", "in", "a", "and", "of", "for", "on", "with", "at", "by", "from",
-            "it", "this", "that", "or", "be", "as", "an", "code", "script", "write", "create",
-            "print",
-        ]
-        .iter()
-        .cloned()
-        .collect();
-
-        let query_words = expand_query_words(
-            query
-                .to_lowercase()
-                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                .filter(|w| w.len() >= 3 && !stop_words.contains(w))
-                .map(|s| s.to_string())
-                .collect(),
-        );
+        let query_words = query_words(query);
 
         if query_words.is_empty() {
             return Vec::new();
@@ -167,8 +206,8 @@ impl TurboVecRAG {
             if *score < 1.0 {
                 continue;
             }
-            let commented_text = chunk
-                .text
+            let evidence = relevant_lines(&chunk.text, &query_words(query), 8);
+            let commented_text = evidence
                 .lines()
                 .map(|line| format!("# {}", line))
                 .collect::<Vec<String>>()
@@ -248,5 +287,34 @@ mod tests {
         assert!(should_skip_path("./model-eval-results/small-model.jsonl"));
         assert!(should_skip_path("./.fastembed_cache/cache.bin"));
         assert!(!should_skip_path("./src/router.rs"));
+    }
+    #[tokio::test]
+    async fn formatted_rag_context_keeps_only_relevant_lines() {
+        let rag = TurboVecRAG::new();
+        {
+            let mut chunks = rag.chunks.lock().await;
+            chunks.push(RagChunk {
+                file_path: "src/router.rs".to_string(),
+                line_start: 1,
+                text: (1..=25)
+                    .map(|i| {
+                        if i == 13 {
+                            "pub fn classify_intent(&self, prompt: &str)".to_string()
+                        } else {
+                            format!("irrelevant filler line {}", i)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            });
+        }
+
+        let context = rag
+            .format_rag_context("intent routing classify_intent", 1)
+            .await;
+
+        assert!(context.contains("classify_intent"));
+        assert!(!context.contains("# irrelevant filler line 1\n"));
+        assert!(!context.contains("irrelevant filler line 25"));
     }
 }

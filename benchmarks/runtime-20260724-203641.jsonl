@@ -1,0 +1,15 @@
+{"mode": "spawn", "kind": "chat", "elapsed_ms": 5578, "server_rss_kb": 6132, "server_tree_rss_kb": 6132, "worker_rss_kb": 0, "status": "ok"}
+{"mode": "spawn", "kind": "coding", "elapsed_ms": 2261, "server_rss_kb": 7100, "server_tree_rss_kb": 7100, "worker_rss_kb": 0, "status": "ok"}
+{"mode": "spawn", "kind": "tool", "elapsed_ms": 4861, "server_rss_kb": 7112, "server_tree_rss_kb": 7112, "worker_rss_kb": 0, "status": "ok"}
+{"mode": "spawn", "kind": "rag", "elapsed_ms": 49, "server_rss_kb": 7228, "server_tree_rss_kb": 7228, "worker_rss_kb": 0, "status": "ok"}
+{"mode": "spawn", "kind": "vision-skip", "elapsed_ms": 4607, "server_rss_kb": 7232, "server_tree_rss_kb": 7232, "worker_rss_kb": 0, "status": "ok"}
+{"mode": "worker-eco", "kind": "chat", "elapsed_ms": 3083, "server_rss_kb": 6212, "server_tree_rss_kb": 875564, "worker_rss_kb": 869352, "status": "ok"}
+{"mode": "worker-eco", "kind": "coding", "elapsed_ms": 1726, "server_rss_kb": 7376, "server_tree_rss_kb": 876728, "worker_rss_kb": 869352, "status": "ok"}
+{"mode": "worker-eco", "kind": "tool", "elapsed_ms": 3919, "server_rss_kb": 7384, "server_tree_rss_kb": 876736, "worker_rss_kb": 869352, "status": "ok"}
+{"mode": "worker-eco", "kind": "rag", "elapsed_ms": 19, "server_rss_kb": 7500, "server_tree_rss_kb": 876852, "worker_rss_kb": 869352, "status": "ok"}
+{"mode": "worker-eco", "kind": "vision-skip", "elapsed_ms": 2134, "server_rss_kb": 7504, "server_tree_rss_kb": 877040, "worker_rss_kb": 869536, "status": "ok"}
+{"mode": "worker-hot", "kind": "chat", "elapsed_ms": 3101, "server_rss_kb": 6120, "server_tree_rss_kb": 875428, "worker_rss_kb": 869308, "status": "ok"}
+{"mode": "worker-hot", "kind": "coding", "elapsed_ms": 1622, "server_rss_kb": 7428, "server_tree_rss_kb": 876736, "worker_rss_kb": 869308, "status": "ok"}
+{"mode": "worker-hot", "kind": "tool", "elapsed_ms": 4180, "server_rss_kb": 7432, "server_tree_rss_kb": 876740, "worker_rss_kb": 869308, "status": "ok"}
+{"mode": "worker-hot", "kind": "rag", "elapsed_ms": 18, "server_rss_kb": 7436, "server_tree_rss_kb": 876744, "worker_rss_kb": 869308, "status": "ok"}
+{"mode": "worker-hot", "kind": "vision-skip", "elapsed_ms": 5886, "server_rss_kb": 7448, "server_tree_rss_kb": 876940, "worker_rss_kb": 869492, "status": "ok"}

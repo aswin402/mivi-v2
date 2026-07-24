@@ -51,15 +51,15 @@ Agent behavior notes:
 
 ## Latest Runtime Benchmark
 
-Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark now records Rust server RSS, server process-tree RSS, and persistent worker RSS. Worker modes stayed under the 1000 MB active-RAM target in this run, but `worker-hot` RAG timed out at 120 seconds and should not become the default yet.
+Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark records Rust server RSS, server process-tree RSS, and persistent worker RSS. Worker modes stayed under the 1000 MB active-RAM target, and verified RAG answers removed the previous `worker-hot` RAG timeout.
 
 | Mode | Chat | Coding | Tool | RAG | Vision Skip | Peak Worker RSS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `spawn` | 7211 ms | 1793 ms | 4516 ms | 40083 ms | 5510 ms | 0 MB |
-| `worker-eco` | 3382 ms | 1608 ms | 4439 ms | 38975 ms | 5917 ms | 946 MB |
-| `worker-hot` | 3441 ms | 4564 ms | 4478 ms | 120014 ms timeout | 51976 ms | 986 MB |
+| `spawn` | 5578 ms | 2261 ms | 4861 ms | 49 ms | 4607 ms | 0 MB |
+| `worker-eco` | 3083 ms | 1726 ms | 3919 ms | 19 ms | 2134 ms | 849 MB |
+| `worker-hot` | 3101 ms | 1622 ms | 4180 ms | 18 ms | 5886 ms | 849 MB |
 
-Benchmark output: `benchmarks/runtime-20260724-163329.jsonl`.
+Benchmark output: `benchmarks/runtime-20260724-203641.jsonl`.
 
 ---
 

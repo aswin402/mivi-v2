@@ -140,8 +140,12 @@ fn push_section(
     sources.push(source.to_string());
 }
 
-fn should_include_workspace_rag(query: &str) -> bool {
+pub(crate) fn should_include_workspace_rag(query: &str) -> bool {
     let query = query.to_ascii_lowercase();
+    if query.contains("project memory") || query.contains("okf memory") {
+        return false;
+    }
+
     let triggers = [
         "codebase",
         "workspace",
@@ -215,6 +219,13 @@ mod tests {
         );
         assert!(pack.sources.contains(&"memory:project-main".to_string()));
         assert!(pack.sources.contains(&"workspace-rag".to_string()));
+    }
+
+    #[test]
+    fn workspace_rag_trigger_is_false_for_memory_only_prompt() {
+        assert!(!should_include_workspace_rag(
+            "Using the project memory, what model name should agents call?"
+        ));
     }
 
     #[test]
