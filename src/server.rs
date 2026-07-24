@@ -8,6 +8,7 @@ use axum::{
 use futures::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -15,9 +16,14 @@ use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::CorsLayer;
 
 use crate::brain::EdgeBrain;
+use crate::context_compressor::{compress_context, render_context_prompt};
 use crate::model_process::spawn_streaming;
+use crate::okf_memory::load_memory_dir;
 use crate::orchestrator::AgentOrchestrator;
+use crate::retrieval::build_retrieval_pack_with_sources;
 use crate::router::NeedleRouter;
+use crate::runtime::RuntimeConfig;
+use crate::tool_filter::filter_tools;
 
 /// The single model name exposed to external agents.
 /// Internal SML routing is hidden behind this constant.
@@ -185,8 +191,11 @@ async fn handle_models() -> Json<ModelListResponse> {
 // Prompt building
 // ──────────────────────────────────────────────
 
+const MAX_PROMPT_TOOLS: usize = 8;
+
 fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
     let mut prompt = String::new();
+    let prompt_tools = prompt_tools_for_request(req);
 
     let has_user_system = req.messages.iter().any(|m| m.role == "system");
     if has_user_system {
@@ -199,12 +208,12 @@ fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
                 }
             }
         }
-    } else if req.tools.as_ref().map_or(true, |t| t.is_empty()) {
+    } else if prompt_tools.is_empty() {
         prompt.push_str("<|im_start|>system\nYou are a helpful, concise AI assistant.<|im_end|>\n");
     }
 
     // Conversation turns.
-    let has_tools = req.tools.as_ref().map_or(false, |t| !t.is_empty());
+    let has_tools = !prompt_tools.is_empty();
     let mut last_user_idx: Option<usize> = None;
 
     for (_, msg) in req.messages.iter().enumerate() {
@@ -256,7 +265,7 @@ fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
     }
 
     if has_tools {
-        let func_block = build_function_list_block(req);
+        let func_block = build_function_list_block(&prompt_tools);
         if let Some(idx) = last_user_idx {
             prompt.insert_str(idx, &func_block);
         } else {
@@ -268,11 +277,24 @@ fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
     prompt
 }
 
-fn build_function_list_block(req: &ChatCompletionRequest) -> String {
-    let tools = match req.tools {
-        Some(ref t) if !t.is_empty() => t,
-        _ => return String::new(),
+fn prompt_tools_for_request(req: &ChatCompletionRequest) -> Vec<ToolDef> {
+    let tools = match req.tools.as_deref() {
+        Some(tools) if !tools.is_empty() => tools,
+        _ => return Vec::new(),
     };
+
+    if matches!(req.tool_choice, Some(serde_json::Value::String(ref choice)) if choice == "required")
+    {
+        return tools.to_vec();
+    }
+
+    filter_tools(&latest_user_prompt_text(req), tools, MAX_PROMPT_TOOLS)
+}
+
+fn build_function_list_block(tools: &[ToolDef]) -> String {
+    if tools.is_empty() {
+        return String::new();
+    }
 
     let mut block = String::new();
 
@@ -340,6 +362,34 @@ fn strip_available_skills(text: &str) -> String {
         after.trim().to_string()
     } else {
         text.to_string()
+    }
+}
+
+async fn model_prompt_from_request(
+    req: &ChatCompletionRequest,
+    latest_user_prompt: &str,
+    state: &AppState,
+) -> String {
+    let config = RuntimeConfig::from_env();
+    let compressed = compress_context(&req.messages, config.context);
+    let memories = load_memory_dir(Path::new("memory")).unwrap_or_default();
+    let workspace_rag = state
+        .orchestrator
+        .rag
+        .format_rag_context(latest_user_prompt, 3)
+        .await;
+    let pack = build_retrieval_pack_with_sources(
+        latest_user_prompt,
+        &compressed,
+        &memories,
+        &workspace_rag,
+        config.context,
+    );
+
+    if pack.prompt.trim().is_empty() {
+        render_context_prompt(&compressed, latest_user_prompt)
+    } else {
+        pack.prompt
     }
 }
 
@@ -703,10 +753,11 @@ async fn handle_chat_completions(
 
     // ── Non-tool path (existing logic) ───────────────────────────────
     let (user_prompt, image_path) = extract_content(&req);
+    let model_user_prompt = model_prompt_from_request(&req, &user_prompt, &state).await;
 
     // Streaming path.
     if req.stream.unwrap_or(false) {
-        return handle_streaming(state, user_prompt, target_model, now)
+        return handle_streaming(state, model_user_prompt, target_model, now)
             .await
             .into_response();
     }
@@ -726,9 +777,9 @@ async fn handle_chat_completions(
         }
     } else {
         match target_model.to_lowercase().as_str() {
-            "coder" => code_chat(&state.brain, &user_prompt),
-            "reasoner" => reasoner_chat(&state.brain, &user_prompt),
-            _ if intent == "CHAT" => reasoner_chat(&state.brain, &user_prompt),
+            "coder" => code_chat(&state.brain, &model_user_prompt),
+            "reasoner" => reasoner_chat(&state.brain, &model_user_prompt),
+            _ if intent == "CHAT" => reasoner_chat(&state.brain, &model_user_prompt),
             _ => {
                 let (_, res) = state.orchestrator.execute_plan(&user_prompt).await;
                 (res, MODEL_NAME.to_string())
@@ -889,6 +940,39 @@ mod tests {
             }]),
             tool_choice,
         }
+    }
+
+    fn server_tool(name: &str, description: &str) -> ToolDef {
+        ToolDef {
+            function: FunctionDef {
+                name: name.to_string(),
+                description: Some(description.to_string()),
+                parameters: None,
+            },
+            r#type: "function".to_string(),
+        }
+    }
+
+    #[test]
+    fn tool_prompt_filters_irrelevant_opencode_tools() {
+        let mut req = tool_request("please use apply_patch to edit src/main.rs", None);
+        let mut tools = vec![
+            server_tool("read", "Read a file"),
+            server_tool("apply_patch", "Edit files by applying a patch"),
+            server_tool("bash", "Run command"),
+        ];
+        for idx in 0..40 {
+            tools.push(server_tool(
+                &format!("irrelevant_tool_{idx}"),
+                "Unrelated plugin action",
+            ));
+        }
+        req.tools = Some(tools);
+
+        let prompt = build_chat_prompt(&req);
+
+        assert!(prompt.contains("Function: apply_patch"));
+        assert!(!prompt.contains("irrelevant_tool_17"));
     }
 
     #[test]

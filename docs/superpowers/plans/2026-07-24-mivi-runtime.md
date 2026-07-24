@@ -45,11 +45,11 @@
 - Produces: `RuntimeMode::{Spawn, WorkerEco, WorkerHot}`
 - Produces: `ContextBudget { max_input_tokens, recent_turn_tokens, retrieved_tokens, memory_tokens, tool_tokens }`
 
-- [ ] **Step 1: Write failing tests** for default mode, env override, and invalid env fallback.
-- [ ] **Step 2: Run** `cargo test runtime` and confirm tests fail because `src/runtime.rs` does not exist.
-- [ ] **Step 3: Implement** `RuntimeConfig::from_env()` with defaults: `Spawn`, 4096 raw context, 120 second idle worker timeout, 1000 MB RAM target.
-- [ ] **Step 4: Export** `pub mod runtime;` from `src/lib.rs`.
-- [ ] **Step 5: Run** `cargo test runtime` and commit `feat: add runtime configuration`.
+- [x] **Step 1: Write failing tests** for default mode, env override, and invalid env fallback.
+- [x] **Step 2: Run** `cargo test runtime` and confirm tests fail because `src/runtime.rs` does not exist.
+- [x] **Step 3: Implement** `RuntimeConfig::from_env()` with defaults: `Spawn`, 4096 raw context, 120 second idle worker timeout, 1000 MB RAM target.
+- [x] **Step 4: Export** `pub mod runtime;` from `src/lib.rs`.
+- [x] **Step 5: Run** `cargo test runtime` and commit `feat: add runtime configuration`.
 
 ## Task 2: Tool Filtering
 
@@ -63,13 +63,13 @@
 - Produces: `filter_tools(prompt: &str, tools: &[ToolDefinition], max_tools: usize) -> Vec<ToolDefinition>`.
 - Produces: `tool_score(prompt: &str, tool_name: &str, description: &str) -> f32`.
 
-- [ ] **Step 1: Write tests** where 133 OpenCode tools are reduced to exact matching tools plus a small generic fallback set.
-- [ ] **Step 2: Write tests** where no explicit tool request keeps tools out of the model prompt.
-- [ ] **Step 3: Run** `cargo test tool_filter server` and confirm tests fail.
-- [ ] **Step 4: Implement** token overlap scoring for name, description, and parameter keys.
-- [ ] **Step 5: Add hard triggers** for exact tool names and phrases like `use tool`, `call function`, `read file`, `edit file`, and `run command`.
-- [ ] **Step 6: Wire** `filter_tools()` into `generate_tool_calls()` so tool prompts never include all 133 tools unless `tool_choice` requires it.
-- [ ] **Step 7: Run** `cargo test tool_filter server` and commit `feat: filter agent tools before prompting`.
+- [x] **Step 1: Write tests** where 133 OpenCode tools are reduced to exact matching tools plus a small generic fallback set.
+- [x] **Step 2: Write tests** where no explicit tool request keeps tools out of the model prompt.
+- [x] **Step 3: Run** `cargo test tool_filter server` and confirm tests fail.
+- [x] **Step 4: Implement** token overlap scoring for name, description, and parameter keys.
+- [x] **Step 5: Add hard triggers** for exact tool names and phrases like `use tool`, `call function`, `read file`, `edit file`, and `run command`.
+- [x] **Step 6: Wire** `filter_tools()` into `generate_tool_calls()` so tool prompts never include all 133 tools unless `tool_choice` requires it.
+- [x] **Step 7: Run** `cargo test tool_filter server` and commit `feat: filter agent tools before prompting`.
 
 ## Task 3: Context Compression
 
@@ -83,13 +83,13 @@
 - Produces: `CompressedContext { system: String, protected_recent: Vec<String>, tool_observations: Vec<String>, summary: String }`.
 - Produces: `compress_context(messages: &[ChatMessage], budget: ContextBudget) -> CompressedContext`.
 
-- [ ] **Step 1: Write tests** proving latest user message, latest assistant answer, tool results, and explicit instructions are preserved.
-- [ ] **Step 2: Write tests** proving old greetings and repeated injected skill text are dropped.
-- [ ] **Step 3: Run** `cargo test context_compressor server` and confirm tests fail.
-- [ ] **Step 4: Implement** deterministic compression: keep system identity, latest real user prompt, last two turns, tool observations, code blocks, and errors.
-- [ ] **Step 5: Add extension point** for future model summarization without calling a model in v1.
-- [ ] **Step 6: Wire** compressed context into normal chat and streaming paths.
-- [ ] **Step 7: Run** `cargo test context_compressor server` and commit `feat: compress agent context deterministically`.
+- [x] **Step 1: Write tests** proving latest user message, latest assistant answer, tool results, and explicit instructions are preserved.
+- [x] **Step 2: Write tests** proving old greetings and repeated injected skill text are dropped.
+- [x] **Step 3: Run** `cargo test context_compressor server` and confirm tests fail.
+- [x] **Step 4: Implement** deterministic compression: keep system identity, latest real user prompt, last two turns, tool observations, code blocks, and errors.
+- [x] **Step 5: Add extension point** for future model summarization without calling a model in v1.
+- [x] **Step 6: Wire** compressed context into normal chat and streaming paths.
+- [x] **Step 7: Run** `cargo test context_compressor server` and commit `feat: compress agent context deterministically`.
 
 ## Task 4: OKF Memory
 
@@ -103,12 +103,12 @@
 - Produces: `load_memory_dir(path: &Path) -> Result<Vec<OkfMemory>, String>`.
 - Produces: `write_memory(path: &Path, memory: &OkfMemory) -> Result<(), String>`.
 
-- [ ] **Step 1: Write tests** for parsing Markdown with frontmatter fields `id`, `title`, `type`, and `tags`.
-- [ ] **Step 2: Write tests** rejecting files missing `type`, matching OKF typed knowledge rules.
-- [ ] **Step 3: Run** `cargo test okf_memory` and confirm tests fail.
-- [ ] **Step 4: Implement** a small frontmatter parser using line scanning; avoid new dependencies.
-- [ ] **Step 5: Add write support** for verified user preferences, project facts, and reusable tool notes.
-- [ ] **Step 6: Run** `cargo test okf_memory` and commit `feat: add OKF memory store`.
+- [x] **Step 1: Write tests** for parsing Markdown with frontmatter fields `id`, `title`, `type`, and `tags`.
+- [x] **Step 2: Write tests** rejecting files missing `type`, matching OKF typed knowledge rules.
+- [x] **Step 3: Run** `cargo test okf_memory` and confirm tests fail.
+- [x] **Step 4: Implement** a small frontmatter parser using line scanning; avoid new dependencies.
+- [x] **Step 5: Add write support** for verified user preferences, project facts, and reusable tool notes.
+- [x] **Step 6: Run** `cargo test okf_memory` and commit `feat: add OKF memory store`.
 
 ## Task 5: RAG Retrieval Pack
 
@@ -123,12 +123,12 @@
 - Produces: `RetrievalPack { prompt: String, sources: Vec<String>, estimated_tokens: usize }`.
 - Produces: `build_retrieval_pack(query: &str, compressed: &CompressedContext, budget: ContextBudget) -> RetrievalPack`.
 
-- [ ] **Step 1: Write tests** proving project/codebase prompts include workspace RAG.
-- [ ] **Step 2: Write tests** proving simple chat does not get polluted by code chunks.
-- [ ] **Step 3: Run** `cargo test retrieval orchestrator` and confirm tests fail.
-- [ ] **Step 4: Implement** source ordering: user instruction, recent turn, tool observations, OKF memory, workspace RAG.
-- [ ] **Step 5: Enforce** per-source token budgets and expose source labels for debugging.
-- [ ] **Step 6: Run** `cargo test retrieval orchestrator` and commit `feat: build bounded retrieval packs`.
+- [x] **Step 1: Write tests** proving project/codebase prompts include workspace RAG.
+- [x] **Step 2: Write tests** proving simple chat does not get polluted by code chunks.
+- [x] **Step 3: Run** `cargo test retrieval orchestrator` and confirm tests fail.
+- [x] **Step 4: Implement** source ordering: user instruction, recent turn, tool observations, OKF memory, workspace RAG.
+- [x] **Step 5: Enforce** per-source token budgets and expose source labels for debugging.
+- [x] **Step 6: Run** `cargo test retrieval orchestrator` and commit `feat: build bounded retrieval packs`.
 
 ## Task 6: Persistent Workers
 
@@ -209,12 +209,12 @@
 
 ## Todo Plan
 
-- [ ] v0.0.4 docs/version release: version bump, README update, runtime implementation plan.
-- [ ] Runtime config module.
-- [ ] Tool filtering module.
-- [ ] Context compression module.
-- [ ] OKF memory module.
-- [ ] Retrieval pack module.
+- [x] v0.0.4 docs/version release: version bump, README update, runtime implementation plan.
+- [x] Runtime config module.
+- [x] Tool filtering module.
+- [x] Context compression module.
+- [x] OKF memory module.
+- [x] Retrieval pack module.
 - [ ] Persistent text worker.
 - [ ] Benchmark script.
 - [ ] Small-model eval scripts and matrix.
