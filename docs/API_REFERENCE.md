@@ -74,6 +74,8 @@ Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark records Ru
 
 Benchmark output: `benchmarks/runtime-20260724-203641.jsonl`.
 
+Small-model evals are scored semantically: `scripts/eval_small_models.sh` writes `semantic_ok`, `score`, and `reasons`, and exits non-zero when an answer fails expected facts or tool-call checks.
+
 ---
 
 ## 3. `POST /v1/chat/completions`

@@ -108,6 +108,8 @@ scripts/bench_runtime.sh
 
 Results are written to `benchmarks/runtime-YYYYMMDD-HHMMSS.jsonl` with mode, prompt kind, latency, RSS, and status.
 
+Small-model evals are scored semantically: `scripts/eval_small_models.sh` writes `semantic_ok`, `score`, and `reasons`, and exits non-zero when an answer fails expected facts or tool-call checks.
+
 ## Latest Runtime Benchmark
 
 Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark records Rust server RSS, server process-tree RSS, and persistent worker RSS. Worker modes stayed under the 1000 MB active-RAM target, and verified RAG answers removed the previous `worker-hot` RAG timeout.

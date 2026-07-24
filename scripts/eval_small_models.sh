@@ -8,6 +8,7 @@ OUT_DIR="model-eval-results"
 mkdir -p "$OUT_DIR"
 OUT="$OUT_DIR/small-model-$(date +%Y%m%d-%H%M%S).jsonl"
 SERVER_URL="${MIVI_EVAL_SERVER_URL:-http://127.0.0.1:8000/v1/chat/completions}"
+FAILED=0
 
 PROMPTS=(
   "chat|Say who you are in one short sentence."
@@ -42,8 +43,15 @@ for item in "${PROMPTS[@]}"; do
   start="$(date +%s%3N)"
   response="$(curl -fsS --max-time "${MIVI_EVAL_TIMEOUT:-180}" "$SERVER_URL" -H 'Content-Type: application/json' -d "$(payload_for "$kind" "$prompt")" || true)"
   end="$(date +%s%3N)"
-  python3 -c 'import json,sys; print(json.dumps({"kind":sys.argv[1],"elapsed_ms":int(sys.argv[2]),"ok":bool(sys.argv[3]),"response":sys.argv[3][:2000]}))' \
-    "$kind" "$((end - start))" "$response" >>"$OUT"
+  score_json="$(python3 scripts/score_eval.py "$kind" "$response")"
+  python3 -c 'import json,sys; score=json.loads(sys.argv[4]); print(json.dumps({"kind":sys.argv[1],"elapsed_ms":int(sys.argv[2]),"http_ok":bool(sys.argv[3]),"semantic_ok":bool(score["semantic_ok"]),"score":float(score["score"]),"reasons":score["reasons"],"content":score["content"],"response":sys.argv[3][:2000]}))' \
+    "$kind" "$((end - start))" "$response" "$score_json" >>"$OUT"
+  if ! python3 -c 'import json,sys; raise SystemExit(0 if json.loads(sys.argv[1])["semantic_ok"] else 1)' "$score_json"; then
+    FAILED=1
+  fi
 done
 
 echo "$OUT"
+if [[ "$FAILED" != "0" && "${MIVI_EVAL_ALLOW_FAILURES:-0}" != "1" ]]; then
+  exit 1
+fi
