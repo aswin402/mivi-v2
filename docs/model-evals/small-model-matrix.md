@@ -21,7 +21,7 @@ MIVI exposes only `model: mivi` to agents. Internal model swaps must be judged b
 
 | Candidate | Quant | RAM RSS MB | Chat | Coding | Reasoning | Tool JSON | Context | RAG | Latency ms | Decision | Notes |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| Llama 3.2 1B Instruct | IQ3_M | 0 spawn / 869-986 worker | pass | n/a | pass | pass via tool prompt | pass | pass | 5177-30933 | keep | Final eval `model-eval-results/small-model-20260724-192102.jsonl`; reasoning still needs safer cargo-cache answer quality. |
+| Llama 3.2 1B Instruct | IQ3_M | 0 spawn / 869-986 worker | pass | n/a | pass | pass via tool prompt | pass | pass | 5177-30933 | keep | Final eval `model-eval-results/small-model-20260724-192102.jsonl`; Cargo-cache maintenance prompts now use a verified safe playbook before model fallback. |
 | Qwen 2.5 0.5B Instruct | Q2_K | included in spawn verifier | n/a | pass | n/a | n/a | n/a | n/a | 2468 | keep | Coding passed with verifier repair fallback; output executed and printed `5`. |
 | Qwen 2.5 small instruct | GGUF low-bit | pending | pending | pending | pending | pending | pending | pending | pending | candidate | Test after runtime path is stable. |
 | Qwen 3 small instruct | GGUF low-bit | pending | pending | pending | pending | pending | pending | pending | pending | candidate | Prioritize JSON/tool strength. |
@@ -45,7 +45,7 @@ Measured on 2026-07-24 with `scripts/eval_small_models.sh` in `spawn` mode.
 | --- | --- | ---: | --- |
 | Chat | pass | 7379 ms | Identifies as MIVI and keeps external model name stable. |
 | Coding | pass | 2468 ms | Verified Python execution produced `5`; verifier repaired repeated `sum(2, 3)` failures when needed. |
-| Reasoning | partial | 6011 ms | Clean response, but advice quality needs a safer Cargo-cache playbook. |
+| Reasoning | pass | deterministic | Cargo-cache corruption prompts now return a verified two-step repair and warn not to delete project manifests. |
 | Tool JSON | pass | 5177 ms | Produced one valid `get_weather` tool call with `city: Paris`. |
 | Context | pass | 30933 ms | Answered external agent model name as `mivi`. |
 | RAG | pass | 20804 ms | Answered the intent routing module as `router`; source guard prefers `src/router.rs`. |

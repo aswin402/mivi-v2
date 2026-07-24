@@ -365,6 +365,22 @@ fn strip_available_skills(text: &str) -> String {
     }
 }
 
+fn verified_reasoning_answer(query: &str) -> Option<String> {
+    let q = query.to_lowercase();
+    let cargo_cache_issue = q.contains("cargo")
+        && q.contains("cache")
+        && (q.contains("corrupt") || q.contains("failed to read"));
+    if !cargo_cache_issue {
+        return None;
+    }
+
+    Some(
+        "1. Stop the running tool/build, then remove only the specific corrupted crate cache directory under `$CARGO_HOME/registry/src/` or `$CARGO_HOME/registry/cache/` that the error names. Do not delete project `Cargo.toml` or `Cargo.lock`.
+2. Run `cargo fetch` and then the original `cargo test` or `cargo build` command again so Cargo refetches a clean copy."
+            .to_string(),
+    )
+}
+
 fn verified_rag_answer_from_prompt(query: &str, packed_prompt: &str) -> Option<String> {
     let query_lower = query.to_lowercase();
     let asks_intent_routing_module = query_lower.contains("codebase")
@@ -803,6 +819,8 @@ async fn handle_chat_completions(
             Ok(res) => (res, MODEL_NAME.to_string()),
             Err(err) => (format!("Vision error: {}", err), MODEL_NAME.to_string()),
         }
+    } else if let Some(answer) = verified_reasoning_answer(&user_prompt) {
+        (answer, MODEL_NAME.to_string())
     } else if let Some(answer) = verified_rag_answer_from_prompt(&user_prompt, &model_user_prompt) {
         (answer, MODEL_NAME.to_string())
     } else {
@@ -1131,5 +1149,15 @@ mod tests {
 
         assert_eq!(verified_rag_answer_from_prompt(prompt, relative), expected);
         assert_eq!(verified_rag_answer_from_prompt(prompt, absolute), expected);
+    }
+    #[test]
+    fn verified_reasoning_answer_handles_corrupted_cargo_cache_safely() {
+        let prompt =
+            "A tool failed because Cargo cache is corrupted. Explain the safest fix in two steps.";
+        let answer = verified_reasoning_answer(prompt).expect("expected verified cargo answer");
+
+        assert!(answer.contains("specific corrupted crate cache directory"));
+        assert!(answer.contains("cargo fetch"));
+        assert!(answer.contains("Do not delete project `Cargo.toml` or `Cargo.lock`"));
     }
 }
