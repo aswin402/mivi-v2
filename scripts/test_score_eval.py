@@ -35,6 +35,19 @@ class ScoreEvalTests(unittest.TestCase):
         self.assertFalse(result["semantic_ok"])
         self.assertIn("missing manifest safety warning", result["reasons"])
 
+
+    def test_shell_tool_requires_npm_test_command(self):
+        result = score_eval(
+            "tool-shell",
+            response(
+                tool_calls=[{
+                    "type": "function",
+                    "function": {"name": "bash", "arguments": json.dumps({"cmd": "npm test"})},
+                }],
+            ),
+        )
+        self.assertTrue(result["semantic_ok"])
+
     def test_context_requires_mivi_model_name(self):
         result = score_eval("context", response("Agents should call mivi."))
         self.assertTrue(result["semantic_ok"])

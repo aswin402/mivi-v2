@@ -15,6 +15,7 @@ PROMPTS=(
   "coding|Write Python code that prints the sum of 2 and 3."
   "reasoning|A tool failed because Cargo cache is corrupted. Explain the safest fix in two steps."
   "tool-json|Use the get_weather tool for Paris."
+  "tool-shell|Run npm test."
   "context|Using the project memory, what model name should agents call?"
   "rag|In this codebase, what module handles intent routing?"
 )
@@ -30,6 +31,8 @@ payload_for() {
     cat <<JSON
 {"model":"mivi","messages":[{"role":"user","content":$(printf '%s' "$prompt" | json_escape)}],"stream":false,"tools":[{"type":"function","function":{"name":"get_weather","description":"Get weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}]}
 JSON
+  elif [[ "$kind" == "tool-shell" ]]; then
+    python3 -c 'import json,sys; prompt=sys.argv[1]; tools=[{"type":"function","function":{"name":"bash","description":"Run a shell command in the project terminal","parameters":{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}}}]; tools += [{"type":"function","function":{"name":f"irrelevant_tool_{i}","description":"Unrelated plugin action","parameters":{"type":"object","properties":{"value":{"type":"string"}}}}} for i in range(100)]; print(json.dumps({"model":"mivi","messages":[{"role":"user","content":prompt}],"stream":False,"tools":tools}))' "$prompt"
   else
     cat <<JSON
 {"model":"mivi","messages":[{"role":"user","content":$(printf '%s' "$prompt" | json_escape)}],"stream":false}

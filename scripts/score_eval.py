@@ -47,6 +47,21 @@ def score_eval(kind, response_text):
                 reasons.append("tool arguments not json")
             if args.get("city") != "Paris":
                 reasons.append("missing city Paris")
+    elif kind == "tool-shell":
+        if len(tool_calls) != 1:
+            reasons.append("expected one shell tool call")
+        else:
+            fn = tool_calls[0].get("function", {})
+            if fn.get("name") not in {"bash", "shell", "exec_command"}:
+                reasons.append("wrong shell tool name")
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+                reasons.append("tool arguments not json")
+            command = args.get("cmd") or args.get("command") or ""
+            if "npm test" not in command.lower():
+                reasons.append("missing npm test command")
     elif kind == "context":
         if "mivi" not in text:
             reasons.append("missing external model name mivi")

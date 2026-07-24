@@ -4,22 +4,141 @@ use std::collections::HashSet;
 
 const MIN_TOOL_SCORE: f32 = 1.0;
 
+fn task_tags(prompt: &str) -> HashSet<&'static str> {
+    let text = prompt.to_ascii_lowercase();
+    let tokens = token_set(prompt);
+    let mut tags = HashSet::new();
+
+    if tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "bash"
+                | "shell"
+                | "terminal"
+                | "command"
+                | "npm"
+                | "pnpm"
+                | "yarn"
+                | "node"
+                | "bun"
+                | "cargo"
+                | "pytest"
+                | "pip"
+                | "uv"
+                | "rustc"
+                | "clippy"
+        )
+    }) || text.contains("run test")
+        || text.contains("run build")
+    {
+        tags.insert("shell");
+    }
+    if tokens.contains("read") || tokens.contains("inspect") || tokens.contains("open") {
+        tags.insert("read");
+    }
+    if tokens.contains("edit")
+        || tokens.contains("fix")
+        || tokens.contains("patch")
+        || tokens.contains("modify")
+    {
+        tags.insert("edit");
+    }
+    if tokens.contains("search") || tokens.contains("grep") || tokens.contains("find") {
+        tags.insert("search");
+    }
+    if tokens.contains("git")
+        || tokens.contains("diff")
+        || tokens.contains("commit")
+        || tokens.contains("status")
+    {
+        tags.insert("git");
+    }
+    if tokens.contains("web")
+        || tokens.contains("internet")
+        || tokens.contains("browser")
+        || tokens.contains("url")
+    {
+        tags.insert("web");
+    }
+    if tokens.contains("memory") || tokens.contains("remember") || tokens.contains("database") {
+        tags.insert("memory");
+    }
+
+    tags
+}
+
+fn tool_tags(tool_name: &str, description: &str) -> HashSet<&'static str> {
+    let text = format!("{} {}", tool_name, description).to_ascii_lowercase();
+    let mut tags = HashSet::new();
+
+    if text.contains("bash")
+        || text.contains("shell")
+        || text.contains("command")
+        || text.contains("terminal")
+    {
+        tags.insert("shell");
+    }
+    if text.contains("read") || text.contains("file") || text.contains("open") {
+        tags.insert("read");
+    }
+    if text.contains("edit")
+        || text.contains("patch")
+        || text.contains("write file")
+        || text.contains("modify")
+    {
+        tags.insert("edit");
+    }
+    if text.contains("grep")
+        || text.contains("search")
+        || text.contains("find")
+        || text.contains("glob")
+    {
+        tags.insert("search");
+    }
+    if text.contains("git")
+        || text.contains("diff")
+        || text.contains("commit")
+        || text.contains("status")
+    {
+        tags.insert("git");
+    }
+    if text.contains("web")
+        || text.contains("browser")
+        || text.contains("url")
+        || text.contains("internet")
+    {
+        tags.insert("web");
+    }
+    if text.contains("memory") || text.contains("database") || text.contains("remember") {
+        tags.insert("memory");
+    }
+
+    tags
+}
+
+fn tag_score(prompt_tags: &HashSet<&'static str>, tool_name: &str, description: &str) -> f32 {
+    if prompt_tags.is_empty() {
+        return 0.0;
+    }
+    let tags = tool_tags(tool_name, description);
+    prompt_tags.intersection(&tags).count() as f32 * 6.0
+}
+
 pub fn filter_tools(prompt: &str, tools: &[ToolDef], max_tools: usize) -> Vec<ToolDef> {
     if tools.is_empty() || max_tools == 0 || !has_tool_intent(prompt) {
         return Vec::new();
     }
 
+    let prompt_tags = task_tags(prompt);
     let mut scored: Vec<(usize, f32, ToolDef)> = tools
         .iter()
         .cloned()
         .enumerate()
         .map(|(idx, tool)| {
             let function = &tool.function;
-            let mut score = tool_score(
-                prompt,
-                &function.name,
-                function.description.as_deref().unwrap_or(""),
-            );
+            let description = function.description.as_deref().unwrap_or("");
+            let mut score = tool_score(prompt, &function.name, description);
+            score += tag_score(&prompt_tags, &function.name, description);
 
             if let Some(parameters) = &function.parameters {
                 score += parameter_score(prompt, parameters);
@@ -105,6 +224,13 @@ fn has_tool_intent(prompt: &str) -> bool {
         "search file",
         "find file",
         "list files",
+        "run test",
+        "run build",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "cargo test",
+        "pytest",
     ];
 
     intent_phrases.iter().any(|phrase| text.contains(phrase))
@@ -112,6 +238,7 @@ fn has_tool_intent(prompt: &str) -> bool {
         || (tokens.contains("search") && tokens.contains("workspace"))
         || (tokens.contains("read") && tokens.contains("file"))
         || (tokens.contains("edit") && tokens.contains("file"))
+        || task_tags(prompt).contains("shell")
 }
 
 fn token_set(text: &str) -> HashSet<String> {
@@ -239,5 +366,43 @@ mod tests {
             tool_score("edit file with patch", "get_weather", "Get current weather");
 
         assert!(edit_score > weather_score);
+    }
+    #[test]
+    fn developer_task_selects_shell_and_edit_tools_from_large_agent_toolset() {
+        let tools = opencode_tools();
+
+        let filtered = filter_tools(
+            "run npm test, inspect the terminal error, then edit the failing TypeScript file",
+            &tools,
+            5,
+        );
+
+        let names: Vec<&str> = filtered
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect();
+        assert!(names.contains(&"bash"));
+        assert!(names.contains(&"apply_patch"));
+        assert!(names.contains(&"read"));
+        assert!(names.len() <= 5);
+        assert!(!names
+            .iter()
+            .any(|name| name.starts_with("irrelevant_tool_")));
+    }
+
+    #[test]
+    fn terminal_task_selects_shell_tool_without_command_keyword() {
+        let tools = opencode_tools();
+
+        let filtered = filter_tools("run npm test", &tools, 5);
+
+        let names: Vec<&str> = filtered
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect();
+        assert!(names.contains(&"bash"));
+        assert!(!names
+            .iter()
+            .any(|name| name.starts_with("irrelevant_tool_")));
     }
 }

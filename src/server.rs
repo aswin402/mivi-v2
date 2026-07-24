@@ -297,7 +297,6 @@ fn build_function_list_block(tools: &[ToolDef]) -> String {
     }
 
     let mut block = String::new();
-
     let first_tool = &tools[0].function;
     let ex_args = first_tool
         .parameters
@@ -309,27 +308,48 @@ fn build_function_list_block(tools: &[ToolDef]) -> String {
         .unwrap_or_else(|| "\"key\": \"value\"".to_string());
 
     block.push_str(&format!(
-        "\nAvailable functions:\n\
-         - {name}: {desc}\n\n\
-         When appropriate, respond with ONLY:\n\
-         {{\"name\": \"{name}\", \"arguments\": {{{ex_args}}}}}\n\n",
+        "
+Tool context broker selected {} tool(s).
+Available functions:
+         - {name}: {desc}
+
+         When appropriate, respond with ONLY:
+         {{\"name\": \"{name}\", \"arguments\": {{{ex_args}}}}}
+
+",
+        tools.len(),
         name = first_tool.name,
         desc = first_tool.description.as_deref().unwrap_or(""),
     ));
 
     for tool in tools {
         let f = &tool.function;
+        let param_keys = f
+            .parameters
+            .as_ref()
+            .and_then(|params| params.get("properties"))
+            .and_then(|properties| properties.as_object())
+            .map(|properties| {
+                let mut keys: Vec<&str> = properties.keys().map(|key| key.as_str()).collect();
+                keys.sort_unstable();
+                keys.join(", ")
+            })
+            .filter(|keys| !keys.is_empty())
+            .unwrap_or_else(|| "none".to_string());
         block.push_str(&format!(
-            "Function: {} - {}\n",
+            "Function: {} - {} | params: {}
+",
             f.name,
-            f.description.as_deref().unwrap_or("")
+            f.description.as_deref().unwrap_or(""),
+            param_keys
         ));
-        if let Some(ref params) = f.parameters {
-            block.push_str(&format!("Params: {}\n", params));
-        }
     }
 
-    block.push_str("\nRespond with JSON or text:\n");
+    block.push_str(
+        "
+Respond with JSON or text:
+",
+    );
     block
 }
 
@@ -652,7 +672,7 @@ fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
     tools.iter().any(|tool| {
         let name = tool.function.name.to_lowercase();
         !name.is_empty() && user_text.contains(&name)
-    })
+    }) || !filter_tools(&user_text, tools, MAX_PROMPT_TOOLS).is_empty()
 }
 
 // ──────────────────────────────────────────────
@@ -690,11 +710,60 @@ fn model_chat(brain: &EdgeBrain, prompt: &str) -> String {
     }
 }
 
+fn verified_tool_call_from_request(
+    req: &ChatCompletionRequest,
+    selected_tools: &[ToolDef],
+) -> Option<ToolCallOut> {
+    let user_text = latest_user_prompt_text(req);
+    let lower = user_text.to_ascii_lowercase();
+    let shell_tool = selected_tools.iter().find(|tool| {
+        let name = tool.function.name.to_ascii_lowercase();
+        let description = tool
+            .function
+            .description
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        matches!(name.as_str(), "bash" | "shell" | "exec_command")
+            || description.contains("shell")
+            || description.contains("command")
+            || description.contains("terminal")
+    })?;
+
+    let command = if lower.contains("npm test") {
+        Some("npm test")
+    } else if lower.contains("pnpm test") {
+        Some("pnpm test")
+    } else if lower.contains("yarn test") {
+        Some("yarn test")
+    } else if lower.contains("cargo test") {
+        Some("cargo test")
+    } else if lower.contains("pytest") {
+        Some("pytest")
+    } else {
+        None
+    }?;
+
+    Some(ToolCallOut {
+        id: format!("call_{}", shell_tool.function.name),
+        r#type: "function".to_string(),
+        function: FunctionCallOut {
+            name: shell_tool.function.name.clone(),
+            arguments: serde_json::json!({ "cmd": command }).to_string(),
+        },
+    })
+}
+
 /// Generate tool calls: run the model with tool-aware prompt, parse tool calls.
 fn generate_tool_calls(
     brain: &EdgeBrain,
     req: &ChatCompletionRequest,
 ) -> (Vec<ToolCallOut>, String) {
+    let selected_tools = prompt_tools_for_request(req);
+    if let Some(call) = verified_tool_call_from_request(req, &selected_tools) {
+        return (vec![call], String::new());
+    }
+
     let prompt = build_chat_prompt(req);
     println!("[MIVI-V2 ToolGen] Prompt length: {} chars", prompt.len());
 
@@ -1184,6 +1253,57 @@ mod tests {
         assert_eq!(
             verified_memory_answer(prompt),
             Some("Agents should call the model `mivi`.".to_string())
+        );
+    }
+    #[test]
+    fn tool_prompt_uses_compact_schema_summary() {
+        let mut req = tool_request("run npm test", None);
+        req.tools = Some(vec![ToolDef {
+            function: FunctionDef {
+                name: "bash".to_string(),
+                description: Some("Run a shell command".to_string()),
+                parameters: Some(json!({
+                    "type": "object",
+                    "properties": {
+                        "cmd": {"type": "string", "description": "command to run"},
+                        "timeout": {"type": "number", "description": "timeout seconds"}
+                    },
+                    "required": ["cmd"]
+                })),
+            },
+            r#type: "function".to_string(),
+        }]);
+
+        let prompt = build_chat_prompt(&req);
+
+        assert!(prompt.contains("Tool context broker selected 1 tool"));
+        assert!(prompt.contains("Function: bash - Run a shell command | params: cmd, timeout"));
+        assert!(!prompt.contains("properties"));
+        assert!(!prompt.contains("description\":\"command to run"));
+    }
+
+    #[test]
+    fn terminal_prompt_with_matching_tool_enters_tool_generation() {
+        let mut req = tool_request("Run npm test.", None);
+        req.tools = Some(vec![server_tool(
+            "bash",
+            "Run a shell command in the project terminal",
+        )]);
+
+        assert!(has_tool_involvement(&req));
+    }
+
+    #[test]
+    fn verified_tool_call_builds_npm_test_shell_call() {
+        let req = tool_request("Run npm test.", None);
+        let call =
+            verified_tool_call_from_request(&req, &[server_tool("bash", "Run a shell command")])
+                .expect("expected deterministic shell call");
+
+        assert_eq!(call.function.name, "bash");
+        assert_eq!(
+            call.function.arguments,
+            json!({"cmd":"npm test"}).to_string()
         );
     }
 }

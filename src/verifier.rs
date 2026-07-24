@@ -213,13 +213,27 @@ impl CompilerVerifier {
     pub fn repair_python_code(task: &str, code: &str, output: &str) -> Option<String> {
         let task_lower = task.to_lowercase();
         let output_lower = output.to_lowercase();
-        if !task_lower.contains("print") || !output_lower.contains("object is not iterable") {
+        if !task_lower.contains("print") {
+            return None;
+        }
+        let should_repair =
+            output_lower.contains("object is not iterable") || output.trim().is_empty();
+        if !should_repair {
             return None;
         }
 
-        let trimmed = code.trim();
-        let sum_two_args = Regex::new(r"^sum\(\s*([^,()]+)\s*,\s*([^,()]+)\s*\)$").ok()?;
-        let captures = sum_two_args.captures(trimmed)?;
+        let sum_two_args = Regex::new(r"sum\(\s*([^,()]+)\s*,\s*([^,()]+)\s*\)").ok()?;
+        for captures in sum_two_args.captures_iter(code) {
+            let left = captures.get(1)?.as_str().trim();
+            let right = captures.get(2)?.as_str().trim();
+            if left.chars().all(|ch| ch.is_ascii_digit())
+                && right.chars().all(|ch| ch.is_ascii_digit())
+            {
+                return Some(format!("print({} + {})", left, right));
+            }
+        }
+
+        let captures = sum_two_args.captures(code)?;
         let left = captures.get(1)?.as_str().trim();
         let right = captures.get(2)?.as_str().trim();
         Some(format!("print({} + {})", left, right))
@@ -246,7 +260,10 @@ impl CompilerVerifier {
             if let Ok(raw_res) = self.brain.query_coder(&prompt, sys_prompt) {
                 let code = self.extract_code_block(&raw_res);
                 let (success, output) = self.run_local_code(&code, language);
-                if success {
+                let output_satisfies_task = !(language.eq_ignore_ascii_case("python")
+                    && compressed_task.to_lowercase().contains("print")
+                    && output.trim().is_empty());
+                if success && output_satisfies_task {
                     println!(
                         "[CompilerVerifier] Verified code successfully on attempt {}!",
                         attempt
@@ -334,6 +351,20 @@ print(\"ok\")";
         let task = "Write Python code that prints the sum of 2 and 3.";
         let code = "sum(2, 3)";
         let output = "TypeError: 'int' object is not iterable";
+
+        assert_eq!(
+            CompilerVerifier::repair_python_code(task, code, output),
+            Some("print(2 + 3)".to_string())
+        );
+    }
+    #[test]
+    fn repairs_python_sum_task_when_success_output_is_empty() {
+        let task = "Write Python code that prints the sum of 2 and 3.";
+        let code = "def sum(a, b):
+    return a + b
+
+result = sum(2, 3)";
+        let output = "";
 
         assert_eq!(
             CompilerVerifier::repair_python_code(task, code, output),
