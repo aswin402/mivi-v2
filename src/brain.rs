@@ -1,7 +1,10 @@
 use crate::prompt_file::write_prompt_file;
+use crate::runtime::RuntimeConfig;
+use crate::worker::{WorkerConfig, WorkerManager};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct EdgeBrain {
@@ -12,6 +15,7 @@ pub struct EdgeBrain {
     pub minicpm_path: PathBuf,
     pub minicpm_proj: PathBuf,
     pub ultra_low_ram: bool,
+    pub text_worker: Arc<WorkerManager>,
 }
 
 impl EdgeBrain {
@@ -57,6 +61,15 @@ impl EdgeBrain {
         let ultra_low_ram = env::var("MIVI_ULTRA_LOW_RAM")
             .map(|v| v == "1" || v == "true")
             .unwrap_or(false);
+        let runtime_config = RuntimeConfig::from_env();
+        let server_path = base_dir
+            .join("bin")
+            .join(format!("llama-server{}", exe_ext));
+        let text_worker = Arc::new(WorkerManager::new(WorkerConfig::default_for_text_model(
+            server_path,
+            llama_path.clone(),
+            &runtime_config,
+        )));
 
         if ultra_low_ram {
             println!(
@@ -72,6 +85,7 @@ impl EdgeBrain {
             minicpm_path,
             minicpm_proj,
             ultra_low_ram,
+            text_worker,
         }
     }
 
@@ -83,6 +97,17 @@ impl EdgeBrain {
         temp: &str,
         context_size: &str,
     ) -> Result<String, String> {
+        let runtime_config = RuntimeConfig::from_env();
+        if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
+            match self.text_worker.query_chat(prompt, system_prompt, temp) {
+                Ok(response) => return Ok(response),
+                Err(err) => eprintln!(
+                    "[MIVI-V2 Worker] Falling back to llama-cli after worker error: {}",
+                    err
+                ),
+            }
+        }
+
         let formatted_prompt = format!(
             "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
             system_prompt, prompt

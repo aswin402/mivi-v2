@@ -145,15 +145,15 @@
 - Produces: `WorkerManager::stop_idle_workers(&self) -> Result<(), String>`.
 - Produces: fallback to existing `llama-cli` path on worker failure.
 
-- [ ] **Step 1: Write tests** for generated `llama-server` command arguments without launching a real worker.
-- [ ] **Step 2: Write tests** for worker states: stopped, starting, ready, failed, idle-stopped.
-- [ ] **Step 3: Run** `cargo test worker` and confirm tests fail.
-- [ ] **Step 4: Implement** one text worker first using `bin/llama-server` on `127.0.0.1`.
-- [ ] **Step 5: Add** `worker-eco` mode: lazy start and idle stop after `MIVI_WORKER_IDLE_SECS`.
-- [ ] **Step 6: Add** `worker-hot` mode: keep one text worker warm.
-- [ ] **Step 7: Keep vision** on the current lazy CLI path until text worker is stable.
-- [ ] **Step 8: Add fallback** to spawn-per-request if worker health check fails.
-- [ ] **Step 9: Run** `cargo test worker` and commit `feat: add persistent text worker manager`.
+- [x] **Step 1: Write tests** for generated `llama-server` command arguments without launching a real worker.
+- [x] **Step 2: Write tests** for worker states: stopped, starting, ready, failed, idle-stopped.
+- [x] **Step 3: Run** `cargo test worker` and confirm tests fail.
+- [x] **Step 4: Implement** one text worker first using `bin/llama-server` on `127.0.0.1`.
+- [x] **Step 5: Add** `worker-eco` mode: lazy start and idle stop after `MIVI_WORKER_IDLE_SECS`.
+- [x] **Step 6: Add** `worker-hot` mode: keep one text worker warm.
+- [x] **Step 7: Keep vision** on the current lazy CLI path until text worker is stable.
+- [x] **Step 8: Add fallback** to spawn-per-request if worker health check fails.
+- [x] **Step 9: Run** `cargo test worker` and commit `feat: add persistent text worker manager`.
 
 ## Task 7: Benchmark Script
 
@@ -164,13 +164,13 @@
 **Interfaces:**
 - Produces: shell script that records first token latency, total latency, RSS, mode, model, and prompt type.
 
-- [ ] **Step 1: Add benchmark prompts** for chat, coding, tool call, RAG question, and vision skip case.
-- [ ] **Step 2: Measure spawn mode** with `MIVI_RUNTIME_MODE=spawn`.
-- [ ] **Step 3: Measure worker eco mode** with `MIVI_RUNTIME_MODE=worker-eco`.
-- [ ] **Step 4: Measure worker hot mode** with `MIVI_RUNTIME_MODE=worker-hot`.
-- [ ] **Step 5: Save results** to `benchmarks/runtime-YYYYMMDD-HHMMSS.jsonl`.
-- [ ] **Step 6: Document** the exact benchmark command in README.
-- [ ] **Step 7: Commit** `chore: add runtime benchmark script`.
+- [x] **Step 1: Add benchmark prompts** for chat, coding, tool call, RAG question, and vision skip case.
+- [x] **Step 2: Measure spawn mode** with `MIVI_RUNTIME_MODE=spawn`.
+- [x] **Step 3: Measure worker eco mode** with `MIVI_RUNTIME_MODE=worker-eco`.
+- [x] **Step 4: Measure worker hot mode** with `MIVI_RUNTIME_MODE=worker-hot`.
+- [x] **Step 5: Save results** to `benchmarks/runtime-YYYYMMDD-HHMMSS.jsonl`.
+- [x] **Step 6: Document** the exact benchmark command in README.
+- [x] **Step 7: Commit** `chore: add runtime benchmark script`.
 
 ## Task 8: Small Model Evaluation
 
@@ -181,11 +181,11 @@
 **Interfaces:**
 - Produces: repeatable eval rows for chat, coding, reasoning, tool calling, instruction following, and context handling.
 
-- [ ] **Step 1: Record baseline models**: current Llama 3.2 1B, Qwen 2.5 0.5B Coder, MiniCPM-V 4.6.
+- [x] **Step 1: Record baseline models**: current Llama 3.2 1B, Qwen 2.5 0.5B Coder, MiniCPM-V 4.6.
 - [ ] **Step 2: Test candidate text models** only after runtime path is stable.
-- [ ] **Step 3: Prioritize candidates**: Qwen 2.5/3 small instruct, SmolLM small instruct, TinyLlama-class models, and any model with native tool/JSON strength under RAM budget.
+- [x] **Step 3: Prioritize candidates**: Qwen 2.5/3 small instruct, SmolLM small instruct, TinyLlama-class models, and any model with native tool/JSON strength under RAM budget.
 - [ ] **Step 4: Score** quality, latency, RAM, tool-call JSON validity, and failure mode.
-- [ ] **Step 5: Keep the winner** behind `model: "mivi"`; do not expose internal model names.
+- [x] **Step 5: Keep the winner** behind `model: "mivi"`; do not expose internal model names.
 - [ ] **Step 6: Commit** `docs: add small model evaluation matrix`.
 
 ## Task 9: Release Gate
@@ -198,13 +198,13 @@
 **Interfaces:**
 - Produces: release notes for runtime modes and agent usage.
 
-- [ ] **Step 1: Run** `cargo fmt --check`.
-- [ ] **Step 2: Run** `cargo test`.
-- [ ] **Step 3: Run** `cargo build --release`.
-- [ ] **Step 4: Run** `scripts/bench_runtime.sh`.
-- [ ] **Step 5: Start server** and verify `/v1/models` returns only `mivi`.
-- [ ] **Step 6: Test OpenCode** with a plain chat prompt, a coding prompt, and a forced tool prompt.
-- [ ] **Step 7: Update docs** with measured numbers, not estimates.
+- [x] **Step 1: Run** `cargo fmt --check`.
+- [x] **Step 2: Run** `cargo test`.
+- [x] **Step 3: Run** `cargo build --release`.
+- [x] **Step 4: Run** `scripts/bench_runtime.sh`.
+- [x] **Step 5: Start server** and verify `/v1/models` returns only `mivi`.
+- [x] **Step 6: Test OpenCode** with a plain chat prompt, a coding prompt, and a forced tool prompt.
+- [x] **Step 7: Update docs** with measured numbers, not estimates.
 - [ ] **Step 8: Commit** `docs: publish runtime validation results`.
 
 ## Todo Plan
@@ -215,10 +215,10 @@
 - [x] Context compression module.
 - [x] OKF memory module.
 - [x] Retrieval pack module.
-- [ ] Persistent text worker.
-- [ ] Benchmark script.
-- [ ] Small-model eval scripts and matrix.
-- [ ] Docs release gate with measured results.
+- [x] Persistent text worker.
+- [x] Benchmark script.
+- [x] Small-model eval scripts and matrix.
+- [x] Docs release gate with measured results.
 
 ## Additional Needed Work
 

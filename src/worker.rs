@@ -1,0 +1,420 @@
+use crate::runtime::RuntimeConfig;
+use serde_json::json;
+use std::env;
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerEndpoint {
+    pub host: String,
+    pub port: u16,
+}
+
+impl WorkerEndpoint {
+    fn base_url(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerConfig {
+    pub server_path: PathBuf,
+    pub model_path: PathBuf,
+    pub host: String,
+    pub port: u16,
+    pub context_tokens: usize,
+    pub gpu_layers: String,
+    pub idle_secs: u64,
+}
+
+impl WorkerConfig {
+    pub fn default_for_text_model(
+        server_path: PathBuf,
+        model_path: PathBuf,
+        runtime: &RuntimeConfig,
+    ) -> Self {
+        let port = env::var("MIVI_WORKER_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(18080);
+        let gpu_layers = if env::var("MIVI_ULTRA_LOW_RAM")
+            .map(|value| value == "1" || value == "true")
+            .unwrap_or(false)
+        {
+            "0".to_string()
+        } else {
+            "999".to_string()
+        };
+
+        Self {
+            server_path,
+            model_path,
+            host: "127.0.0.1".to_string(),
+            port,
+            context_tokens: runtime.context.max_input_tokens,
+            gpu_layers,
+            idle_secs: runtime.worker_idle_secs,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerState {
+    Stopped,
+    Starting,
+    Ready,
+    Failed,
+    IdleStopped,
+}
+
+struct WorkerSlot {
+    state: WorkerState,
+    child: Option<Child>,
+    endpoint: Option<WorkerEndpoint>,
+    last_error: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct WorkerManager {
+    config: WorkerConfig,
+    slot: Arc<Mutex<WorkerSlot>>,
+}
+
+impl WorkerManager {
+    pub fn new(config: WorkerConfig) -> Self {
+        Self {
+            config,
+            slot: Arc::new(Mutex::new(WorkerSlot {
+                state: WorkerState::Stopped,
+                child: None,
+                endpoint: None,
+                last_error: None,
+            })),
+        }
+    }
+
+    pub fn server_args(&self) -> Vec<String> {
+        vec![
+            "-m".to_string(),
+            self.config.model_path.display().to_string(),
+            "--host".to_string(),
+            self.config.host.clone(),
+            "--port".to_string(),
+            self.config.port.to_string(),
+            "-c".to_string(),
+            self.config.context_tokens.to_string(),
+            "-ngl".to_string(),
+            self.config.gpu_layers.clone(),
+            "-fa".to_string(),
+            "on".to_string(),
+            "-ctk".to_string(),
+            "q8_0".to_string(),
+            "-ctv".to_string(),
+            "q8_0".to_string(),
+            "-np".to_string(),
+            "1".to_string(),
+            "--sleep-idle-seconds".to_string(),
+            self.config.idle_secs.to_string(),
+            "--no-webui".to_string(),
+            "--mmap".to_string(),
+        ]
+    }
+
+    pub fn ensure_text_worker(&self) -> Result<WorkerEndpoint, String> {
+        {
+            let slot = self
+                .slot
+                .lock()
+                .map_err(|_| "worker lock poisoned".to_string())?;
+            if slot.state == WorkerState::Ready {
+                if let Some(endpoint) = &slot.endpoint {
+                    if self.health_check(endpoint) {
+                        return Ok(endpoint.clone());
+                    }
+                }
+            }
+        }
+
+        self.start_worker()
+    }
+
+    pub fn query_chat(
+        &self,
+        prompt: &str,
+        system_prompt: &str,
+        temp: &str,
+    ) -> Result<String, String> {
+        let endpoint = self.ensure_text_worker()?;
+        let body = json!({
+            "model": "mivi-worker",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": temp.parse::<f32>().unwrap_or(0.2),
+            "stream": false
+        });
+        let response = http_request(
+            &endpoint,
+            "POST",
+            "/v1/chat/completions",
+            Some(&body.to_string()),
+            Duration::from_secs(300),
+        )?;
+        parse_chat_response(&response)
+    }
+
+    pub fn stop_idle_workers(&self) -> Result<(), String> {
+        let mut slot = self
+            .slot
+            .lock()
+            .map_err(|_| "worker lock poisoned".to_string())?;
+        if let Some(mut child) = slot.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        slot.endpoint = None;
+        slot.state = WorkerState::IdleStopped;
+        Ok(())
+    }
+
+    fn start_worker(&self) -> Result<WorkerEndpoint, String> {
+        {
+            let mut slot = self
+                .slot
+                .lock()
+                .map_err(|_| "worker lock poisoned".to_string())?;
+            slot.state = WorkerState::Starting;
+            slot.last_error = None;
+        }
+
+        let mut cmd = Command::new(&self.config.server_path);
+        cmd.args(self.server_args())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        if let Some(bin_dir) = self.config.server_path.parent() {
+            let old_ld = env::var("LD_LIBRARY_PATH").unwrap_or_default();
+            let ld = if old_ld.is_empty() {
+                bin_dir.display().to_string()
+            } else {
+                format!("{}:{}", bin_dir.display(), old_ld)
+            };
+            cmd.env("LD_LIBRARY_PATH", ld);
+        }
+
+        let child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(err) => {
+                let msg = format!("failed to start llama-server: {err}");
+                self.mark_failed(msg.clone());
+                return Err(msg);
+            }
+        };
+
+        let endpoint = WorkerEndpoint {
+            host: self.config.host.clone(),
+            port: self.config.port,
+        };
+
+        {
+            let mut slot = self
+                .slot
+                .lock()
+                .map_err(|_| "worker lock poisoned".to_string())?;
+            slot.child = Some(child);
+            slot.endpoint = Some(endpoint.clone());
+        }
+
+        if self.wait_until_ready(&endpoint, Duration::from_secs(60)) {
+            let mut slot = self
+                .slot
+                .lock()
+                .map_err(|_| "worker lock poisoned".to_string())?;
+            slot.state = WorkerState::Ready;
+            Ok(endpoint)
+        } else {
+            let msg = "llama-server did not become healthy before timeout".to_string();
+            let _ = self.stop_idle_workers();
+            self.mark_failed(msg.clone());
+            Err(msg)
+        }
+    }
+
+    fn wait_until_ready(&self, endpoint: &WorkerEndpoint, timeout: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if self.health_check(endpoint) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+        false
+    }
+
+    fn health_check(&self, endpoint: &WorkerEndpoint) -> bool {
+        http_request(endpoint, "GET", "/health", None, Duration::from_secs(2)).is_ok()
+            || http_request(endpoint, "GET", "/v1/models", None, Duration::from_secs(2)).is_ok()
+    }
+
+    fn mark_failed(&self, error: String) {
+        if let Ok(mut slot) = self.slot.lock() {
+            slot.state = WorkerState::Failed;
+            slot.last_error = Some(error);
+            slot.endpoint = None;
+            slot.child = None;
+        }
+    }
+
+    #[cfg(test)]
+    pub fn mark_ready_for_test(&self, endpoint: WorkerEndpoint) {
+        let mut slot = self.slot.lock().unwrap();
+        slot.state = WorkerState::Ready;
+        slot.endpoint = Some(endpoint);
+    }
+
+    #[cfg(test)]
+    pub fn state_for_test(&self) -> WorkerState {
+        self.slot.lock().unwrap().state
+    }
+}
+
+impl Drop for WorkerManager {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.slot) == 1 {
+            let _ = self.stop_idle_workers();
+        }
+    }
+}
+
+fn http_request(
+    endpoint: &WorkerEndpoint,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    timeout: Duration,
+) -> Result<String, String> {
+    let mut stream = TcpStream::connect(endpoint.base_url())
+        .map_err(|err| format!("failed to connect to worker: {err}"))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|err| format!("failed to set read timeout: {err}"))?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|err| format!("failed to set write timeout: {err}"))?;
+
+    let body = body.unwrap_or("");
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        endpoint.base_url(),
+        body.len(),
+        body
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|err| format!("failed to write worker request: {err}"))?;
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|err| format!("failed to read worker response: {err}"))?;
+
+    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
+        return Err(format!(
+            "worker returned non-200 response: {}",
+            response.lines().next().unwrap_or("empty response")
+        ));
+    }
+
+    Ok(response)
+}
+
+fn parse_chat_response(response: &str) -> Result<String, String> {
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .ok_or_else(|| "worker response missing HTTP body".to_string())?;
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|err| format!("failed to parse worker JSON response: {err}"))?;
+
+    value
+        .get("choices")
+        .and_then(|choices| choices.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .map(|content| content.trim().to_string())
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| "worker response missing assistant content".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{ContextBudget, RuntimeConfig, RuntimeMode};
+    use std::path::PathBuf;
+
+    fn config(mode: RuntimeMode) -> RuntimeConfig {
+        RuntimeConfig {
+            mode,
+            context: ContextBudget::from_max_input_tokens(4096),
+            worker_idle_secs: 30,
+            ram_target_mb: 1000,
+        }
+    }
+
+    #[test]
+    fn spawn_mode_does_not_use_workers() {
+        assert!(!config(RuntimeMode::Spawn).uses_worker());
+        assert!(config(RuntimeMode::WorkerEco).uses_worker());
+        assert!(config(RuntimeMode::WorkerHot).uses_worker());
+    }
+
+    #[test]
+    fn text_worker_args_use_low_ram_local_server_defaults() {
+        let manager = WorkerManager::new(WorkerConfig {
+            server_path: PathBuf::from("bin/llama-server"),
+            model_path: PathBuf::from("models/Llama-3.2-1B-Instruct-IQ3_M.gguf"),
+            host: "127.0.0.1".to_string(),
+            port: 18080,
+            context_tokens: 4096,
+            gpu_layers: "0".to_string(),
+            idle_secs: 30,
+        });
+
+        let args = manager.server_args();
+
+        assert!(args.windows(2).any(|pair| pair == ["--host", "127.0.0.1"]));
+        assert!(args.windows(2).any(|pair| pair == ["--port", "18080"]));
+        assert!(args.windows(2).any(|pair| pair == ["-c", "4096"]));
+        assert!(args.windows(2).any(|pair| pair == ["-ngl", "0"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--sleep-idle-seconds", "30"]));
+        assert!(args.contains(&"--no-webui".to_string()));
+        assert!(args.contains(&"--mmap".to_string()));
+    }
+
+    #[test]
+    fn idle_state_transition_marks_ready_worker_as_idle_stopped() {
+        let manager = WorkerManager::new(WorkerConfig::default_for_text_model(
+            PathBuf::from("bin/llama-server"),
+            PathBuf::from("models/Llama-3.2-1B-Instruct-IQ3_M.gguf"),
+            &config(RuntimeMode::WorkerEco),
+        ));
+
+        manager.mark_ready_for_test(WorkerEndpoint {
+            host: "127.0.0.1".to_string(),
+            port: 18080,
+        });
+        manager.stop_idle_workers().unwrap();
+
+        assert_eq!(manager.state_for_test(), WorkerState::IdleStopped);
+    }
+}

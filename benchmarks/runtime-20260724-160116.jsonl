@@ -1,0 +1,15 @@
+{"mode": "spawn", "kind": "chat", "elapsed_ms": 6297, "server_rss_kb": 6260, "status": "ok"}
+{"mode": "spawn", "kind": "coding", "elapsed_ms": 6355, "server_rss_kb": 7404, "status": "ok"}
+{"mode": "spawn", "kind": "tool", "elapsed_ms": 4605, "server_rss_kb": 7408, "status": "ok"}
+{"mode": "spawn", "kind": "rag", "elapsed_ms": 41468, "server_rss_kb": 7000, "status": "ok"}
+{"mode": "spawn", "kind": "vision-skip", "elapsed_ms": 8728, "server_rss_kb": 7016, "status": "ok"}
+{"mode": "worker-eco", "kind": "chat", "elapsed_ms": 3649, "server_rss_kb": 6132, "status": "ok"}
+{"mode": "worker-eco", "kind": "coding", "elapsed_ms": 1289, "server_rss_kb": 7120, "status": "ok"}
+{"mode": "worker-eco", "kind": "tool", "elapsed_ms": 4155, "server_rss_kb": 7124, "status": "ok"}
+{"mode": "worker-eco", "kind": "rag", "elapsed_ms": 49786, "server_rss_kb": 7132, "status": "ok"}
+{"mode": "worker-eco", "kind": "vision-skip", "elapsed_ms": 10935, "server_rss_kb": 7120, "status": "ok"}
+{"mode": "worker-hot", "kind": "chat", "elapsed_ms": 3454, "server_rss_kb": 6152, "status": "ok"}
+{"mode": "worker-hot", "kind": "coding", "elapsed_ms": 1622, "server_rss_kb": 7144, "status": "ok"}
+{"mode": "worker-hot", "kind": "tool", "elapsed_ms": 4642, "server_rss_kb": 7148, "status": "ok"}
+{"mode": "worker-hot", "kind": "rag", "elapsed_ms": 38920, "server_rss_kb": 7156, "status": "ok"}
+{"mode": "worker-hot", "kind": "vision-skip", "elapsed_ms": 7383, "server_rss_kb": 7172, "status": "ok"}

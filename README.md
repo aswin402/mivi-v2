@@ -98,6 +98,45 @@ uv run --with huggingface_hub python3 download_models.py
 ./target/release/mivi task "Write a python script calculating Fibonacci numbers"
 ```
 
+### 4. Benchmark Runtime Modes
+
+Compare spawn-per-request with persistent worker modes:
+
+```bash
+scripts/bench_runtime.sh
+```
+
+Results are written to `benchmarks/runtime-YYYYMMDD-HHMMSS.jsonl` with mode, prompt kind, latency, RSS, and status.
+
+## Latest Runtime Benchmark
+
+Measured on 2026-07-24 with `scripts/bench_runtime.sh`. RSS currently records the Rust MIVI server process only; worker child model RSS needs a follow-up benchmark improvement.
+
+| Mode | Chat | Coding | Tool | RAG | Vision Skip |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `spawn` | 6297 ms | 6355 ms | 4605 ms | 41468 ms | 8728 ms |
+| `worker-eco` | 3649 ms | 1289 ms | 4155 ms | 49786 ms | 10935 ms |
+| `worker-hot` | 3454 ms | 1622 ms | 4642 ms | 38920 ms | 7383 ms |
+
+Benchmark output: `benchmarks/runtime-20260724-160116.jsonl`.
+
+---
+
+## Runtime Modes
+
+```bash
+# Lowest idle RAM, process-per-request inference
+MIVI_RUNTIME_MODE=spawn cargo run --release -- serve
+
+# Lazy persistent text worker, fallback to spawn path on failure
+MIVI_RUNTIME_MODE=worker-eco MIVI_WORKER_IDLE_SECS=120 cargo run --release -- serve
+
+# Warm persistent text worker for repeated agent requests
+MIVI_RUNTIME_MODE=worker-hot cargo run --release -- serve
+```
+
+MIVI keeps the external model name as `mivi` in every mode. Context is bounded through compression, OKF memory, and gated RAG retrieval rather than raw 128K KV cache.
+
 ---
 
 ## 🤖 Connecting External Agents (Hermes, OpenCode, VS Code)

@@ -606,6 +606,13 @@ fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
 // Backend model calls
 // ──────────────────────────────────────────────
 
+fn is_direct_reasoner_intent(intent: &str) -> bool {
+    matches!(
+        intent.to_ascii_lowercase().as_str(),
+        "chat" | "reason" | "multi_step" | "vision"
+    )
+}
+
 /// One-shot reasoner call (spawns llama-cli per request).
 fn reasoner_chat(brain: &EdgeBrain, user_prompt: &str) -> (String, String) {
     let res = brain
@@ -779,7 +786,9 @@ async fn handle_chat_completions(
         match target_model.to_lowercase().as_str() {
             "coder" => code_chat(&state.brain, &model_user_prompt),
             "reasoner" => reasoner_chat(&state.brain, &model_user_prompt),
-            _ if intent == "CHAT" => reasoner_chat(&state.brain, &model_user_prompt),
+            _ if is_direct_reasoner_intent(&intent) => {
+                reasoner_chat(&state.brain, &model_user_prompt)
+            }
             _ => {
                 let (_, res) = state.orchestrator.execute_plan(&user_prompt).await;
                 (res, MODEL_NAME.to_string())
@@ -1057,6 +1066,15 @@ mod tests {
         let (prompt, image_path) = extract_content(&req);
         assert_eq!(prompt, "hii");
         assert_eq!(image_path, None);
+    }
+
+    #[test]
+    fn lowercase_chat_intent_uses_direct_reasoner_path() {
+        assert!(is_direct_reasoner_intent("chat"));
+        assert!(is_direct_reasoner_intent("reason"));
+        assert!(is_direct_reasoner_intent("multi_step"));
+        assert!(is_direct_reasoner_intent("VISION"));
+        assert!(!is_direct_reasoner_intent("code"));
     }
 
     #[test]

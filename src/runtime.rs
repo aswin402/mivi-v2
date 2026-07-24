@@ -59,6 +59,10 @@ pub struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
+    pub fn uses_worker(&self) -> bool {
+        !matches!(self.mode, RuntimeMode::Spawn)
+    }
+
     pub fn from_env() -> Self {
         let mode = env::var("MIVI_RUNTIME_MODE")
             .map(|value| RuntimeMode::from_env_value(&value))

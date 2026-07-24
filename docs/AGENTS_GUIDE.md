@@ -22,6 +22,45 @@ Internally, MIVI auto-routes your request to the right SML (Small Model Logic):
 
 You never need to specify these. Just use `mivi`.
 
+## Runtime Recommendations
+
+Use `spawn` first when testing a new machine because it keeps idle RAM lowest and uses the existing `llama-cli` path:
+
+```bash
+MIVI_RUNTIME_MODE=spawn cargo run --release -- serve
+```
+
+Use `worker-eco` for agent sessions where repeated chat/reasoning calls matter but RAM still matters:
+
+```bash
+MIVI_RUNTIME_MODE=worker-eco MIVI_WORKER_IDLE_SECS=120 cargo run --release -- serve
+```
+
+Use `worker-hot` only when you want the fastest repeated text responses and accept the persistent model memory cost:
+
+```bash
+MIVI_RUNTIME_MODE=worker-hot cargo run --release -- serve
+```
+
+Agent behavior notes:
+
+- Keep model name set to `mivi`; do not configure `llama`, `qwen`, or `minicpm` in the external agent.
+- Large tool lists are filtered before prompting so OpenCode-style 100+ tool payloads do not flood the tiny model.
+- Long histories are compressed into recent turns, tool observations, errors, code blocks, OKF memory, and gated RAG context.
+- Store durable project facts in `memory/*.md` using OKF frontmatter with `id`, `title`, `type`, and optional `tags`.
+
+## Latest Runtime Benchmark
+
+Measured on 2026-07-24 with `scripts/bench_runtime.sh`. RSS currently records the Rust MIVI server process only; worker child model RSS needs a follow-up benchmark improvement.
+
+| Mode | Chat | Coding | Tool | RAG | Vision Skip |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `spawn` | 6297 ms | 6355 ms | 4605 ms | 41468 ms | 8728 ms |
+| `worker-eco` | 3649 ms | 1289 ms | 4155 ms | 49786 ms | 10935 ms |
+| `worker-hot` | 3454 ms | 1622 ms | 4642 ms | 38920 ms | 7383 ms |
+
+Benchmark output: `benchmarks/runtime-20260724-160116.jsonl`.
+
 ---
 
 ## 🛠️ Integration Configurations

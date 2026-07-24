@@ -47,6 +47,33 @@ Returns available models in OpenAI list format.
 
 > **Note:** Internal SMLs (qwen-2.5-0.5b, llama-3.2-1b, minicpm-v-4.6) exist but are not exposed. MIVI auto-routes `mivi` requests to the right model internally.
 
+## Runtime Modes
+
+MIVI supports three runtime modes through environment variables:
+
+| Variable | Values | Default | Purpose |
+| :--- | :--- | :--- | :--- |
+| `MIVI_RUNTIME_MODE` | `spawn`, `worker-eco`, `worker-hot` | `spawn` | Select process-per-request or persistent text worker mode |
+| `MIVI_CONTEXT_BUDGET` | integer tokens, minimum `1024` | `4096` | Sets the bounded prompt pack budget |
+| `MIVI_WORKER_IDLE_SECS` | positive integer seconds | `120` | Idle sleep/stop budget for worker modes |
+| `MIVI_WORKER_PORT` | local TCP port | `18080` | Internal `llama-server` worker port |
+
+`spawn` is the safest low-RAM mode. `worker-eco` lazy-starts one local text worker and falls back to `llama-cli` if the worker fails. `worker-hot` keeps the text worker warm for lower repeated-request latency. Vision stays lazy-loaded.
+
+MIVI also filters large agent tool lists, compresses noisy agent context, reads OKF memory from `memory/`, and gates workspace RAG so normal chat is not polluted by code chunks.
+
+## Latest Runtime Benchmark
+
+Measured on 2026-07-24 with `scripts/bench_runtime.sh`. RSS currently records the Rust MIVI server process only; worker child model RSS needs a follow-up benchmark improvement.
+
+| Mode | Chat | Coding | Tool | RAG | Vision Skip |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `spawn` | 6297 ms | 6355 ms | 4605 ms | 41468 ms | 8728 ms |
+| `worker-eco` | 3649 ms | 1289 ms | 4155 ms | 49786 ms | 10935 ms |
+| `worker-hot` | 3454 ms | 1622 ms | 4642 ms | 38920 ms | 7383 ms |
+
+Benchmark output: `benchmarks/runtime-20260724-160116.jsonl`.
+
 ---
 
 ## 3. `POST /v1/chat/completions`
