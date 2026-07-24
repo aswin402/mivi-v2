@@ -51,15 +51,15 @@ Agent behavior notes:
 
 ## Latest Runtime Benchmark
 
-Measured on 2026-07-24 with `scripts/bench_runtime.sh`. RSS currently records the Rust MIVI server process only; worker child model RSS needs a follow-up benchmark improvement.
+Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark now records Rust server RSS, server process-tree RSS, and persistent worker RSS. Worker modes stayed under the 1000 MB active-RAM target in this run, but `worker-hot` RAG timed out at 120 seconds and should not become the default yet.
 
-| Mode | Chat | Coding | Tool | RAG | Vision Skip |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `spawn` | 6297 ms | 6355 ms | 4605 ms | 41468 ms | 8728 ms |
-| `worker-eco` | 3649 ms | 1289 ms | 4155 ms | 49786 ms | 10935 ms |
-| `worker-hot` | 3454 ms | 1622 ms | 4642 ms | 38920 ms | 7383 ms |
+| Mode | Chat | Coding | Tool | RAG | Vision Skip | Peak Worker RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `spawn` | 7211 ms | 1793 ms | 4516 ms | 40083 ms | 5510 ms | 0 MB |
+| `worker-eco` | 3382 ms | 1608 ms | 4439 ms | 38975 ms | 5917 ms | 946 MB |
+| `worker-hot` | 3441 ms | 4564 ms | 4478 ms | 120014 ms timeout | 51976 ms | 986 MB |
 
-Benchmark output: `benchmarks/runtime-20260724-160116.jsonl`.
+Benchmark output: `benchmarks/runtime-20260724-163329.jsonl`.
 
 ---
 

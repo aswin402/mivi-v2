@@ -210,6 +210,21 @@ impl CompilerVerifier {
         compressed.join("\n")
     }
 
+    pub fn repair_python_code(task: &str, code: &str, output: &str) -> Option<String> {
+        let task_lower = task.to_lowercase();
+        let output_lower = output.to_lowercase();
+        if !task_lower.contains("print") || !output_lower.contains("object is not iterable") {
+            return None;
+        }
+
+        let trimmed = code.trim();
+        let sum_two_args = Regex::new(r"^sum\(\s*([^,()]+)\s*,\s*([^,()]+)\s*\)$").ok()?;
+        let captures = sum_two_args.captures(trimmed)?;
+        let left = captures.get(1)?.as_str().trim();
+        let right = captures.get(2)?.as_str().trim();
+        Some(format!("print({} + {})", left, right))
+    }
+
     pub fn generate_and_verify(
         &self,
         task: &str,
@@ -243,8 +258,23 @@ impl CompilerVerifier {
                     attempt,
                     output.trim()
                 );
+                if language.eq_ignore_ascii_case("python") {
+                    if let Some(repaired_code) =
+                        Self::repair_python_code(&compressed_task, &code, output.trim())
+                    {
+                        let (repair_success, repair_output) =
+                            self.run_local_code(&repaired_code, language);
+                        if repair_success {
+                            println!(
+                                "[CompilerVerifier] Verified repaired code after attempt {}!",
+                                attempt
+                            );
+                            return (Some(repaired_code), repair_output);
+                        }
+                    }
+                }
                 prompt = format!(
-                    "The following {} code failed during execution:\n```\n{}\n```\nError output:\n```\n{}\n```\nOutput corrected code inside a ``` block.",
+                    "The following {} code failed during execution:\n```\n{}\n```\nError output:\n```\n{}\n```\nDo not repeat the same code. Explain nothing. Output different corrected code inside one ``` block.",
                     language, code, output.trim()
                 );
             }
@@ -298,5 +328,16 @@ mod tests {
 print(\"ok\")";
 
         assert_eq!(verifier.extract_code_block(raw), "print(\"ok\")");
+    }
+    #[test]
+    fn repairs_python_sum_expression_when_print_requested() {
+        let task = "Write Python code that prints the sum of 2 and 3.";
+        let code = "sum(2, 3)";
+        let output = "TypeError: 'int' object is not iterable";
+
+        assert_eq!(
+            CompilerVerifier::repair_python_code(task, code, output),
+            Some("print(2 + 3)".to_string())
+        );
     }
 }

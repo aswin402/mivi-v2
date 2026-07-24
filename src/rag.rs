@@ -15,6 +15,41 @@ pub struct TurboVecRAG {
     chunks: Arc<Mutex<Vec<RagChunk>>>,
 }
 
+fn expand_query_words(mut words: Vec<String>) -> Vec<String> {
+    let originals = words.clone();
+    for word in originals {
+        match word.as_str() {
+            "routing" | "route" | "routes" => {
+                words.push("router".to_string());
+                words.push("route".to_string());
+            }
+            "intent" => {
+                words.push("classify_intent".to_string());
+                words.push("intent".to_string());
+            }
+            "module" | "codebase" => {
+                words.push("src".to_string());
+            }
+            _ => {}
+        }
+    }
+    words.sort();
+    words.dedup();
+    words
+}
+
+fn should_skip_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    normalized.contains("/target/")
+        || normalized.contains("/.git/")
+        || normalized.contains("/node_modules/")
+        || normalized.contains("/bin/")
+        || normalized.contains("/benchmarks/")
+        || normalized.contains("/model-eval-results/")
+        || normalized.contains("/.fastembed_cache/")
+        || normalized.ends_with("/.DS_Store")
+}
+
 impl TurboVecRAG {
     pub fn new() -> Self {
         Self {
@@ -28,11 +63,7 @@ impl TurboVecRAG {
         for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
             if entry.file_type().is_file() {
                 let path_str = entry.path().display().to_string();
-                if path_str.contains("/target/")
-                    || path_str.contains("/.git/")
-                    || path_str.contains("/node_modules/")
-                    || path_str.contains("/bin/")
-                {
+                if should_skip_path(&path_str) {
                     continue;
                 }
 
@@ -78,12 +109,14 @@ impl TurboVecRAG {
         .cloned()
         .collect();
 
-        let query_words: Vec<String> = query
-            .to_lowercase()
-            .split(|c: char| !c.is_alphanumeric() && c != '_')
-            .filter(|w| w.len() >= 3 && !stop_words.contains(w))
-            .map(|s| s.to_string())
-            .collect();
+        let query_words = expand_query_words(
+            query
+                .to_lowercase()
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|w| w.len() >= 3 && !stop_words.contains(w))
+                .map(|s| s.to_string())
+                .collect(),
+        );
 
         if query_words.is_empty() {
             return Vec::new();
@@ -93,12 +126,24 @@ impl TurboVecRAG {
 
         for chunk in guard.iter() {
             let text_lower = chunk.text.to_lowercase();
+            let path_lower = chunk.file_path.to_lowercase();
             let mut score = 0.0f32;
 
             for word in &query_words {
                 if text_lower.contains(word) {
                     score += 1.0;
                 }
+                if path_lower.contains(word) {
+                    score += 3.0;
+                }
+            }
+
+            if query_words
+                .iter()
+                .any(|word| word == "module" || word == "codebase")
+                && path_lower.starts_with("src/")
+            {
+                score += 2.0;
             }
 
             if score >= 1.0 {
@@ -143,5 +188,65 @@ impl TurboVecRAG {
         formatted
             .push("# -------------------------------------------------------------".to_string());
         formatted.join("\n\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn intent_routing_query_prefers_router_over_eval_docs() {
+        let rag = TurboVecRAG::new();
+        {
+            let mut chunks = rag.chunks.lock().await;
+            chunks.push(RagChunk {
+                file_path: "docs/model-evals/small-model-matrix.md".to_string(),
+                line_start: 26,
+                text: "intent routing model handles module routing intent candidate routing intent"
+                    .to_string(),
+            });
+            chunks.push(RagChunk {
+                file_path: "src/router.rs".to_string(),
+                line_start: 1,
+                text: "NeedleRouter classify_intent maps prompts to chat code vision multi_step"
+                    .to_string(),
+            });
+        }
+
+        let results = rag.search("what module handles intent routing", 2).await;
+
+        assert_eq!(results[0].0.file_path, "src/router.rs");
+    }
+
+    #[tokio::test]
+    async fn intent_routing_query_prefers_router_file() {
+        let rag = TurboVecRAG::new();
+        {
+            let mut chunks = rag.chunks.lock().await;
+            chunks.push(RagChunk {
+                file_path: "src/rag.rs".to_string(),
+                line_start: 1,
+                text: "RAG retrieval pack context module".to_string(),
+            });
+            chunks.push(RagChunk {
+                file_path: "src/router.rs".to_string(),
+                line_start: 1,
+                text: "NeedleRouter classify_intent handles chat code vision routing".to_string(),
+            });
+        }
+
+        let results = rag.search("what module handles intent routing", 2).await;
+
+        assert_eq!(results[0].0.file_path, "src/router.rs");
+    }
+
+    #[test]
+    fn skips_generated_runtime_artifact_paths() {
+        assert!(should_skip_path("./target/release/mivi"));
+        assert!(should_skip_path("./benchmarks/runtime.jsonl"));
+        assert!(should_skip_path("./model-eval-results/small-model.jsonl"));
+        assert!(should_skip_path("./.fastembed_cache/cache.bin"));
+        assert!(!should_skip_path("./src/router.rs"));
     }
 }

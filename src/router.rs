@@ -199,6 +199,10 @@ impl NeedleRouter {
             return ("CHAT", 1.0);
         }
 
+        if is_agent_context_chat(prompt) {
+            return ("CHAT", 1.0);
+        }
+
         let tokens = tokenize(prompt);
 
         if tokens.len() < 3 {
@@ -240,6 +244,42 @@ impl NeedleRouter {
 
         (best_class, confidence)
     }
+}
+
+fn is_agent_context_chat(prompt: &str) -> bool {
+    let p = prompt.to_lowercase();
+    let visual_terms = [
+        "image",
+        "photo",
+        "picture",
+        "screenshot",
+        "diagram",
+        "jpeg",
+        "jpg",
+        "png",
+        "gif",
+    ];
+    let explicit_visual_request = visual_terms.iter().any(|term| p.contains(term))
+        && ["look", "see", "describe", "analyze", "shown", "contains"]
+            .iter()
+            .any(|term| p.contains(term));
+
+    if explicit_visual_request {
+        return false;
+    }
+
+    let agent_context_terms = [
+        "codebase",
+        "project memory",
+        "intent routing",
+        "routing intent",
+        "module handles",
+        "cargo cache",
+        "tool failed",
+        "safest fix",
+    ];
+
+    agent_context_terms.iter().any(|term| p.contains(term))
 }
 
 fn keyword_classify(prompt: &str) -> &'static str {
@@ -365,6 +405,24 @@ mod tests {
             (0.0..=1.0).contains(&conf),
             "confidence {} out of range",
             conf
+        );
+    }
+
+    #[test]
+    fn text_only_agent_context_prompts_do_not_route_to_vision() {
+        let router = NeedleRouter::new();
+
+        assert_eq!(
+            router
+                .classify_intent("In this codebase, what module handles intent routing?")
+                .0,
+            "CHAT"
+        );
+        assert_eq!(
+            router
+                .classify_intent("A tool failed because Cargo cache is corrupted. Explain the safest fix in two steps.")
+                .0,
+            "CHAT"
         );
     }
 

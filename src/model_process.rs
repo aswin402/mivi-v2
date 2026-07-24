@@ -28,7 +28,8 @@ fn base_args(cmd: &mut Command, model_path: &str, ngl: &str, ctx: &str, temp: &s
         .arg("q8_0")
         .arg("--temp")
         .arg(temp)
-        .arg("--simple-io");
+        .arg("--simple-io")
+        .arg("--no-display-prompt");
 }
 
 /// Spawn llama-cli with a chat-formatted prompt and return a channel that

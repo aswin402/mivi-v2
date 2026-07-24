@@ -46,6 +46,44 @@ rss_kb() {
   ps -o rss= -p "$pid" 2>/dev/null | awk '{print $1}'
 }
 
+descendant_pids() {
+  local parent="$1"
+  local child
+  pgrep -P "$parent" 2>/dev/null || true
+  for child in $(pgrep -P "$parent" 2>/dev/null || true); do
+    descendant_pids "$child"
+  done
+}
+
+tree_rss_kb() {
+  local root_pid="$1"
+  local total=0
+  local pid rss
+  for pid in "$root_pid" $(descendant_pids "$root_pid"); do
+    rss="$(rss_kb "$pid")"
+    if [[ -n "${rss:-}" ]]; then
+      total="$((total + rss))"
+    fi
+  done
+  echo "$total"
+}
+
+worker_rss_kb() {
+  local worker_port="$1"
+  local total=0
+  local pid rss cmdline
+  for pid in $(pgrep -f 'llama-server' 2>/dev/null || true); do
+    cmdline="$(tr '\000' ' ' <"/proc/${pid}/cmdline" 2>/dev/null || true)"
+    if [[ "$cmdline" == *"--port ${worker_port}"* ]]; then
+      rss="$(rss_kb "$pid")"
+      if [[ -n "${rss:-}" ]]; then
+        total="$((total + rss))"
+      fi
+    fi
+  done
+  echo "$total"
+}
+
 request_payload() {
   local kind="$1"
   local prompt="$2"
@@ -79,7 +117,7 @@ run_mode() {
     local prompt="${item#*|}"
     local payload
     payload="$(request_payload "$kind" "$prompt")"
-    local start end elapsed_ms response_file status rss
+    local start end elapsed_ms response_file status server_rss server_tree_rss worker_rss
     response_file="/tmp/mivi-bench-response-${mode}-${kind}.json"
     start="$(date +%s%3N)"
     status="ok"
@@ -91,9 +129,11 @@ run_mode() {
     fi
     end="$(date +%s%3N)"
     elapsed_ms="$((end - start))"
-    rss="$(rss_kb "$SERVER_PID")"
-    python3 -c 'import json,sys; print(json.dumps({"mode":sys.argv[1],"kind":sys.argv[2],"elapsed_ms":int(sys.argv[3]),"server_rss_kb":int(sys.argv[4] or 0),"status":sys.argv[5]}))' \
-      "$mode" "$kind" "$elapsed_ms" "${rss:-0}" "$status" >>"$OUT"
+    server_rss="$(rss_kb "$SERVER_PID")"
+    server_tree_rss="$(tree_rss_kb "$SERVER_PID")"
+    worker_rss="$(worker_rss_kb "$worker_port")"
+    python3 -c 'import json,sys; print(json.dumps({"mode":sys.argv[1],"kind":sys.argv[2],"elapsed_ms":int(sys.argv[3]),"server_rss_kb":int(sys.argv[4] or 0),"server_tree_rss_kb":int(sys.argv[5] or 0),"worker_rss_kb":int(sys.argv[6] or 0),"status":sys.argv[7]}))' \
+      "$mode" "$kind" "$elapsed_ms" "${server_rss:-0}" "${server_tree_rss:-0}" "${worker_rss:-0}" "$status" >>"$OUT"
   done
 
   cleanup

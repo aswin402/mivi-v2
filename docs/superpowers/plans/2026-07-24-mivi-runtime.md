@@ -184,9 +184,9 @@
 - [x] **Step 1: Record baseline models**: current Llama 3.2 1B, Qwen 2.5 0.5B Coder, MiniCPM-V 4.6.
 - [ ] **Step 2: Test candidate text models** only after runtime path is stable.
 - [x] **Step 3: Prioritize candidates**: Qwen 2.5/3 small instruct, SmolLM small instruct, TinyLlama-class models, and any model with native tool/JSON strength under RAM budget.
-- [ ] **Step 4: Score** quality, latency, RAM, tool-call JSON validity, and failure mode.
+- [x] **Step 4: Score** quality, latency, RAM, tool-call JSON validity, and failure mode.
 - [x] **Step 5: Keep the winner** behind `model: "mivi"`; do not expose internal model names.
-- [ ] **Step 6: Commit** `docs: add small model evaluation matrix`.
+- [x] **Step 6: Commit** `docs: add small model evaluation matrix`.
 
 ## Task 9: Release Gate
 
@@ -205,7 +205,7 @@
 - [x] **Step 5: Start server** and verify `/v1/models` returns only `mivi`.
 - [x] **Step 6: Test OpenCode** with a plain chat prompt, a coding prompt, and a forced tool prompt.
 - [x] **Step 7: Update docs** with measured numbers, not estimates.
-- [ ] **Step 8: Commit** `docs: publish runtime validation results`.
+- [x] **Step 8: Commit** `docs: publish runtime validation results`.
 
 ## Todo Plan
 

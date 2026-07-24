@@ -18,6 +18,57 @@ pub struct EdgeBrain {
     pub text_worker: Arc<WorkerManager>,
 }
 
+fn clean_llama_cli_response(stdout: &str) -> String {
+    let response = if let Some(pos) = stdout.rfind("<|im_start|>assistant") {
+        &stdout[pos + "<|im_start|>assistant".len()..]
+    } else if let Some(pos) = stdout.find("> ") {
+        &stdout[pos + 2..]
+    } else {
+        stdout
+    };
+
+    let clean = response
+        .split("[ Prompt:")
+        .next()
+        .unwrap_or(response)
+        .split("Exiting...")
+        .next()
+        .unwrap_or(response)
+        .replace("<|im_end|>", "")
+        .trim()
+        .to_string();
+
+    scrub_generated_prompt_echo(&clean)
+}
+
+fn scrub_generated_prompt_echo(text: &str) -> String {
+    let mut cleaned = text.trim();
+
+    if let Some((_, tail)) = cleaned.rsplit_once("... (truncated)") {
+        cleaned = tail.trim();
+    }
+
+    if let Some(rest) = cleaned.strip_prefix("user\n") {
+        if let Some((_, answer)) = rest.split_once("\n\n") {
+            cleaned = answer.trim();
+        }
+    }
+
+    if cleaned.contains("<|im_start|>system") {
+        if let Some((_, tail)) = cleaned.rsplit_once("<|im_start|>user") {
+            if let Some((_, answer)) = tail.split_once("\n\n") {
+                cleaned = answer.trim();
+            }
+        }
+    }
+
+    cleaned
+        .replace("<|im_start|>", "")
+        .replace("<|im_end|>", "")
+        .trim()
+        .to_string()
+}
+
 impl EdgeBrain {
     pub fn new() -> Self {
         let base_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -140,6 +191,7 @@ impl EdgeBrain {
             .arg("--temp")
             .arg(temp)
             .arg("--simple-io")
+            .arg("--no-display-prompt")
             .arg("-st");
 
         if self.ultra_low_ram {
@@ -156,25 +208,7 @@ impl EdgeBrain {
         let _ = std::fs::remove_file(&prompt_file);
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-
-        let response = if let Some(pos) = stdout.find("<|im_start|>assistant") {
-            &stdout[pos + "<|im_start|>assistant".len()..]
-        } else if let Some(pos) = stdout.find("> ") {
-            &stdout[pos + 2..]
-        } else {
-            &stdout[..]
-        };
-
-        let clean = response
-            .split("[ Prompt:")
-            .next()
-            .unwrap_or(response)
-            .split("Exiting...")
-            .next()
-            .unwrap_or(response)
-            .trim();
-
-        Ok(clean.to_string())
+        Ok(clean_llama_cli_response(&stdout))
     }
 
     pub fn query_reasoner(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
@@ -230,6 +264,7 @@ impl EdgeBrain {
             .arg("--temp")
             .arg("0.2")
             .arg("--simple-io")
+            .arg("--no-display-prompt")
             .arg("-st");
 
         if self.ultra_low_ram {
@@ -305,5 +340,35 @@ impl EdgeBrain {
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         Ok(stdout.trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_response_uses_last_assistant_marker() {
+        let stdout = "<|im_start|>system\nctx<|im_end|>\n<|im_start|>assistant\nechoed old answer<|im_end|>\n<|im_start|>assistant\nfinal answer\n[ Prompt: 12 tokens]";
+
+        assert_eq!(clean_llama_cli_response(stdout), "final answer");
+    }
+
+    #[test]
+    fn clean_response_strips_end_token() {
+        assert_eq!(
+            clean_llama_cli_response("<|im_start|>assistant\nHello<|im_end|>"),
+            "Hello"
+        );
+    }
+
+    #[test]
+    fn scrub_generated_prompt_echo_removes_truncated_context_preamble() {
+        let leaked = "add a text file\n  /glob <pattern>\n\n> <|im_start|>system\nctx\n<|im_start|>user\nCurrent user request:\nFix Cargo.\n ... (truncated)\nuser\nFix Cargo.\n\nTo fix it, remove the broken cache directory.";
+
+        assert_eq!(
+            scrub_generated_prompt_echo(leaked),
+            "To fix it, remove the broken cache directory."
+        );
     }
 }
