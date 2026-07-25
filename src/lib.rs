@@ -15,5 +15,6 @@ pub mod router;
 pub mod runtime;
 pub mod server;
 pub mod tool_filter;
+pub mod tool_output;
 pub mod verifier;
 pub mod worker;

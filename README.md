@@ -25,6 +25,7 @@ It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for 
 * ⚙️ **Multi-Language Double-Loop Verifier:** Generates, executes, and auto-corrects code across **Python, JavaScript, TypeScript, Rust, and C++**.
 * 🧠 **Zero-Overhead Semantic Cache:** Token-set Jaccard similarity cache for instant **< 0.001s responses** on repeat queries.
 * 🧰 **Agent Runtime Roadmap:** v0.0.4 includes the implementation plan for tool filtering, context compression, OKF memory, RAG retrieval, persistent workers, benchmarking, and small-model evaluation.
+* 🧾 **Tool Output Compression:** Cargo, npm/pnpm/yarn/vitest/jest, pytest, and git diff outputs are reduced to salient failure/hunk lines before they enter the small-model context.
 
 ---
 

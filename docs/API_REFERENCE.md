@@ -60,7 +60,7 @@ MIVI supports three runtime modes through environment variables:
 
 `spawn` is the safest low-RAM mode. `worker-eco` lazy-starts one local text worker and falls back to `llama-cli` if the worker fails. `worker-hot` keeps the text worker warm for lower repeated-request latency. Vision stays lazy-loaded.
 
-MIVI also filters large agent tool lists, compresses noisy agent context, reads OKF memory from `memory/`, and gates workspace RAG so normal chat is not polluted by code chunks.
+MIVI also filters large agent tool lists, compresses noisy agent context, minifies command/tool outputs, reads OKF memory from `memory/`, and gates workspace RAG so normal chat is not polluted by code chunks.
 
 ## Latest Runtime Benchmark
 

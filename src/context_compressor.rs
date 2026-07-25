@@ -1,5 +1,6 @@
 use crate::runtime::ContextBudget;
 use crate::server::ChatMessage;
+use crate::tool_output::render_compressed_tool_output;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompressedContext {
@@ -27,7 +28,10 @@ pub fn compress_context(messages: &[ChatMessage], budget: ContextBudget) -> Comp
             "system" => system_parts.push(normalized),
             "tool" => tool_observations.push(format!(
                 "tool: {}",
-                truncate_chars(&normalized, budget.tool_tokens * 4)
+                truncate_chars(
+                    &render_compressed_tool_output(&normalized, &normalized, 8),
+                    budget.tool_tokens * 4
+                )
             )),
             role => {
                 if is_low_value_turn(role, &normalized) {
@@ -320,5 +324,25 @@ mod tests {
             .protected_recent
             .iter()
             .any(|turn| turn.contains("Continue the fix")));
+    }
+
+    #[test]
+    fn compresses_long_tool_output_to_salient_lines() {
+        let long_noise = (0..40)
+            .map(|index| format!("compiling filler crate {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tool_output = format!(
+            "cargo test\n{long_noise}\nerror[E0425]: cannot find value `x` in this scope\nthread 'tests::works' panicked\nfinal filler line that should not matter"
+        );
+        let messages = vec![msg("tool", &tool_output), msg("user", "fix compile error")];
+
+        let compressed = compress_context(&messages, ContextBudget::from_max_input_tokens(1024));
+        let joined = compressed.tool_observations.join("\n");
+
+        assert!(joined.contains("tool-output kind=cargo"));
+        assert!(joined.contains("error[E0425]"));
+        assert!(joined.contains("panicked"));
+        assert!(!joined.contains("final filler line"));
     }
 }

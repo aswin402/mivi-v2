@@ -46,7 +46,8 @@ Agent behavior notes:
 
 - Keep model name set to `mivi`; do not configure `llama`, `qwen`, or `minicpm` in the external agent.
 - Large tool lists are filtered before prompting so OpenCode-style 100+ tool payloads do not flood the tiny model.
-- Long histories are compressed into recent turns, tool observations, errors, code blocks, OKF memory, and gated RAG context.
+- Long histories are compressed into recent turns, typed tool observations, errors, code blocks, OKF memory, and gated RAG context.
+- Noisy command output is minified by tool type before prompting, keeping build/test failures visible without flooding context.
 - Store durable project facts in `memory/*.md` using OKF frontmatter with `id`, `title`, `type`, and optional `tags`.
 
 ## Latest Runtime Benchmark

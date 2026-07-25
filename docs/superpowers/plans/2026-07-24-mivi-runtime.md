@@ -219,6 +219,7 @@
 - [x] Benchmark script.
 - [x] Small-model eval scripts and matrix.
 - [x] Docs release gate with measured results.
+- [x] Typed command-output compression for agent tool observations.
 
 ## Additional Needed Work
 
