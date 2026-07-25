@@ -14,7 +14,7 @@ async fn main() {
     println!("=========================================================");
     println!("  🚀 MIVI-V2: PURE RUST LOW-RESOURCE LOCAL AI ENGINE");
     println!("  RAM Footprint: < 12 MB Server RAM | 0 MB Idle");
-    println!("  Version: 0.0.4 (Pure Rust)");
+    println!("  Version: {} (Pure Rust)", env!("CARGO_PKG_VERSION"));
     println!("=========================================================\n");
 
     let brain = EdgeBrain::new();

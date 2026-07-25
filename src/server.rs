@@ -1052,6 +1052,22 @@ async fn handle_chat_completions(
 
     // Streaming path.
     if req.stream.unwrap_or(false) {
+        if let Some(answer) = verified_identity_answer(&user_prompt)
+            .or_else(|| verified_memory_answer(&user_prompt))
+            .or_else(|| verified_reasoning_answer(&user_prompt))
+            .or_else(|| verified_rag_answer_from_prompt(&user_prompt, &model_user_prompt))
+        {
+            let _ = trace_event(
+                &trace,
+                serde_json::json!({
+                    "kind": "final_response",
+                    "route": "streaming_verified",
+                    "finish_reason": "stream",
+                    "response_chars": answer.chars().count()
+                }),
+            );
+            return stream_text_response(answer, now).into_response();
+        }
         let _ = trace_event(
             &trace,
             serde_json::json!({
@@ -1060,7 +1076,7 @@ async fn handle_chat_completions(
                 "finish_reason": "stream"
             }),
         );
-        return handle_streaming(state, model_user_prompt, target_model, now)
+        return handle_streaming(state, user_prompt, target_model, now)
             .await
             .into_response();
     }
@@ -1139,6 +1155,48 @@ async fn handle_chat_completions(
         }],
     })
     .into_response()
+}
+
+fn stream_text_response(
+    content: String,
+    created: u64,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let id = format!("chatcmpl-v2-{}", created);
+    let id_for_content = id.clone();
+    let content_chunk = futures::stream::once(async move {
+        let chunk = serde_json::json!({
+            "id": id_for_content,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": MODEL_NAME,
+            "choices": [{
+                "index": 0,
+                "delta": { "content": content },
+                "finish_reason": null
+            }]
+        });
+        Ok::<_, Infallible>(Event::default().data(chunk.to_string()))
+    });
+    let final_chunk = futures::stream::once({
+        let id = id.clone();
+        async move {
+            let chunk = serde_json::json!({
+                "id": id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": MODEL_NAME,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop"
+                }]
+            });
+            Ok::<_, Infallible>(Event::default().data(chunk.to_string()))
+        }
+    });
+    let done_marker =
+        futures::stream::once(async { Ok::<_, Infallible>(Event::default().data("[DONE]")) });
+    Sse::new(content_chunk.chain(final_chunk).chain(done_marker))
 }
 
 // ──────────────────────────────────────────────
@@ -1470,6 +1528,15 @@ mod tests {
         assert!(!answer.contains("Qwen"));
         assert!(!answer.contains("Llama"));
     }
+
+    #[test]
+    fn streaming_verified_identity_has_fast_path_answer() {
+        let prompt = "what ai model are you";
+        let answer = verified_identity_answer(prompt).unwrap();
+        assert!(answer.contains("MIVI"));
+        assert!(!answer.contains("Qwen"));
+    }
+
     #[test]
     fn tool_prompt_uses_compact_schema_summary() {
         let mut req = tool_request("run npm test", None);
