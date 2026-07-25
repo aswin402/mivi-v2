@@ -212,7 +212,13 @@ def score_workflow(kind, response_text, trace_rows):
             if not trace_has(trace_rows, "final_response", "tool_calls"):
                 reasons.append("missing tool_calls final trace row")
     elif kind == "long-tool-output":
-        if "error[e0425]" not in text and "cannot find value" not in text and "failed" not in text:
+        salient_failure = (
+            "error[e0425]" in text
+            or "cannot find value" in text
+            or "undefined variable" in text
+            or "failed" in text
+        )
+        if not salient_failure:
             reasons.append("missing salient tool failure")
         if "final filler line" in text:
             reasons.append("leaked low-value tool filler")

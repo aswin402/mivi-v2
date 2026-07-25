@@ -63,3 +63,9 @@ Raw output: `model-eval-results/small-model-20260724-232007.jsonl`.
 - Plain chat must not route to the code verifier.
 - RAG answers must cite project-relevant modules when workspace context is requested.
 - Worker mode must beat spawn mode on repeated text prompts before becoming default.
+
+## Agent Workflow Eval
+
+Measured on 2026-07-25 with `MIVI_TRACE=1 python3 scripts/eval_agent_workflows.py` against the local `mivi` server. All 8 OpenCode-style workflow rows passed, including injected skill metadata, 100+ tool payloads, long tool output summary, RAG, memory, and trace validation.
+
+Raw output: `model-eval-results/agent-workflows-20260725-190308.jsonl`.

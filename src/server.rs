@@ -691,8 +691,7 @@ fn latest_user_prompt_text(req: &ChatCompletionRequest) -> String {
         .unwrap_or_default()
 }
 
-/// Check if the request involves tools (either providing tool definitions,
-/// or continuing after a tool call response).
+/// Check if the current request asks MIVI to emit a tool call.
 fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
     if let Some(serde_json::Value::String(choice)) = &req.tool_choice {
         if choice == "none" {
@@ -704,18 +703,6 @@ fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
     }
 
     if matches!(req.tool_choice, Some(serde_json::Value::Object(_))) {
-        return true;
-    }
-
-    if req.messages.iter().any(|m| m.role == "tool") {
-        return true;
-    }
-
-    if req
-        .messages
-        .iter()
-        .any(|m| m.role == "assistant" && m.tool_calls.is_some())
-    {
         return true;
     }
 
@@ -1474,6 +1461,47 @@ mod tests {
         let calls = parse_tool_calls_for_tools(raw, &[server_tool("bash", "Run shell commands")]);
 
         assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn tool_result_followup_without_tool_intent_does_not_force_tool_generation() {
+        let mut req = tool_request("Run cargo test.", None);
+        req.tools = Some(vec![server_tool("bash", "Run a shell command")]);
+        req.messages = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: json!("Run cargo test."),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: json!(""),
+                tool_call_id: None,
+                tool_calls: Some(vec![ToolCallIn {
+                    id: "call_bash".to_string(),
+                    r#type: "function".to_string(),
+                    function: FunctionCallIn {
+                        name: "bash".to_string(),
+                        arguments: json!({"cmd":"cargo test"}).to_string(),
+                    },
+                }]),
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: json!("error[E0425]: cannot find value `x` in this scope"),
+                tool_call_id: Some("call_bash".to_string()),
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: json!("Summarize the failure in one sentence."),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+
+        assert!(!has_tool_involvement(&req));
     }
 
     #[test]

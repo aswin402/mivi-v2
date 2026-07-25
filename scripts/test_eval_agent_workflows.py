@@ -57,6 +57,15 @@ class AgentWorkflowEvalTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("wrong shell tool name", result["reasons"])
 
+    def test_long_tool_output_accepts_undefined_variable_summary(self):
+        result = workflows.score_workflow(
+            "long-tool-output",
+            response("The failure is due to an undefined variable `x` in cargo test."),
+            [],
+        )
+
+        self.assertTrue(result["ok"])
+
     def test_trace_score_accepts_request_and_final_rows(self):
         trace_rows = [
             {"kind": "request", "has_tool_involvement": True, "tools_in_request": 120},
