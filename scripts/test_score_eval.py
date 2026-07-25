@@ -37,7 +37,7 @@ class ScoreEvalTests(unittest.TestCase):
 
 
     def test_thought_leakage_is_rejected(self):
-        result = score_eval("chat", response("[Start thinking]private[End thinking]I am MIVI."))
+        result = score_eval("chat", response("Start thinking private End thinking I am MIVI."))
         self.assertFalse(result["semantic_ok"])
         self.assertIn("thought leakage", result["reasons"])
 

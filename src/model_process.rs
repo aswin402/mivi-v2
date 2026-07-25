@@ -32,6 +32,59 @@ fn base_args(cmd: &mut Command, model_path: &str, ngl: &str, ctx: &str, temp: &s
         .arg("--no-display-prompt");
 }
 
+fn find_marker_case_insensitive(text: &str, markers: &[&str]) -> Option<(usize, usize)> {
+    let lower = text.to_ascii_lowercase();
+    markers
+        .iter()
+        .filter_map(|marker| lower.find(marker).map(|index| (index, marker.len())))
+        .min_by_key(|(index, _)| *index)
+}
+
+fn strip_thinking_from_stream_line(line: &str, skipping_think: &mut bool) -> Option<String> {
+    const START_MARKERS: &[&str] = &["<think>", "[start thinking]", "start thinking"];
+    const END_MARKERS: &[&str] = &["</think>", "[end thinking]", "end thinking"];
+
+    let clean = line
+        .replace("<|im_start|>", "")
+        .replace("<|im_end|>", "")
+        .trim()
+        .to_string();
+    let mut rest = clean.as_str();
+    let mut out = String::new();
+
+    loop {
+        if *skipping_think {
+            if let Some((end, len)) = find_marker_case_insensitive(rest, END_MARKERS) {
+                rest = &rest[end + len..];
+                *skipping_think = false;
+                continue;
+            }
+            return None;
+        }
+
+        if let Some((start, start_len)) = find_marker_case_insensitive(rest, START_MARKERS) {
+            out.push_str(&rest[..start]);
+            rest = &rest[start + start_len..];
+            if let Some((end, end_len)) = find_marker_case_insensitive(rest, END_MARKERS) {
+                rest = &rest[end + end_len..];
+                continue;
+            }
+            *skipping_think = true;
+            break;
+        }
+
+        out.push_str(rest);
+        break;
+    }
+
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Spawn llama-cli with a chat-formatted prompt and return a channel that
 /// yields response content strings as they arrive.
 ///
@@ -100,6 +153,7 @@ pub fn spawn_streaming(
             Collecting,
         }
         let mut state = State::FindingAssistant;
+        let mut skipping_think = false;
 
         while let Ok(Some(line)) = lines.next_line().await {
             match state {
@@ -113,15 +167,10 @@ pub fn spawn_streaming(
                     if line.starts_with("[ Prompt:") || line.starts_with("Exiting...") {
                         break;
                     }
-                    // Strip special tokens that leak from the model.
-                    let clean = line
-                        .replace("<|im_start|>", "")
-                        .replace("<|im_end|>", "")
-                        .trim()
-                        .to_string();
-                    if clean.is_empty() {
+                    let Some(clean) = strip_thinking_from_stream_line(&line, &mut skipping_think)
+                    else {
                         continue;
-                    }
+                    };
                     if tx.send(clean).await.is_err() {
                         break; // receiver dropped (client disconnected)
                     }
@@ -134,4 +183,40 @@ pub fn spawn_streaming(
     });
 
     rx
+}
+#[cfg(test)]
+mod tests {
+    use super::strip_thinking_from_stream_line;
+
+    #[test]
+    fn strips_plain_qwen_thinking_but_keeps_answer_tail() {
+        let mut skipping = false;
+        assert_eq!(
+            strip_thinking_from_stream_line(
+                "Start thinking private End thinking Hello.",
+                &mut skipping,
+            ),
+            Some("Hello.".to_string())
+        );
+        assert!(!skipping);
+    }
+
+    #[test]
+    fn strips_multiline_thinking_until_end_marker() {
+        let mut skipping = false;
+        assert_eq!(
+            strip_thinking_from_stream_line("<think>", &mut skipping),
+            None
+        );
+        assert!(skipping);
+        assert_eq!(
+            strip_thinking_from_stream_line("private reasoning", &mut skipping),
+            None
+        );
+        assert_eq!(
+            strip_thinking_from_stream_line("</think> Final answer.", &mut skipping),
+            Some("Final answer.".to_string())
+        );
+        assert!(!skipping);
+    }
 }

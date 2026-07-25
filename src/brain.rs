@@ -45,27 +45,14 @@ impl ReasoningMode {
 fn should_think_for_prompt(prompt: &str) -> bool {
     let lower = prompt.to_ascii_lowercase();
     [
-        "debug",
-        "error",
-        "failed",
-        "failure",
-        "panic",
-        "traceback",
-        "review",
-        "security",
-        "refactor",
-        "plan",
-        "architecture",
-        "reason",
-        "analyze",
-        "diagnose",
-        "fix",
-        "bug",
-        "test failed",
-        "compiler",
-        "cargo",
-        "typescript",
-        "rustc",
+        "think deeply",
+        "deep reasoning",
+        "step-by-step reasoning",
+        "step by step reasoning",
+        "complex plan",
+        "architecture decision",
+        "security review",
+        "hard reasoning",
     ]
     .iter()
     .any(|marker| lower.contains(marker))
@@ -113,7 +100,9 @@ fn strip_delimited_block(text: &str, open: &str, close: &str) -> String {
 
 fn strip_think_blocks(text: &str) -> String {
     let without_xml = strip_delimited_block(text, "<think>", "</think>");
-    strip_delimited_block(&without_xml, "[start thinking]", "[end thinking]")
+    let without_bracketed =
+        strip_delimited_block(&without_xml, "[start thinking]", "[end thinking]");
+    strip_delimited_block(&without_bracketed, "start thinking", "end thinking")
 }
 
 fn clean_llama_cli_response(stdout: &str) -> String {
@@ -558,10 +547,14 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_directive_auto_thinks_for_debug_prompts() {
+    fn reasoning_directive_auto_is_conservative_for_agent_prompts() {
         env::remove_var("MIVI_REASONING_MODE");
         assert_eq!(
             reasoning_directive("Debug this Rust compiler error."),
+            "/no_think"
+        );
+        assert_eq!(
+            reasoning_directive("Use deep reasoning to debug this Rust compiler error."),
             "/think"
         );
     }

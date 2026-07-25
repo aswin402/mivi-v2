@@ -21,7 +21,14 @@ def score_eval(kind, response_text):
     content, tool_calls = extract_message(response_text)
     text = content.lower()
     reasons = []
-    if "<think>" in text or "</think>" in text or "[start thinking]" in text or "[end thinking]" in text:
+    if (
+        "<think>" in text
+        or "</think>" in text
+        or "[start thinking]" in text
+        or "[end thinking]" in text
+        or "start thinking" in text
+        or "end thinking" in text
+    ):
         reasons.append("thought leakage")
 
     if kind == "chat":
