@@ -222,6 +222,7 @@
 - [x] Typed command-output compression for agent tool observations.
 - [x] Strict JSON repair and selected-tool validation for model-generated tool calls.
 - [x] Per-request debug traces behind `MIVI_TRACE=1`.
+- [x] Agent workflow eval script for OpenCode-style traffic.
 
 ## Additional Needed Work
 

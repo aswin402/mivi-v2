@@ -113,6 +113,14 @@ Small-model evals are scored semantically: `scripts/eval_small_models.sh` writes
 
 Enable compact per-request diagnostics with `MIVI_TRACE=1`; traces append JSONL rows to `logs/mivi-trace.jsonl` or `MIVI_TRACE_PATH`.
 
+Agent workflow evals simulate OpenCode-style traffic with injected skill metadata, 100+ tools, long tool output, RAG/memory prompts, and optional trace rows:
+
+```bash
+MIVI_TRACE=1 scripts/eval_agent_workflows.py
+```
+
+Results are written to `model-eval-results/agent-workflows-YYYYMMDD-HHMMSS.jsonl`.
+
 ## Latest Runtime Benchmark
 
 Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark records Rust server RSS, server process-tree RSS, and persistent worker RSS. Worker modes stayed under the 1000 MB active-RAM target, and verified RAG answers removed the previous `worker-hot` RAG timeout.

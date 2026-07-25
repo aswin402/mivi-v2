@@ -64,6 +64,15 @@ Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark records Ru
 
 Benchmark output: `benchmarks/runtime-20260724-203641.jsonl`.
 
+
+Agent workflow evals simulate OpenCode-style traffic with injected skill metadata, 100+ tools, long tool output, RAG/memory prompts, and optional trace rows:
+
+```bash
+MIVI_TRACE=1 scripts/eval_agent_workflows.py
+```
+
+Results are written to `model-eval-results/agent-workflows-YYYYMMDD-HHMMSS.jsonl`.
+
 Small-model evals are scored semantically: `scripts/eval_small_models.sh` writes `semantic_ok`, `score`, and `reasons`, and exits non-zero when an answer fails expected facts or tool-call checks.
 
 ---
