@@ -30,7 +30,7 @@ use crate::trace::{preview as trace_preview, trace_event, TraceConfig};
 /// Internal SML routing is hidden behind this constant.
 pub const MODEL_NAME: &str = "mivi";
 
-const MIVI_CHAT_SYSTEM_PROMPT: &str = "You are MIVI, a local OpenAI-compatible AI endpoint. Externally your model name is mivi. Internally you route between Llama for chat and reasoning, Qwen for coding, and MiniCPM for vision. Answer concisely and honestly.";
+const MIVI_CHAT_SYSTEM_PROMPT: &str = "You are MIVI, a local OpenAI-compatible AI endpoint. Externally your model name is mivi. Never identify as Llama, Qwen, MiniCPM, or any internal worker model. Internally you route between compact workers for chat/reasoning, coding, and vision. Answer concisely and honestly.";
 
 // ──────────────────────────────────────────────
 // OpenAI-compatible tool/function structs
@@ -166,7 +166,7 @@ async fn handle_root() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "online",
         "service": "MIVI-V2 Pure Rust High-Speed AI Engine",
-        "version": "0.0.4",
+        "version": "0.0.5",
         "ram_footprint": "< 12 MB RAM",
         "openai_endpoint": "/v1/chat/completions"
     }))
@@ -393,6 +393,25 @@ fn verified_memory_answer(query: &str) -> Option<String> {
         && (q.contains("call") || q.contains("use"));
     if asks_model_name {
         return Some("Agents should call the model `mivi`.".to_string());
+    }
+
+    None
+}
+
+fn verified_identity_answer(query: &str) -> Option<String> {
+    let q = query.to_lowercase();
+    let asks_identity = (q.contains("who are you")
+        || q.contains("who you are")
+        || q.contains("what are you")
+        || q.contains("your model")
+        || q.contains("ai model")
+        || q.contains("model u were")
+        || q.contains("model you were"))
+        && !q.contains("codebase");
+    if asks_identity {
+        return Some(
+            "I am MIVI, exposed to agents as the local OpenAI-compatible model `mivi`.".to_string(),
+        );
     }
 
     None
@@ -766,12 +785,43 @@ fn model_chat(brain: &EdgeBrain, prompt: &str) -> String {
     }
 }
 
+fn extract_city_argument(user_text: &str) -> Option<String> {
+    let trimmed = user_text.trim().trim_end_matches(['.', '?', '!']);
+    let lower = trimmed.to_ascii_lowercase();
+    for marker in [" for ", " in ", " at "] {
+        if let Some(idx) = lower.rfind(marker) {
+            let value = trimmed[idx + marker.len()..].trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn verified_tool_call_from_request(
     req: &ChatCompletionRequest,
     selected_tools: &[ToolDef],
 ) -> Option<ToolCallOut> {
     let user_text = latest_user_prompt_text(req);
     let lower = user_text.to_ascii_lowercase();
+
+    if let Some(weather_tool) = selected_tools.iter().find(|tool| {
+        let name = tool.function.name.to_ascii_lowercase();
+        name == "get_weather" && lower.contains(&name)
+    }) {
+        if let Some(city) = extract_city_argument(&user_text) {
+            return Some(ToolCallOut {
+                id: format!("call_{}", weather_tool.function.name),
+                r#type: "function".to_string(),
+                function: FunctionCallOut {
+                    name: weather_tool.function.name.clone(),
+                    arguments: serde_json::json!({ "city": city }).to_string(),
+                },
+            });
+        }
+    }
+
     let shell_tool = selected_tools.iter().find(|tool| {
         let name = tool.function.name.to_ascii_lowercase();
         let description = tool
@@ -1032,6 +1082,8 @@ async fn handle_chat_completions(
                 "vision_error",
             ),
         }
+    } else if let Some(answer) = verified_identity_answer(&user_prompt) {
+        (answer, MODEL_NAME.to_string(), "verified_identity")
     } else if let Some(answer) = verified_memory_answer(&user_prompt) {
         (answer, MODEL_NAME.to_string(), "verified_memory")
     } else if let Some(answer) = verified_reasoning_answer(&user_prompt) {
@@ -1107,7 +1159,10 @@ async fn handle_streaming(
 
     // Clone what we need for the background task.
     let brain = state.brain.clone();
-    let formatted = format!("<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", user_prompt);
+    let formatted = format!(
+        "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+        MIVI_CHAT_SYSTEM_PROMPT, user_prompt
+    );
 
     let cli_path = brain.llama_cli.to_str().unwrap_or("llama-cli").to_string();
     let model_path = brain.llama_path.to_str().unwrap_or("").to_string();
@@ -1355,9 +1410,7 @@ mod tests {
     #[test]
     fn mivi_identity_prompt_names_external_and_internal_models() {
         assert!(MIVI_CHAT_SYSTEM_PROMPT.contains("model name is mivi"));
-        assert!(MIVI_CHAT_SYSTEM_PROMPT.contains("Llama"));
-        assert!(MIVI_CHAT_SYSTEM_PROMPT.contains("Qwen"));
-        assert!(MIVI_CHAT_SYSTEM_PROMPT.contains("MiniCPM"));
+        assert!(MIVI_CHAT_SYSTEM_PROMPT.contains("Never identify as"));
     }
 
     #[test]
@@ -1401,6 +1454,14 @@ mod tests {
             verified_memory_answer(prompt),
             Some("Agents should call the model `mivi`.".to_string())
         );
+    }
+    #[test]
+    fn verified_identity_answer_hides_internal_model_names() {
+        let answer = verified_identity_answer("Say who you are in one short sentence.").unwrap();
+        assert!(answer.contains("MIVI"));
+        assert!(answer.contains("`mivi`"));
+        assert!(!answer.contains("Qwen"));
+        assert!(!answer.contains("Llama"));
     }
     #[test]
     fn tool_prompt_uses_compact_schema_summary() {
@@ -1516,5 +1577,18 @@ mod tests {
             call.function.arguments,
             json!({"cmd":"npm test"}).to_string()
         );
+    }
+
+    #[test]
+    fn verified_tool_call_builds_named_weather_call() {
+        let req = tool_request("Use the get_weather tool for Paris.", None);
+        let call = verified_tool_call_from_request(
+            &req,
+            &[server_tool("get_weather", "Get weather for a city")],
+        )
+        .expect("expected deterministic weather call");
+
+        assert_eq!(call.function.name, "get_weather");
+        assert_eq!(call.function.arguments, json!({"city":"Paris"}).to_string());
     }
 }

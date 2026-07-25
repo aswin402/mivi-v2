@@ -5,6 +5,12 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.5] - 2026-07-25
+
+### Improved
+* Hardened MIVI identity handling so agent-facing self-identification always stays `mivi` even when an internal worker model would leak its base model name.
+* Added Qwen 2.5 0.5B Q4_K_M candidate evaluation notes for the low-resource SML search.
+
 ## [v0.0.3] - 2026-07-22
 
 ### 🚀 Production Stability & Clean Release
