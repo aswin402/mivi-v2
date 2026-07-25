@@ -24,6 +24,7 @@ use crate::retrieval::{build_retrieval_pack_with_sources, should_include_workspa
 use crate::router::NeedleRouter;
 use crate::runtime::RuntimeConfig;
 use crate::tool_filter::filter_tools;
+use crate::trace::{preview as trace_preview, trace_event, TraceConfig};
 
 /// The single model name exposed to external agents.
 /// Internal SML routing is hidden behind this constant.
@@ -575,14 +576,40 @@ fn parse_single_tool_call(json_str: &str) -> Option<ToolCallOut> {
     })
 }
 
+#[cfg(test)]
 fn parse_tool_calls_for_tools(text: &str, selected_tools: &[ToolDef]) -> Vec<ToolCallOut> {
-    parse_tool_calls(text)
+    let parsed = parse_tool_calls(text);
+    validate_tool_calls_for_tools(parsed, selected_tools).0
+}
+
+fn validate_tool_calls_for_tools(
+    calls: Vec<ToolCallOut>,
+    selected_tools: &[ToolDef],
+) -> (Vec<ToolCallOut>, usize) {
+    let original_len = calls.len();
+    let accepted: Vec<ToolCallOut> = calls
         .into_iter()
         .filter(|call| {
             selected_tools
                 .iter()
                 .any(|tool| tool.function.name == call.function.name)
         })
+        .collect();
+    let rejected = original_len.saturating_sub(accepted.len());
+    (accepted, rejected)
+}
+
+fn tool_names(tools: &[ToolDef]) -> Vec<String> {
+    tools
+        .iter()
+        .map(|tool| tool.function.name.clone())
+        .collect()
+}
+
+fn call_names(calls: &[ToolCallOut]) -> Vec<String> {
+    calls
+        .iter()
+        .map(|call| call.function.name.clone())
         .collect()
 }
 
@@ -801,23 +828,51 @@ fn generate_tool_calls(
     brain: &EdgeBrain,
     req: &ChatCompletionRequest,
 ) -> (Vec<ToolCallOut>, String) {
+    let trace = TraceConfig::from_env();
     let selected_tools = prompt_tools_for_request(req);
+    let selected_tool_names = tool_names(&selected_tools);
     if let Some(call) = verified_tool_call_from_request(req, &selected_tools) {
-        return (vec![call], String::new());
+        let calls = vec![call];
+        let _ = trace_event(
+            &trace,
+            serde_json::json!({
+                "kind": "tool_generation",
+                "route": "deterministic_tool",
+                "selected_tools": selected_tool_names,
+                "accepted_tool_calls": call_names(&calls),
+                "rejected_tool_calls": 0
+            }),
+        );
+        return (calls, String::new());
     }
 
     let prompt = build_chat_prompt(req);
     println!("[MIVI-V2 ToolGen] Prompt length: {} chars", prompt.len());
 
     let raw = model_chat(brain, &prompt);
-    let debug_preview: String = raw.chars().take(200).collect();
+    let debug_preview = trace_preview(&raw, 200);
     println!(
         "[MIVI-V2 ToolGen] Raw model output (truncated): {:?}",
         debug_preview
     );
 
     // Parse, repair, and validate tool calls from output.
-    let calls = parse_tool_calls_for_tools(&raw, &selected_tools);
+    let parsed_calls = parse_tool_calls(&raw);
+    let parsed_count = parsed_calls.len();
+    let (calls, rejected_tool_calls) = validate_tool_calls_for_tools(parsed_calls, &selected_tools);
+    let _ = trace_event(
+        &trace,
+        serde_json::json!({
+            "kind": "tool_generation",
+            "route": "model_tool",
+            "prompt_chars": prompt.chars().count(),
+            "raw_preview": debug_preview,
+            "selected_tools": selected_tool_names,
+            "parsed_tool_calls": parsed_count,
+            "accepted_tool_calls": call_names(&calls),
+            "rejected_tool_calls": rejected_tool_calls
+        }),
+    );
 
     if calls.is_empty() {
         // No tool call detected — use raw output as content response.
@@ -867,12 +922,26 @@ async fn handle_chat_completions(
         );
     }
 
+    let trace = TraceConfig::from_env();
+    let latest_user_prompt = latest_user_prompt_text(&req);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
     let target_model = req.model.clone().unwrap_or_else(|| MODEL_NAME.to_string());
     let has_tools = has_tool_involvement(&req);
+    let _ = trace_event(
+        &trace,
+        serde_json::json!({
+            "kind": "request",
+            "model": target_model,
+            "stream": req.stream.unwrap_or(false),
+            "messages": req.messages.len(),
+            "tools_in_request": req.tools.as_ref().map(|tools| tools.len()).unwrap_or(0),
+            "has_tool_involvement": has_tools,
+            "latest_user_prompt_preview": trace_preview(&latest_user_prompt, 240)
+        }),
+    );
 
     // ── Tool calling path ────────────────────────────────────────────
     if has_tools {
@@ -884,6 +953,15 @@ async fn handle_chat_completions(
             for tc in &tool_calls {
                 eprintln!("  -> {}({})", tc.function.name, tc.function.arguments);
             }
+            let _ = trace_event(
+                &trace,
+                serde_json::json!({
+                    "kind": "final_response",
+                    "route": "tool_calls",
+                    "finish_reason": "tool_calls",
+                    "tool_calls": call_names(&tool_calls)
+                }),
+            );
             return Json(ChatCompletionResponse {
                 id: format!("chatcmpl-v2-{}", now),
                 object: "chat.completion".to_string(),
@@ -904,6 +982,15 @@ async fn handle_chat_completions(
 
         // No tool calls — fall through to normal response with the text.
         let chosen_model = MODEL_NAME.to_string();
+        let _ = trace_event(
+            &trace,
+            serde_json::json!({
+                "kind": "final_response",
+                "route": "tool_text_fallback",
+                "finish_reason": "stop",
+                "response_chars": response_text.chars().count()
+            }),
+        );
         return Json(ChatCompletionResponse {
             id: format!("chatcmpl-v2-{}", now),
             object: "chat.completion".to_string(),
@@ -928,6 +1015,14 @@ async fn handle_chat_completions(
 
     // Streaming path.
     if req.stream.unwrap_or(false) {
+        let _ = trace_event(
+            &trace,
+            serde_json::json!({
+                "kind": "final_response",
+                "route": "streaming",
+                "finish_reason": "stream"
+            }),
+        );
         return handle_streaming(state, model_user_prompt, target_model, now)
             .await
             .into_response();
@@ -940,31 +1035,54 @@ async fn handle_chat_completions(
         intent, confidence, target_model, user_prompt
     );
 
-    let (response_text, chosen_model) = if image_path.is_some() {
+    let (response_text, chosen_model, route) = if image_path.is_some() {
         let path = image_path.unwrap_or_default();
         match state.brain.query_vision(&path, &user_prompt) {
-            Ok(res) => (res, MODEL_NAME.to_string()),
-            Err(err) => (format!("Vision error: {}", err), MODEL_NAME.to_string()),
+            Ok(res) => (res, MODEL_NAME.to_string(), "vision"),
+            Err(err) => (
+                format!("Vision error: {}", err),
+                MODEL_NAME.to_string(),
+                "vision_error",
+            ),
         }
     } else if let Some(answer) = verified_memory_answer(&user_prompt) {
-        (answer, MODEL_NAME.to_string())
+        (answer, MODEL_NAME.to_string(), "verified_memory")
     } else if let Some(answer) = verified_reasoning_answer(&user_prompt) {
-        (answer, MODEL_NAME.to_string())
+        (answer, MODEL_NAME.to_string(), "verified_reasoning")
     } else if let Some(answer) = verified_rag_answer_from_prompt(&user_prompt, &model_user_prompt) {
-        (answer, MODEL_NAME.to_string())
+        (answer, MODEL_NAME.to_string(), "verified_rag")
     } else {
         match target_model.to_lowercase().as_str() {
-            "coder" => code_chat(&state.brain, &model_user_prompt),
-            "reasoner" => reasoner_chat(&state.brain, &model_user_prompt),
+            "coder" => {
+                let (text, model) = code_chat(&state.brain, &model_user_prompt);
+                (text, model, "coder")
+            }
+            "reasoner" => {
+                let (text, model) = reasoner_chat(&state.brain, &model_user_prompt);
+                (text, model, "reasoner")
+            }
             _ if is_direct_reasoner_intent(&intent) => {
-                reasoner_chat(&state.brain, &model_user_prompt)
+                let (text, model) = reasoner_chat(&state.brain, &model_user_prompt);
+                (text, model, "direct_reasoner")
             }
             _ => {
                 let (_, res) = state.orchestrator.execute_plan(&user_prompt).await;
-                (res, MODEL_NAME.to_string())
+                (res, MODEL_NAME.to_string(), "orchestrator")
             }
         }
     };
+    let _ = trace_event(
+        &trace,
+        serde_json::json!({
+            "kind": "final_response",
+            "route": route,
+            "intent": intent,
+            "confidence": confidence,
+            "model": chosen_model,
+            "response_chars": response_text.chars().count(),
+            "context_prompt_chars": model_user_prompt.chars().count()
+        }),
+    );
 
     Json(ChatCompletionResponse {
         id: format!("chatcmpl-v2-{}", now),

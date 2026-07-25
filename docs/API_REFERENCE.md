@@ -57,10 +57,12 @@ MIVI supports three runtime modes through environment variables:
 | `MIVI_CONTEXT_BUDGET` | integer tokens, minimum `1024` | `4096` | Sets the bounded prompt pack budget |
 | `MIVI_WORKER_IDLE_SECS` | positive integer seconds | `120` | Idle sleep/stop budget for worker modes |
 | `MIVI_WORKER_PORT` | local TCP port | `18080` | Internal `llama-server` worker port |
+| `MIVI_TRACE` | `1`, `true`, `yes`, `on` | off | Enables compact per-request JSONL traces |
+| `MIVI_TRACE_PATH` | filesystem path | `logs/mivi-trace.jsonl` | Overrides trace output file |
 
 `spawn` is the safest low-RAM mode. `worker-eco` lazy-starts one local text worker and falls back to `llama-cli` if the worker fails. `worker-hot` keeps the text worker warm for lower repeated-request latency. Vision stays lazy-loaded.
 
-MIVI also filters large agent tool lists, compresses noisy agent context, minifies command/tool outputs, validates returned tool calls against the selected tools, reads OKF memory from `memory/`, and gates workspace RAG so normal chat is not polluted by code chunks.
+MIVI also filters large agent tool lists, compresses noisy agent context, minifies command/tool outputs, validates returned tool calls against the selected tools, records optional compact JSONL traces, reads OKF memory from `memory/`, and gates workspace RAG so normal chat is not polluted by code chunks.
 
 ## Latest Runtime Benchmark
 

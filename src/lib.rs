@@ -16,5 +16,6 @@ pub mod runtime;
 pub mod server;
 pub mod tool_filter;
 pub mod tool_output;
+pub mod trace;
 pub mod verifier;
 pub mod worker;

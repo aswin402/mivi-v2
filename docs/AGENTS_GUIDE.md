@@ -49,6 +49,7 @@ Agent behavior notes:
 - Long histories are compressed into recent turns, typed tool observations, errors, code blocks, OKF memory, and gated RAG context.
 - Noisy command output is minified by tool type before prompting, keeping build/test failures visible without flooding context.
 - Model-generated tool calls are validated against the selected tool set, and argument strings are repaired only when they normalize to valid JSON objects.
+- Set `MIVI_TRACE=1` when diagnosing agent failures; trace rows include request summary, selected tools, tool-call repair/rejection counts, and final route.
 - Store durable project facts in `memory/*.md` using OKF frontmatter with `id`, `title`, `type`, and optional `tags`.
 
 ## Latest Runtime Benchmark

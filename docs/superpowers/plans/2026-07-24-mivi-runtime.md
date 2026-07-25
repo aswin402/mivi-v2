@@ -221,12 +221,12 @@
 - [x] Docs release gate with measured results.
 - [x] Typed command-output compression for agent tool observations.
 - [x] Strict JSON repair and selected-tool validation for model-generated tool calls.
+- [x] Per-request debug traces behind `MIVI_TRACE=1`.
 
 ## Additional Needed Work
 
 - Add prompt injection filtering for agent-supplied skill/tool metadata before it reaches the small model.
 - Add execution audit logs for verified code paths and tool decisions.
-- Add per-request debug traces behind `MIVI_TRACE=1` so OpenCode failures can be diagnosed without printing huge prompts.
 - Add memory privacy controls before long-term OKF memory is enabled by default.
 
 ## Self-Review

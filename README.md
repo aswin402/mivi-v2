@@ -111,6 +111,8 @@ Results are written to `benchmarks/runtime-YYYYMMDD-HHMMSS.jsonl` with mode, pro
 
 Small-model evals are scored semantically: `scripts/eval_small_models.sh` writes `semantic_ok`, `score`, and `reasons`, and exits non-zero when an answer fails expected facts or tool-call checks.
 
+Enable compact per-request diagnostics with `MIVI_TRACE=1`; traces append JSONL rows to `logs/mivi-trace.jsonl` or `MIVI_TRACE_PATH`.
+
 ## Latest Runtime Benchmark
 
 Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark records Rust server RSS, server process-tree RSS, and persistent worker RSS. Worker modes stayed under the 1000 MB active-RAM target, and verified RAG answers removed the previous `worker-hot` RAG timeout.
