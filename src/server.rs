@@ -710,6 +710,16 @@ fn latest_user_prompt_text(req: &ChatCompletionRequest) -> String {
         .unwrap_or_default()
 }
 
+fn explicitly_mentions_tool_name(user_text: &str, tool_name: &str) -> bool {
+    let name = tool_name.trim().to_ascii_lowercase();
+    if name.is_empty() {
+        return false;
+    }
+
+    let is_specific_tool_name = name.contains('_') || name.contains('-') || name.len() >= 8;
+    is_specific_tool_name && user_text.contains(&name)
+}
+
 /// Check if the current request asks MIVI to emit a tool call.
 fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
     if let Some(serde_json::Value::String(choice)) = &req.tool_choice {
@@ -744,10 +754,10 @@ fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
         return true;
     }
 
-    tools.iter().any(|tool| {
-        let name = tool.function.name.to_lowercase();
-        !name.is_empty() && user_text.contains(&name)
-    }) || !filter_tools(&user_text, tools, MAX_PROMPT_TOOLS).is_empty()
+    tools
+        .iter()
+        .any(|tool| explicitly_mentions_tool_name(&user_text, &tool.function.name))
+        || !filter_tools(&user_text, tools, MAX_PROMPT_TOOLS).is_empty()
 }
 
 // ──────────────────────────────────────────────
@@ -1382,6 +1392,14 @@ mod tests {
     #[test]
     fn tools_available_does_not_force_tool_generation_for_plain_chat() {
         let req = tool_request("hi", None);
+        assert!(!has_tool_involvement(&req));
+    }
+
+    #[test]
+    fn code_capability_question_does_not_enter_tool_generation() {
+        let mut req = tool_request("so is u can write codes", None);
+        req.tools = Some(vec![server_tool("write", "Write a file to the workspace")]);
+
         assert!(!has_tool_involvement(&req));
     }
 
