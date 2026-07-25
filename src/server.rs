@@ -1166,6 +1166,13 @@ async fn handle_streaming(
 
     let cli_path = brain.llama_cli.to_str().unwrap_or("llama-cli").to_string();
     let model_path = brain.llama_path.to_str().unwrap_or("").to_string();
+    let runtime_config = RuntimeConfig::from_env();
+    let streaming_context = std::env::var("MIVI_REASONER_CONTEXT_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|tokens| *tokens >= 1024)
+        .unwrap_or(runtime_config.context.max_input_tokens)
+        .to_string();
 
     tokio::spawn(async move {
         let mut rx = spawn_streaming(
@@ -1173,7 +1180,7 @@ async fn handle_streaming(
             &model_path,
             &formatted,
             if brain.ultra_low_ram { "0" } else { "999" },
-            if brain.ultra_low_ram { "4096" } else { "8192" },
+            &streaming_context,
             "0.2",
         );
 

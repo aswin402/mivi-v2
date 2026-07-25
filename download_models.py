@@ -24,6 +24,12 @@ def download_models():
             "target": os.path.join(models_dir, "qwen2.5-0.5b-instruct-q2_k.gguf")
         },
         {
+            "name": "Qwen 2.5 0.5B Instruct Q4_K_M (Default Coder/Tool Model)",
+            "repo_id": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+            "filename": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+            "target": os.path.join(models_dir, "qwen2.5-0.5b-instruct-q4_k_m.gguf")
+        },
+        {
             "name": "Llama 3.2 1B Instruct (Reasoner)",
             "repo_id": "bartowski/Llama-3.2-1B-Instruct-GGUF",
             "filename": "Llama-3.2-1B-Instruct-IQ3_M.gguf",

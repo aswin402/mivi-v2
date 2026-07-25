@@ -64,10 +64,10 @@ candidate_lines() {
     python3 - <<'PYCANDIDATE'
 import json
 print(json.dumps({
-    "name": "baseline-llama1b-qwen05b",
-    "role": "baseline",
-    "reasoner": "models/Llama-3.2-1B-Instruct-IQ3_M.gguf",
-    "coder": "models/qwen2.5-0.5b-instruct-q2_k.gguf",
+    "name": "default-qwen3-qwen25q4",
+    "role": "default",
+    "reasoner": "models/qwen3-0.6b-q4_k_m.gguf",
+    "coder": "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
 }))
 PYCANDIDATE
   fi
@@ -97,8 +97,8 @@ while IFS= read -r line; do
   start_ms="$(date +%s%3N)"
   MIVI_TRACE=1 \
   MIVI_TRACE_PATH="$TRACE_PATH" \
-  MIVI_REASONER_MODEL="${reasoner:-models/Llama-3.2-1B-Instruct-IQ3_M.gguf}" \
-  MIVI_CODER_MODEL="${coder:-models/qwen2.5-0.5b-instruct-q2_k.gguf}" \
+  MIVI_REASONER_MODEL="${reasoner:-models/qwen3-0.6b-q4_k_m.gguf}" \
+  MIVI_CODER_MODEL="${coder:-models/qwen2.5-0.5b-instruct-q4_k_m.gguf}" \
   MIVI_CLI_TIMEOUT_SECS="$cli_timeout" \
   cargo run --release -- serve >"$OUT_DIR/${name}.server.log" 2>&1 &
   SERVER_PID="$!"

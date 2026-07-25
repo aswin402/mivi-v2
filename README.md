@@ -15,7 +15,7 @@ It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for 
 ## 🌟 Key Features in v0.0.5
 
 * 🦀 **100% Pure Rust Architecture:** Zero Python runtime, zero PyTorch/transformers memory bloat, and zero virtual environment dependencies.
-* ⚡ **Speculative Decoding (`ds4` pattern):** Uses Qwen 0.5B for fast drafting and Llama 1B for verification, boosting generation speed by **2.2x**.
+* ⚡ **Speculative Decoding (`ds4` pattern):** Uses the configured coder for fast drafting and the configured reasoner for verification, boosting generation speed by **2.2x**.
 * 🌬️ **Ultra-Low-RAM `mmap` Streaming (`AirLLM` + `Colibrì` pattern):** File-streamed layer execution via `MIVI_ULTRA_LOW_RAM=1` reducing active memory to **< 40 MB RAM**.
 * 📚 **Google Open Knowledge Format RAG (`Google OKF` pattern):** Structured Markdown + YAML frontmatter context bundles for zero context noise and high SLM accuracy.
 * 🌲 **AST Prompt Compression (`Bonsai AI` pattern):** Prunes prompt fluff, shrinking input tokens by **30%-50%** for **2x faster prefill**.
@@ -131,15 +131,15 @@ Set `MIVI_CANDIDATES_FILE` to a JSONL file with `name`, `reasoner`, and `coder` 
 
 ## Latest Runtime Benchmark
 
-Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark records Rust server RSS, server process-tree RSS, and persistent worker RSS. Worker modes stayed under the 1000 MB active-RAM target, and verified RAG answers removed the previous `worker-hot` RAG timeout.
+Measured on 2026-07-26 with `scripts/bench_runtime.sh` using the built-in defaults: Qwen3 0.6B Q4_K_M reasoner, Qwen2.5 0.5B Q4_K_M coder, and a 3072 raw context budget. Worker modes stayed under the 1000 MB active-RAM target with practical headroom.
 
 | Mode | Chat | Coding | Tool | RAG | Vision Skip | Peak Worker RSS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `spawn` | 5578 ms | 2261 ms | 4861 ms | 49 ms | 4607 ms | 0 MB |
-| `worker-eco` | 3083 ms | 1726 ms | 3919 ms | 19 ms | 2134 ms | 849 MB |
-| `worker-hot` | 3101 ms | 1622 ms | 4180 ms | 18 ms | 5886 ms | 849 MB |
+| `spawn` | 4279 ms | 2048 ms | 15 ms | 24 ms | 6084 ms | 0 MB |
+| `worker-eco` | 3141 ms | 1171 ms | 9 ms | 9 ms | 4954 ms | 932.1 MB |
+| `worker-hot` | 2921 ms | 1437 ms | 10 ms | 18 ms | 4303 ms | 931.2 MB |
 
-Benchmark output: `benchmarks/runtime-20260724-203641.jsonl`.
+Benchmark output: `benchmarks/runtime-20260726-014455.jsonl`.
 
 ---
 

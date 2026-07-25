@@ -380,7 +380,7 @@ mod tests {
     fn text_worker_args_use_low_ram_local_server_defaults() {
         let manager = WorkerManager::new(WorkerConfig {
             server_path: PathBuf::from("bin/llama-server"),
-            model_path: PathBuf::from("models/Llama-3.2-1B-Instruct-IQ3_M.gguf"),
+            model_path: PathBuf::from("models/qwen3-0.6b-q4_k_m.gguf"),
             host: "127.0.0.1".to_string(),
             port: 18080,
             context_tokens: 4096,
@@ -405,7 +405,7 @@ mod tests {
     fn idle_state_transition_marks_ready_worker_as_idle_stopped() {
         let manager = WorkerManager::new(WorkerConfig::default_for_text_model(
             PathBuf::from("bin/llama-server"),
-            PathBuf::from("models/Llama-3.2-1B-Instruct-IQ3_M.gguf"),
+            PathBuf::from("models/qwen3-0.6b-q4_k_m.gguf"),
             &config(RuntimeMode::WorkerEco),
         ));
 

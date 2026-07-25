@@ -47,7 +47,7 @@
 
 - [x] **Step 1: Write failing tests** for default mode, env override, and invalid env fallback.
 - [x] **Step 2: Run** `cargo test runtime` and confirm tests fail because `src/runtime.rs` does not exist.
-- [x] **Step 3: Implement** `RuntimeConfig::from_env()` with defaults: `Spawn`, 4096 raw context, 120 second idle worker timeout, 1000 MB RAM target.
+- [x] **Step 3: Implement** `RuntimeConfig::from_env()` with defaults: `Spawn`, 3072 raw context, 120 second idle worker timeout, 1000 MB RAM target.
 - [x] **Step 4: Export** `pub mod runtime;` from `src/lib.rs`.
 - [x] **Step 5: Run** `cargo test runtime` and commit `feat: add runtime configuration`.
 

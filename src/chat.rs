@@ -77,7 +77,7 @@ pub async fn run_chat_interactive(brain: EdgeBrain, router: NeedleRouter) {
                     .unwrap_or_else(|e| format!("Error: {}", e))
             }
             _ => {
-                // Default: use Llama-1B reasoner (conversational)
+                // Default: use the configured reasoner model (conversational)
                 let system_prompt = format!(
                     "You are MIVI-V2, a helpful, concise AI assistant. Be friendly and informative.\n\nConversation history:\n{}",
                     if history_context.is_empty() { "No prior conversation yet.".to_string() } else { history_context }

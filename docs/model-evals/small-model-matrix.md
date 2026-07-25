@@ -6,8 +6,8 @@ MIVI exposes only `model: mivi` to agents. Internal model swaps must be judged b
 
 | Role | Current Model | File | Purpose | Status |
 | --- | --- | --- | --- | --- |
-| Chat/reasoning | Llama 3.2 1B Instruct IQ3_M | `models/Llama-3.2-1B-Instruct-IQ3_M.gguf` | General chat, reasoning, agent instructions | Active baseline |
-| Coding | Qwen 2.5 0.5B Instruct Q2_K | `models/qwen2.5-0.5b-instruct-q2_k.gguf` | Code drafting and verifier loop | Active baseline |
+| Chat/reasoning | Qwen3 0.6B Q4_K_M | `models/qwen3-0.6b-q4_k_m.gguf` | General chat, reasoning, agent instructions | Active default |
+| Coding | Qwen 2.5 0.5B Instruct Q4_K_M | `models/qwen2.5-0.5b-instruct-q4_k_m.gguf` | Code drafting, tool JSON, and verifier loop | Active default |
 | Vision | MiniCPM-V 4.6 Q4_K_M + mmproj | `models/MiniCPM-V-4.6-Q4_K_M.gguf` | Image understanding | Lazy baseline |
 
 ## Candidate Rules
@@ -24,7 +24,7 @@ MIVI exposes only `model: mivi` to agents. Internal model swaps must be judged b
 | Llama 3.2 1B Instruct | IQ3_M | 0 spawn / 849 worker | pass | n/a | pass | pass via tool prompt | pass | pass | 33-3824 | keep | Final eval `model-eval-results/small-model-20260724-232007.jsonl`; Cargo-cache maintenance prompts now use a verified safe playbook before model fallback. |
 | Qwen 2.5 0.5B Instruct | Q2_K | included in spawn verifier | n/a | pass | n/a | n/a | n/a | n/a | 1309 | keep | Coding passed with verifier repair fallback; output executed and printed `5`. |
 | Qwen 2.5 0.5B Instruct | Q4_K_M | pending RSS | pass | pass | pass | pass | pass | pass | 0-1754 eval rows | passed candidate | `model-candidates-20260725-220000.jsonl`; passed all agent workflow and small-model eval rows after v0.0.5 identity and deterministic single-tool guards. |
-| Qwen3 0.6B | Q4_K_M | 996 MB at 4K / 1240 MB at 8K direct CLI; 992 MB worker | pass | n/a | pass | pass via guard | pass | pass | 0-6522 eval rows at 4K | passed reasoner candidate, not default yet | `model-candidates-20260725-234518.jsonl`; passed as reasoner with Qwen2.5 0.5B Q4 coder at `MIVI_CONTEXT_BUDGET=4096`. Do not use as coder yet: all-text candidate failed coding by outputting `Hello, World!` instead of `5`. |
+| Qwen3 0.6B | Q4_K_M | 935 MB at 3K / 996 MB at 4K / 1240 MB at 8K direct CLI; 992 MB worker | pass | n/a | pass | pass via guard | pass | pass | 0-6066 eval rows at 3K | active reasoner default | `model-candidates-20260726-013901.jsonl`; passed as reasoner with Qwen2.5 0.5B Q4 coder at `MIVI_CONTEXT_BUDGET=3072`. Do not use as coder yet: all-text candidate failed coding by outputting `Hello, World!` instead of `5`. |
 | Qwen 2.5 1.5B Instruct | Q2_K | 878 spawn peak observed | timeout | n/a | pass via verified guard | fail | pass | pass | 45848 total candidate run | reject | `model-candidates-20260725-204613.jsonl`; timed out on agent chat/tool-json under 30s and produced malformed weather tool JSON in small eval. |
 | Qwen 3 small instruct | GGUF low-bit | pending | pending | pending | pending | pending | pending | pending | pending | candidate | Prioritize JSON/tool strength. |
 | SmolLM small instruct | GGUF low-bit | pending | pending | pending | pending | pending | pending | pending | pending | candidate | Check 128K/effective context behavior. |
@@ -104,6 +104,8 @@ Measured on 2026-07-25 with `MIVI_CANDIDATES_FILE=/tmp/mivi-qwen3-candidates.jso
 
 Initial summary: `model-eval-results/model-candidates-20260725-232346.jsonl`.
 4K context summary: `model-eval-results/model-candidates-20260725-234518.jsonl`.
+3K context summary: `model-eval-results/model-candidates-20260726-013901.jsonl`.
+Promoted default summary: `model-eval-results/model-candidates-20260726-014313.jsonl`.
 
 Results:
 
@@ -111,21 +113,23 @@ Results:
 | --- | --- | --- | --- |
 | `qwen3-06b-reasoner-qwen25q4-coder` | Qwen3 reasoner + Qwen2.5 Q4 coder | pass | Agent workflows and small-model evals fully passed. Long tool-output reasoning was the slowest row at 7072 ms. |
 | `qwen3-06b-reasoner-qwen25q4-coder-4k` | Qwen3 reasoner + Qwen2.5 Q4 coder, `MIVI_CONTEXT_BUDGET=4096` | pass | Agent workflows and small-model evals fully passed in `model-candidates-20260725-234518.jsonl`; long tool-output reasoning was the slowest row at 6522 ms. |
+| `qwen3-06b-reasoner-qwen25q4-coder-3k` | Qwen3 reasoner + Qwen2.5 Q4 coder, `MIVI_CONTEXT_BUDGET=3072` | pass | Agent workflows and small-model evals fully passed in `model-candidates-20260726-013901.jsonl`; direct CLI peak RSS dropped to 935080 KB. |
+| `default-qwen3-qwen25q4` | Built-in default split | pass | Agent workflows and small-model evals fully passed in `model-candidates-20260726-014313.jsonl`; total run 17965 ms. |
 | `qwen3-06b-q4-alltext` | Qwen3 reasoner + Qwen3 coder | fail | Chat, reasoning, tools, context, and RAG passed, but coding failed by producing `Hello, World!` instead of printing `5`. |
 
 Decision: keep Qwen3 0.6B Q4_K_M as the next thinking/reasoner candidate, but keep Qwen2.5 0.5B Q4_K_M as coder/tool model. Before making Qwen3 the default reasoner, measure RSS in `spawn`, `worker-eco`, and `worker-hot`.
 
 ## Qwen3 Reasoner Runtime Benchmark
 
-Measured on 2026-07-25 with `MIVI_REASONER_MODEL=models/qwen3-0.6b-q4_k_m.gguf MIVI_CODER_MODEL=models/qwen2.5-0.5b-instruct-q4_k_m.gguf bash scripts/bench_runtime.sh`.
+Measured on 2026-07-26 with the built-in defaults: Qwen3 0.6B Q4_K_M reasoner, Qwen2.5 0.5B Q4_K_M coder, and 3072 raw context budget.
 
-Benchmark output: `benchmarks/runtime-20260725-233522.jsonl`.
+Benchmark output: `benchmarks/runtime-20260726-014455.jsonl`.
 
 | Mode | Chat | Coding | Tool | RAG | Vision Skip | Peak Process Tree RSS | Peak Worker RSS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `spawn` | 5846 ms | 2302 ms | 16 ms | 27 ms | 8261 ms | 7.1 MB server-side only | 0 MB |
-| `worker-eco` | 3974 ms | 1576 ms | 16 ms | 9 ms | 5199 ms | 999.6 MB | 992.4 MB |
-| `worker-hot` | 3876 ms | 1627 ms | 10 ms | 12 ms | 6537 ms | 999.2 MB | 992.2 MB |
+| `spawn` | 4279 ms | 2048 ms | 15 ms | 24 ms | 6084 ms | 7.3 MB server-side only | 0 MB |
+| `worker-eco` | 3141 ms | 1171 ms | 9 ms | 9 ms | 4954 ms | 939.5 MB | 932.1 MB |
+| `worker-hot` | 2921 ms | 1437 ms | 10 ms | 18 ms | 4303 ms | 938.5 MB | 931.2 MB |
 
 Direct `llama-cli` peak RSS for Qwen3 0.6B Q4_K_M:
 
@@ -133,5 +137,6 @@ Direct `llama-cli` peak RSS for Qwen3 0.6B Q4_K_M:
 | ---: | ---: | --- |
 | 8192 | 1239716 KB | over target |
 | 4096 | 995756 KB | barely under target |
+| 3072 | 935080 KB | recommended cap |
 
-Decision: Qwen3 0.6B Q4_K_M is behaviorally good as reasoner, but its 4K raw context is already near the 1000 MB ceiling and 8K exceeds it. Keep MIVI's effective 128K through context compression, OKF memory, and RAG. Use `MIVI_REASONER_CONTEXT_SIZE` or `MIVI_CONTEXT_BUDGET` to cap raw context before promoting Qwen3 to default.
+Decision: Qwen3 0.6B Q4_K_M is behaviorally good as reasoner. Use a 3072 raw context cap for practical RAM headroom; 4096 is too close to the 1000 MB ceiling and 8192 exceeds it. Keep MIVI's effective 128K through context compression, OKF memory, and RAG. `q4_k_s` and `q4_0` were tested for disk-size/RAM savings, but they peaked slightly above 1000 MB at 4096 context and were rejected locally.

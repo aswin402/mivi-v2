@@ -161,11 +161,11 @@ impl EdgeBrain {
         let models_dir = base_dir.join("models");
         let llama_path = model_path_from_env(
             "MIVI_REASONER_MODEL",
-            models_dir.join("Llama-3.2-1B-Instruct-IQ3_M.gguf"),
+            models_dir.join("qwen3-0.6b-q4_k_m.gguf"),
         );
         let qwen_path = model_path_from_env(
             "MIVI_CODER_MODEL",
-            models_dir.join("qwen2.5-0.5b-instruct-q2_k.gguf"),
+            models_dir.join("qwen2.5-0.5b-instruct-q4_k_m.gguf"),
         );
         let minicpm_path = model_path_from_env(
             "MIVI_VISION_MODEL",
@@ -302,16 +302,16 @@ impl EdgeBrain {
     }
 
     /// Speculative Decoding (ds4 DwarfStar pattern):
-    /// Uses Qwen-0.5B to draft tokens fast, then uses Llama-1B to verify.
+    /// Uses the configured coder to draft tokens fast, then uses the configured reasoner to verify.
     pub fn query_speculative(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
-        println!("[DS4 SPECULATIVE] Drafting with Qwen 0.5B...");
+        println!("[DS4 SPECULATIVE] Drafting with configured coder...");
         let draft = self.query_coder(prompt, system_prompt)?;
 
         if draft.trim().is_empty() {
             return self.query_reasoner(prompt, system_prompt);
         }
 
-        println!("[DS4 SPECULATIVE] Verifying draft with Llama 1B...");
+        println!("[DS4 SPECULATIVE] Verifying draft with configured reasoner...");
         let verify_prompt = format!(
             "Verify and improve this response for accuracy:\nUSER: {}\nPROPOSED RESPONSE:\n{}\nIf accurate, output the response as is. Otherwise output the corrected version.",
             prompt, draft
@@ -330,8 +330,8 @@ impl EdgeBrain {
             runtime_config.context.max_input_tokens,
         );
         let eff_context =
-            if self.ultra_low_ram && raw_context.parse::<usize>().unwrap_or(4096) > 4096 {
-                "4096".to_string()
+            if self.ultra_low_ram && raw_context.parse::<usize>().unwrap_or(3072) > 3072 {
+                "3072".to_string()
             } else {
                 raw_context
             };

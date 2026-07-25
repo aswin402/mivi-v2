@@ -84,7 +84,7 @@ impl AgentOrchestrator {
     }
 
     /// Check if prompt is conversational (not a coding task).
-    /// Returns true if the intent is CHAT — meaning route to Llama-1B directly,
+    /// Returns true if the intent is CHAT — meaning route to the configured reasoner directly,
     /// not through the code-generation pipeline.
     fn is_conversational(&self, request: &str) -> bool {
         self.router.classify_intent(request).0 == "CHAT"
@@ -127,11 +127,11 @@ impl AgentOrchestrator {
 
     pub async fn execute_plan(&self, request: &str) -> (bool, String) {
         // --- Conversational fast-path ---
-        // If the prompt is a chat/QA intent, route directly to Llama-1B
+        // If the prompt is a chat/QA intent, route directly to the configured reasoner
         // instead of trying to generate + execute code.
         if self.is_conversational(request) {
             println!(
-                "[Orchestrator] Conversational prompt detected -> routing to Llama-1B directly"
+                "[Orchestrator] Conversational prompt detected -> routing to configured reasoner directly"
             );
             let response = self
                 .brain
@@ -161,7 +161,7 @@ impl AgentOrchestrator {
         let default_lang = detect_default_language(request);
 
         let steps = if is_complex {
-            println!("[SAKANA FUGU ROUTER] Complex task detected -> Engaging Llama 1B Planner...");
+            println!("[SAKANA FUGU ROUTER] Complex task detected -> Engaging configured reasoner planner...");
             let system_prompt = "You are the Orchestrator Brain. Break down the user's request into the MINIMAL number of necessary executable coding steps (1 to 3 steps max).\nRespond ONLY with a valid JSON array of step objects inside a ```json ... ``` block.\nEach step object must have keys:\n- 'step': integer\n- 'description': string description of what to write\n- 'language': string ('python' or 'javascript')";
 
             let plan_opt = if let Ok(raw_plan) = self.brain.query_reasoner(request, system_prompt) {

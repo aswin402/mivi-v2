@@ -54,14 +54,14 @@ MIVI supports three runtime modes through environment variables:
 | Variable | Values | Default | Purpose |
 | :--- | :--- | :--- | :--- |
 | `MIVI_RUNTIME_MODE` | `spawn`, `worker-eco`, `worker-hot` | `spawn` | Select process-per-request or persistent text worker mode |
-| `MIVI_CONTEXT_BUDGET` | integer tokens, minimum `1024` | `4096` | Sets the bounded prompt pack and default raw text-worker/CLI context budget |
+| `MIVI_CONTEXT_BUDGET` | integer tokens, minimum `1024` | `3072` | Sets the bounded prompt pack and default raw text-worker/CLI context budget |
 | `MIVI_REASONER_CONTEXT_SIZE` | integer tokens, minimum `1024` | `MIVI_CONTEXT_BUDGET` | Overrides spawn-mode reasoner `llama-cli` context size |
 | `MIVI_CODER_CONTEXT_SIZE` | integer tokens, minimum `1024` | `MIVI_CONTEXT_BUDGET` | Overrides spawn-mode coder `llama-cli` context size |
 | `MIVI_CLI_TIMEOUT_SECS` | positive integer seconds | `180` | Kills stalled `llama-cli` subprocesses |
 | `MIVI_WORKER_IDLE_SECS` | positive integer seconds | `120` | Idle sleep/stop budget for worker modes |
 | `MIVI_WORKER_PORT` | local TCP port | `18080` | Internal `llama-server` worker port |
-| `MIVI_REASONER_MODEL` | GGUF path | `models/Llama-3.2-1B-Instruct-IQ3_M.gguf` | Override internal chat/reasoning model for candidate evals |
-| `MIVI_CODER_MODEL` | GGUF path | `models/qwen2.5-0.5b-instruct-q2_k.gguf` | Override internal coding model for candidate evals |
+| `MIVI_REASONER_MODEL` | GGUF path | `models/qwen3-0.6b-q4_k_m.gguf` | Override internal chat/reasoning model for candidate evals |
+| `MIVI_CODER_MODEL` | GGUF path | `models/qwen2.5-0.5b-instruct-q4_k_m.gguf` | Override internal coding model for candidate evals |
 | `MIVI_VISION_MODEL` | GGUF path | `models/MiniCPM-V-4.6-Q4_K_M.gguf` | Override lazy vision model |
 | `MIVI_VISION_PROJECTOR` | GGUF path | `models/mmproj-MiniCPM-V-4.6-Q8_0.gguf` | Override lazy vision projector |
 | `MIVI_TRACE` | `1`, `true`, `yes`, `on` | off | Enables compact per-request JSONL traces |

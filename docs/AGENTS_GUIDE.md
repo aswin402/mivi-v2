@@ -16,8 +16,8 @@ This guide explains how to connect external AI agents and IDE tools to **MIVI-V2
 External agents see only one model: **`mivi`**.
 
 Internally, MIVI auto-routes your request to the right SML (Small Model Logic):
-- **Chat/QA** → Llama-3.2-1B (reasoner)
-- **Code generation** → Qwen-2.5-0.5B (coder) via orchestrator
+- **Chat/QA** → Qwen3 0.6B Q4_K_M (reasoner)
+- **Code generation** → Qwen2.5 0.5B Q4_K_M (coder) via orchestrator
 - **Vision/image** → MiniCPM-V-4.6 (multimodal)
 
 You never need to specify these. Just use `mivi`.
@@ -177,7 +177,7 @@ External Agent → mivi (single model endpoint)
    CHAT/QA        CODE/VISION      MULTI_STEP
          │              │              │
          ▼              ▼              ▼
-   Llama-1B      Qwen-0.5B      Orchestrator
+   Qwen3-0.6B    Qwen2.5-0.5B      Orchestrator
    (reasoner)    (coder)        (plan → execute → verify)
 ```
 

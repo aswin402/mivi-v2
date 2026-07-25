@@ -1,6 +1,6 @@
 use std::env;
 
-const DEFAULT_CONTEXT_TOKENS: usize = 4096;
+const DEFAULT_CONTEXT_TOKENS: usize = 3072;
 const MIN_CONTEXT_TOKENS: usize = 1024;
 const DEFAULT_WORKER_IDLE_SECS: u64 = 120;
 const DEFAULT_RAM_TARGET_MB: usize = 1000;
@@ -115,11 +115,11 @@ mod tests {
         assert_eq!(config.mode, RuntimeMode::Spawn);
         assert_eq!(config.worker_idle_secs, 120);
         assert_eq!(config.ram_target_mb, 1000);
-        assert_eq!(config.context.max_input_tokens, 4096);
-        assert_eq!(config.context.recent_turn_tokens, 1536);
-        assert_eq!(config.context.retrieved_tokens, 1536);
-        assert_eq!(config.context.memory_tokens, 768);
-        assert_eq!(config.context.tool_tokens, 256);
+        assert_eq!(config.context.max_input_tokens, 3072);
+        assert_eq!(config.context.recent_turn_tokens, 1152);
+        assert_eq!(config.context.retrieved_tokens, 1152);
+        assert_eq!(config.context.memory_tokens, 576);
+        assert_eq!(config.context.tool_tokens, 192);
     }
 
     #[test]
@@ -155,7 +155,7 @@ mod tests {
 
         assert_eq!(config.mode, RuntimeMode::Spawn);
         assert_eq!(config.worker_idle_secs, 120);
-        assert_eq!(config.context.max_input_tokens, 4096);
+        assert_eq!(config.context.max_input_tokens, 3072);
 
         clear_runtime_env();
     }
