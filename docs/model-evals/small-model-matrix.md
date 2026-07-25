@@ -23,7 +23,7 @@ MIVI exposes only `model: mivi` to agents. Internal model swaps must be judged b
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
 | Llama 3.2 1B Instruct | IQ3_M | 0 spawn / 849 worker | pass | n/a | pass | pass via tool prompt | pass | pass | 33-3824 | keep | Final eval `model-eval-results/small-model-20260724-232007.jsonl`; Cargo-cache maintenance prompts now use a verified safe playbook before model fallback. |
 | Qwen 2.5 0.5B Instruct | Q2_K | included in spawn verifier | n/a | pass | n/a | n/a | n/a | n/a | 1309 | keep | Coding passed with verifier repair fallback; output executed and printed `5`. |
-| Qwen 2.5 small instruct | GGUF low-bit | pending | pending | pending | pending | pending | pending | pending | pending | candidate | Test after runtime path is stable. |
+| Qwen 2.5 1.5B Instruct | Q2_K | 878 spawn peak observed | timeout | n/a | pass via verified guard | fail | pass | pass | 45848 total candidate run | reject | `model-candidates-20260725-204613.jsonl`; timed out on agent chat/tool-json under 30s and produced malformed weather tool JSON in small eval. |
 | Qwen 3 small instruct | GGUF low-bit | pending | pending | pending | pending | pending | pending | pending | pending | candidate | Prioritize JSON/tool strength. |
 | SmolLM small instruct | GGUF low-bit | pending | pending | pending | pending | pending | pending | pending | pending | candidate | Check 128K/effective context behavior. |
 | TinyLlama-class instruct | GGUF low-bit | pending | pending | pending | pending | pending | pending | pending | pending | candidate | Only keep if tool calling is stable. |
@@ -81,3 +81,7 @@ Measured on 2026-07-25 with `bash scripts/eval_model_candidates.sh`. Baseline `L
 Summary: `model-eval-results/model-candidates-20260725-200233.jsonl`.
 Agent workflows: `model-eval-results/agent-workflows-20260725-200234.jsonl`.
 Small-model eval: `model-eval-results/small-model-20260725-200253.jsonl`.
+
+## Candidate Timeout Guard
+
+`MIVI_CLI_TIMEOUT_SECS` bounds each `llama-cli` subprocess. The Qwen 2.5 1.5B Q2_K candidate used `cli_timeout_secs: 30` and was rejected because tool JSON was slow/malformed despite fitting under the rough 1000 MB process RSS target.

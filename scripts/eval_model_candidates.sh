@@ -79,6 +79,7 @@ while IFS= read -r line; do
   role="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("role", "candidate"))' "$line")"
   reasoner="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("reasoner", ""))' "$line")"
   coder="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("coder", ""))' "$line")"
+  cli_timeout="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("cli_timeout_secs", "180"))' "$line")"
 
   if [[ -n "$reasoner" && ! -f "$reasoner" ]]; then
     write_row "$name" "$role" "$reasoner" "$coder" "missing reasoner model" "" 0 0
@@ -98,6 +99,7 @@ while IFS= read -r line; do
   MIVI_TRACE_PATH="$TRACE_PATH" \
   MIVI_REASONER_MODEL="${reasoner:-models/Llama-3.2-1B-Instruct-IQ3_M.gguf}" \
   MIVI_CODER_MODEL="${coder:-models/qwen2.5-0.5b-instruct-q2_k.gguf}" \
+  MIVI_CLI_TIMEOUT_SECS="$cli_timeout" \
   cargo run --release -- serve >"$OUT_DIR/${name}.server.log" 2>&1 &
   SERVER_PID="$!"
 
@@ -111,10 +113,10 @@ while IFS= read -r line; do
   ok=1
   agent_eval=""
   small_eval=""
-  if ! agent_eval="$(MIVI_TRACE=1 MIVI_TRACE_PATH="$TRACE_PATH" python3 scripts/eval_agent_workflows.py --url "$SERVER_URL" --trace-path "$TRACE_PATH")"; then
+  if ! agent_eval="$(MIVI_EVAL_ALLOW_FAILURES=0 MIVI_TRACE=1 MIVI_TRACE_PATH="$TRACE_PATH" python3 scripts/eval_agent_workflows.py --url "$SERVER_URL" --trace-path "$TRACE_PATH")"; then
     ok=0
   fi
-  if ! small_eval="$(MIVI_EVAL_SERVER_URL="$SERVER_URL" bash scripts/eval_small_models.sh)"; then
+  if ! small_eval="$(MIVI_EVAL_ALLOW_FAILURES=0 MIVI_EVAL_SERVER_URL="$SERVER_URL" bash scripts/eval_small_models.sh)"; then
     ok=0
   fi
 

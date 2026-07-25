@@ -55,6 +55,7 @@ MIVI supports three runtime modes through environment variables:
 | :--- | :--- | :--- | :--- |
 | `MIVI_RUNTIME_MODE` | `spawn`, `worker-eco`, `worker-hot` | `spawn` | Select process-per-request or persistent text worker mode |
 | `MIVI_CONTEXT_BUDGET` | integer tokens, minimum `1024` | `4096` | Sets the bounded prompt pack budget |
+| `MIVI_CLI_TIMEOUT_SECS` | positive integer seconds | `180` | Kills stalled `llama-cli` subprocesses |
 | `MIVI_WORKER_IDLE_SECS` | positive integer seconds | `120` | Idle sleep/stop budget for worker modes |
 | `MIVI_WORKER_PORT` | local TCP port | `18080` | Internal `llama-server` worker port |
 | `MIVI_REASONER_MODEL` | GGUF path | `models/Llama-3.2-1B-Instruct-IQ3_M.gguf` | Override internal chat/reasoning model for candidate evals |

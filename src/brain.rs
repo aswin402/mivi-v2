@@ -3,8 +3,10 @@ use crate::runtime::RuntimeConfig;
 use crate::worker::{WorkerConfig, WorkerManager};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub struct EdgeBrain {
@@ -71,6 +73,45 @@ fn scrub_generated_prompt_echo(text: &str) -> String {
 
 fn model_path_from_env(var: &str, default: PathBuf) -> PathBuf {
     env::var(var).map(PathBuf::from).unwrap_or(default)
+}
+
+fn cli_timeout() -> Duration {
+    env::var("MIVI_CLI_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(180))
+}
+
+fn command_output_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, String> {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|err| format!("Failed to execute llama-cli: {}", err))?;
+    let start = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().map_err(|err| err.to_string()),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "llama-cli timed out after {} seconds",
+                        timeout.as_secs()
+                    ));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(err) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(err.to_string());
+            }
+        }
+    }
 }
 
 impl EdgeBrain {
@@ -214,11 +255,11 @@ impl EdgeBrain {
             cmd.arg("--mmap");
         }
 
-        let output = match cmd.output() {
+        let output = match command_output_with_timeout(cmd, cli_timeout()) {
             Ok(output) => output,
             Err(e) => {
                 let _ = std::fs::remove_file(&prompt_file);
-                return Err(format!("Failed to execute llama-cli: {}", e));
+                return Err(e);
             }
         };
         let _ = std::fs::remove_file(&prompt_file);
@@ -287,11 +328,11 @@ impl EdgeBrain {
             cmd.arg("--mmap");
         }
 
-        let output = match cmd.output() {
+        let output = match command_output_with_timeout(cmd, cli_timeout()) {
             Ok(output) => output,
             Err(e) => {
                 let _ = std::fs::remove_file(&prompt_file);
-                return Err(format!("Failed to execute llama-cli: {}", e));
+                return Err(e);
             }
         };
         let _ = std::fs::remove_file(&prompt_file);
@@ -376,6 +417,15 @@ mod tests {
             clean_llama_cli_response("<|im_start|>assistant\nHello<|im_end|>"),
             "Hello"
         );
+    }
+
+    #[test]
+    fn cli_timeout_uses_env_when_present() {
+        env::set_var("MIVI_CLI_TIMEOUT_SECS", "7");
+        let timeout = cli_timeout();
+        env::remove_var("MIVI_CLI_TIMEOUT_SECS");
+
+        assert_eq!(timeout.as_secs(), 7);
     }
 
     #[test]
