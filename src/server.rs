@@ -486,6 +486,17 @@ async fn model_prompt_from_request(
     }
 }
 
+fn image_url_to_path(url: &str) -> String {
+    url.strip_prefix("file://").unwrap_or(url).to_string()
+}
+
+fn vision_response(brain: &EdgeBrain, image_path: &str, user_prompt: &str) -> String {
+    match brain.query_vision(image_path, user_prompt) {
+        Ok(res) => res,
+        Err(err) => format!("Vision error: {}", err),
+    }
+}
+
 /// Extract the latest real user prompt + optional image path.
 fn extract_content(req: &ChatCompletionRequest) -> (String, Option<String>) {
     let user_prompt = latest_user_prompt_text(req);
@@ -504,7 +515,7 @@ fn extract_content(req: &ChatCompletionRequest) -> (String, Option<String>) {
                     item.get("image_url")
                         .and_then(|v| v.get("url"))
                         .and_then(|v| v.as_str())
-                        .map(|url| url.to_string())
+                        .map(image_url_to_path)
                 })
             })
         });
@@ -1062,6 +1073,20 @@ async fn handle_chat_completions(
 
     // Streaming path.
     if req.stream.unwrap_or(false) {
+        if let Some(path) = image_path.as_deref() {
+            let answer = vision_response(&state.brain, path, &user_prompt);
+            let _ = trace_event(
+                &trace,
+                serde_json::json!({
+                    "kind": "final_response",
+                    "route": "streaming_vision",
+                    "finish_reason": "stream",
+                    "response_chars": answer.chars().count()
+                }),
+            );
+            return stream_text_response(answer, now).into_response();
+        }
+
         if let Some(answer) = verified_identity_answer(&user_prompt)
             .or_else(|| verified_memory_answer(&user_prompt))
             .or_else(|| verified_reasoning_answer(&user_prompt))
@@ -1100,14 +1125,13 @@ async fn handle_chat_completions(
 
     let (response_text, chosen_model, route) = if image_path.is_some() {
         let path = image_path.unwrap_or_default();
-        match state.brain.query_vision(&path, &user_prompt) {
-            Ok(res) => (res, MODEL_NAME.to_string(), "vision"),
-            Err(err) => (
-                format!("Vision error: {}", err),
-                MODEL_NAME.to_string(),
-                "vision_error",
-            ),
-        }
+        let response = vision_response(&state.brain, &path, &user_prompt);
+        let route = if response.starts_with("Vision error:") {
+            "vision_error"
+        } else {
+            "vision"
+        };
+        (response, MODEL_NAME.to_string(), route)
     } else if let Some(answer) = verified_identity_answer(&user_prompt) {
         (answer, MODEL_NAME.to_string(), "verified_identity")
     } else if let Some(answer) = verified_memory_answer(&user_prompt) {
@@ -1479,6 +1503,41 @@ mod tests {
         let (prompt, image_path) = extract_content(&req);
         assert_eq!(prompt, "hii");
         assert_eq!(image_path, None);
+    }
+
+    #[test]
+    fn extract_content_returns_image_path_from_multimodal_request() {
+        let mut req = tool_request("Describe image", None);
+        req.messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"text","text":"Describe image"},
+                {"type":"image_url","image_url":{"url":"/tmp/screenshot.png"}}
+            ]),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+
+        let (prompt, image_path) = extract_content(&req);
+        assert_eq!(prompt, "Describe image");
+        assert_eq!(image_path, Some("/tmp/screenshot.png".to_string()));
+    }
+
+    #[test]
+    fn extract_content_normalizes_file_image_urls() {
+        let mut req = tool_request("Describe image", None);
+        req.messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"text","text":"Describe image"},
+                {"type":"image_url","image_url":{"url":"file:///tmp/screenshot.png"}}
+            ]),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+
+        let (_, image_path) = extract_content(&req);
+        assert_eq!(image_path, Some("/tmp/screenshot.png".to_string()));
     }
 
     #[test]
