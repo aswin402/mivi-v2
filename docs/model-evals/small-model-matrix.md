@@ -24,6 +24,7 @@ MIVI exposes only `model: mivi` to agents. Internal model swaps must be judged b
 | Llama 3.2 1B Instruct | IQ3_M | 0 spawn / 849 worker | pass | n/a | pass | pass via tool prompt | pass | pass | 33-3824 | keep | Final eval `model-eval-results/small-model-20260724-232007.jsonl`; Cargo-cache maintenance prompts now use a verified safe playbook before model fallback. |
 | Qwen 2.5 0.5B Instruct | Q2_K | included in spawn verifier | n/a | pass | n/a | n/a | n/a | n/a | 1309 | keep | Coding passed with verifier repair fallback; output executed and printed `5`. |
 | Qwen 2.5 0.5B Instruct | Q4_K_M | pending RSS | pass | pass | pass | pass | pass | pass | 0-1754 eval rows | passed candidate | `model-candidates-20260725-220000.jsonl`; passed all agent workflow and small-model eval rows after v0.0.5 identity and deterministic single-tool guards. |
+| Qwen3 0.6B | Q4_K_M | pending RSS | pass | n/a | pass | pass via guard | pass | pass | 0-7072 eval rows | passed reasoner candidate | `model-candidates-20260725-232346.jsonl`; passed as reasoner with Qwen2.5 0.5B Q4 coder. Do not use as coder yet: all-text candidate failed coding by outputting `Hello, World!` instead of `5`. |
 | Qwen 2.5 1.5B Instruct | Q2_K | 878 spawn peak observed | timeout | n/a | pass via verified guard | fail | pass | pass | 45848 total candidate run | reject | `model-candidates-20260725-204613.jsonl`; timed out on agent chat/tool-json under 30s and produced malformed weather tool JSON in small eval. |
 | Qwen 3 small instruct | GGUF low-bit | pending | pending | pending | pending | pending | pending | pending | pending | candidate | Prioritize JSON/tool strength. |
 | SmolLM small instruct | GGUF low-bit | pending | pending | pending | pending | pending | pending | pending | pending | candidate | Check 128K/effective context behavior. |
@@ -96,3 +97,18 @@ Agent workflows: `model-eval-results/agent-workflows-20260725-214645.jsonl`.
 Small-model eval: `model-eval-results/small-model-20260725-214651.jsonl`.
 
 Final v0.0.5 result: `model-candidates-20260725-220000.jsonl` passed all candidate checks in 9173 ms total. Agent workflows: `agent-workflows-20260725-220005.jsonl`. Small-model eval: `small-model-20260725-220008.jsonl`. Earlier raw runs showed identity leakage and malformed JSON were the weak points; v0.0.5 handles those with verified identity and deterministic single-tool guards.
+
+## Qwen3 0.6B Q4_K_M Reasoner Candidate
+
+Measured on 2026-07-25 with `MIVI_CANDIDATES_FILE=/tmp/mivi-qwen3-candidates.jsonl bash scripts/eval_model_candidates.sh` after downloading `models/qwen3-0.6b-q4_k_m.gguf` from `Antigma/Qwen3-0.6B-GGUF`.
+
+Summary: `model-eval-results/model-candidates-20260725-232346.jsonl`.
+
+Results:
+
+| Candidate | Role | Result | Notes |
+| --- | --- | --- | --- |
+| `qwen3-06b-reasoner-qwen25q4-coder` | Qwen3 reasoner + Qwen2.5 Q4 coder | pass | Agent workflows and small-model evals fully passed. Long tool-output reasoning was the slowest row at 7072 ms. |
+| `qwen3-06b-q4-alltext` | Qwen3 reasoner + Qwen3 coder | fail | Chat, reasoning, tools, context, and RAG passed, but coding failed by producing `Hello, World!` instead of printing `5`. |
+
+Decision: keep Qwen3 0.6B Q4_K_M as the next thinking/reasoner candidate, but keep Qwen2.5 0.5B Q4_K_M as coder/tool model. Before making Qwen3 the default reasoner, measure RSS in `spawn`, `worker-eco`, and `worker-hot`.

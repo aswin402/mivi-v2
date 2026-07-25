@@ -30,6 +30,12 @@ def download_models():
             "target": os.path.join(models_dir, "Llama-3.2-1B-Instruct-IQ3_M.gguf")
         },
         {
+            "name": "Qwen3 0.6B Q4_K_M (Thinking Reasoner Candidate)",
+            "repo_id": "Antigma/Qwen3-0.6B-GGUF",
+            "filename": "qwen3-0.6b-q4_k_m.gguf",
+            "target": os.path.join(models_dir, "qwen3-0.6b-q4_k_m.gguf")
+        },
+        {
             "name": "MiniCPM-V 4.6 (Vision Model)",
             "repo_id": "ggml-org/MiniCPM-V-4.6-GGUF",
             "filename": "MiniCPM-V-4.6-Q4_K_M.gguf",

@@ -127,7 +127,7 @@ Compare internal GGUF candidates while keeping the external API model as `mivi`:
 bash scripts/eval_model_candidates.sh
 ```
 
-Set `MIVI_CANDIDATES_FILE` to a JSONL file with `name`, `reasoner`, and `coder` fields to test additional model files.
+Set `MIVI_CANDIDATES_FILE` to a JSONL file with `name`, `reasoner`, and `coder` fields to test additional model files. Current passed candidates include Qwen2.5 0.5B Q4_K_M for coder/tool use and Qwen3 0.6B Q4_K_M as a reasoner candidate with the Qwen2.5 coder.
 
 ## Latest Runtime Benchmark
 
