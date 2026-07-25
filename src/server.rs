@@ -417,6 +417,57 @@ fn verified_identity_answer(query: &str) -> Option<String> {
     None
 }
 
+fn asks_tool_inventory(query: &str) -> bool {
+    let q = query.to_ascii_lowercase();
+    (q.contains("what") || q.contains("list") || q.contains("show"))
+        && (q.contains("tools") || q.contains("tool") || q.contains("mcps") || q.contains("mcp"))
+        && !q.contains("use the")
+        && !q.contains("call the")
+        && !q.contains("run ")
+}
+
+fn verified_tool_inventory_answer(req: &ChatCompletionRequest, query: &str) -> Option<String> {
+    if !asks_tool_inventory(query) {
+        return None;
+    }
+
+    let tools = req.tools.as_deref().unwrap_or(&[]);
+    if tools.is_empty() {
+        return Some(
+            "I do not see any callable tools in this request. If OpenCode has MCP servers, it must expose them to MIVI as tool schemas for me to use or list them."
+                .to_string(),
+        );
+    }
+
+    let mut names = tool_names(tools);
+    names.sort_unstable();
+    names.dedup();
+    let shown: Vec<String> = names.iter().take(16).cloned().collect();
+    let more = names.len().saturating_sub(shown.len());
+    let suffix = if more > 0 {
+        format!(" plus {} more", more)
+    } else {
+        String::new()
+    };
+
+    let q = query.to_ascii_lowercase();
+    if q.contains("mcp") {
+        Some(format!(
+            "OpenCode provided {} callable tools in this request. I can see tool schemas, but MCP server names are not exposed separately unless OpenCode includes them in tool names/descriptions. Visible tools include: {}{}.",
+            names.len(),
+            shown.join(", "),
+            suffix
+        ))
+    } else {
+        Some(format!(
+            "OpenCode provided {} callable tools in this request. Visible tools include: {}{}.",
+            names.len(),
+            shown.join(", "),
+            suffix
+        ))
+    }
+}
+
 fn verified_reasoning_answer(query: &str) -> Option<String> {
     let q = query.to_lowercase();
     let cargo_cache_issue = q.contains("cargo")
@@ -1087,7 +1138,8 @@ async fn handle_chat_completions(
             return stream_text_response(answer, now).into_response();
         }
 
-        if let Some(answer) = verified_identity_answer(&user_prompt)
+        if let Some(answer) = verified_tool_inventory_answer(&req, &user_prompt)
+            .or_else(|| verified_identity_answer(&user_prompt))
             .or_else(|| verified_memory_answer(&user_prompt))
             .or_else(|| verified_reasoning_answer(&user_prompt))
             .or_else(|| verified_rag_answer_from_prompt(&user_prompt, &model_user_prompt))
@@ -1132,6 +1184,8 @@ async fn handle_chat_completions(
             "vision"
         };
         (response, MODEL_NAME.to_string(), route)
+    } else if let Some(answer) = verified_tool_inventory_answer(&req, &user_prompt) {
+        (answer, MODEL_NAME.to_string(), "verified_tools")
     } else if let Some(answer) = verified_identity_answer(&user_prompt) {
         (answer, MODEL_NAME.to_string(), "verified_identity")
     } else if let Some(answer) = verified_memory_answer(&user_prompt) {
@@ -1425,6 +1479,35 @@ mod tests {
         req.tools = Some(vec![server_tool("write", "Write a file to the workspace")]);
 
         assert!(!has_tool_involvement(&req));
+    }
+
+    #[test]
+    fn tool_inventory_question_summarizes_request_tools_without_tool_generation() {
+        let mut req = tool_request("what are tools u have", None);
+        req.tools = Some(vec![
+            server_tool("read", "Read a file"),
+            server_tool("apply_patch", "Edit files by applying a patch"),
+            server_tool("bash", "Run a shell command"),
+        ]);
+
+        assert!(!has_tool_involvement(&req));
+        let answer = verified_tool_inventory_answer(&req, "what are tools u have")
+            .expect("tool inventory answer expected");
+        assert!(answer.contains("3 callable tools"));
+        assert!(answer.contains("read"));
+        assert!(answer.contains("apply_patch"));
+        assert!(answer.contains("bash"));
+    }
+
+    #[test]
+    fn mcp_inventory_question_explains_mcp_server_names_are_not_exposed() {
+        let mut req = tool_request("what are the mcps u have", None);
+        req.tools = Some(vec![server_tool("mcp_memory_search", "Search memory")]);
+
+        let answer = verified_tool_inventory_answer(&req, "what are the mcps u have")
+            .expect("mcp inventory answer expected");
+        assert!(answer.contains("MCP server names"));
+        assert!(answer.contains("mcp_memory_search"));
     }
 
     #[test]
