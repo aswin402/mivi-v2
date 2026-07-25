@@ -57,6 +57,7 @@ MIVI supports three runtime modes through environment variables:
 | `MIVI_CONTEXT_BUDGET` | integer tokens, minimum `1024` | `3072` | Sets the bounded prompt pack and default raw text-worker/CLI context budget |
 | `MIVI_REASONER_CONTEXT_SIZE` | integer tokens, minimum `1024` | `MIVI_CONTEXT_BUDGET` | Overrides spawn-mode reasoner `llama-cli` context size |
 | `MIVI_CODER_CONTEXT_SIZE` | integer tokens, minimum `1024` | `MIVI_CONTEXT_BUDGET` | Overrides spawn-mode coder `llama-cli` context size |
+| `MIVI_REASONING_MODE` | `auto`, `think`, `no_think` | `auto` | Controls Qwen3 reasoner thinking directive; `auto` uses `/no_think` for normal prompts and `/think` only for explicit deep-reasoning prompts |
 | `MIVI_CLI_TIMEOUT_SECS` | positive integer seconds | `180` | Kills stalled `llama-cli` subprocesses |
 | `MIVI_WORKER_IDLE_SECS` | positive integer seconds | `120` | Idle sleep/stop budget for worker modes |
 | `MIVI_WORKER_PORT` | local TCP port | `18080` | Internal `llama-server` worker port |

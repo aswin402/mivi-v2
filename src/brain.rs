@@ -20,6 +20,102 @@ pub struct EdgeBrain {
     pub text_worker: Arc<WorkerManager>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReasoningMode {
+    Auto,
+    Think,
+    NoThink,
+}
+
+impl ReasoningMode {
+    fn from_env() -> Self {
+        match env::var("MIVI_REASONING_MODE")
+            .unwrap_or_else(|_| "auto".to_string())
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "think" => Self::Think,
+            "no_think" | "nothink" | "no-think" => Self::NoThink,
+            _ => Self::Auto,
+        }
+    }
+}
+
+fn should_think_for_prompt(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    [
+        "debug",
+        "error",
+        "failed",
+        "failure",
+        "panic",
+        "traceback",
+        "review",
+        "security",
+        "refactor",
+        "plan",
+        "architecture",
+        "reason",
+        "analyze",
+        "diagnose",
+        "fix",
+        "bug",
+        "test failed",
+        "compiler",
+        "cargo",
+        "typescript",
+        "rustc",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn reasoning_directive(prompt: &str) -> &'static str {
+    match ReasoningMode::from_env() {
+        ReasoningMode::Think => "/think",
+        ReasoningMode::NoThink => "/no_think",
+        ReasoningMode::Auto if should_think_for_prompt(prompt) => "/think",
+        ReasoningMode::Auto => "/no_think",
+    }
+}
+
+fn apply_reasoning_directive(prompt: &str) -> String {
+    let trimmed = prompt.trim_start();
+    if trimmed.starts_with("/think") || trimmed.starts_with("/no_think") {
+        prompt.to_string()
+    } else {
+        format!("{}\n{}", reasoning_directive(prompt), prompt)
+    }
+}
+
+fn strip_delimited_block(text: &str, open: &str, close: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    loop {
+        let lower = rest.to_ascii_lowercase();
+        if let Some(start) = lower.find(open) {
+            out.push_str(&rest[..start]);
+            let after_open = &rest[start + open.len()..];
+            let after_lower = after_open.to_ascii_lowercase();
+            if let Some(end) = after_lower.find(close) {
+                rest = &after_open[end + close.len()..];
+            } else {
+                break;
+            }
+        } else {
+            out.push_str(rest);
+            break;
+        }
+    }
+    out.trim().to_string()
+}
+
+fn strip_think_blocks(text: &str) -> String {
+    let without_xml = strip_delimited_block(text, "<think>", "</think>");
+    strip_delimited_block(&without_xml, "[start thinking]", "[end thinking]")
+}
+
 fn clean_llama_cli_response(stdout: &str) -> String {
     let response = if let Some(pos) = stdout.rfind("<|im_start|>assistant") {
         &stdout[pos + "<|im_start|>assistant".len()..]
@@ -40,7 +136,7 @@ fn clean_llama_cli_response(stdout: &str) -> String {
         .trim()
         .to_string();
 
-    scrub_generated_prompt_echo(&clean)
+    strip_think_blocks(&scrub_generated_prompt_echo(&clean))
 }
 
 fn scrub_generated_prompt_echo(text: &str) -> String {
@@ -283,9 +379,10 @@ impl EdgeBrain {
             "MIVI_REASONER_CONTEXT_SIZE",
             runtime_config.context.max_input_tokens,
         );
+        let effective_prompt = apply_reasoning_directive(prompt);
         self.run_cli(
             &self.llama_path,
-            prompt,
+            &effective_prompt,
             system_prompt,
             "0.2",
             &context_size,
@@ -314,7 +411,7 @@ impl EdgeBrain {
         println!("[DS4 SPECULATIVE] Verifying draft with configured reasoner...");
         let verify_prompt = format!(
             "Verify and improve this response for accuracy:\nUSER: {}\nPROPOSED RESPONSE:\n{}\nIf accurate, output the response as is. Otherwise output the corrected version.",
-            prompt, draft
+            apply_reasoning_directive(prompt), draft
         );
 
         match self.query_reasoner(&verify_prompt, system_prompt) {
@@ -401,7 +498,7 @@ impl EdgeBrain {
             .unwrap_or(response)
             .trim();
 
-        Ok(clean.to_string())
+        Ok(strip_think_blocks(clean))
     }
 
     pub fn query_vision(&self, image_path: &str, prompt: &str) -> Result<String, String> {
@@ -451,6 +548,51 @@ mod tests {
         assert_eq!(
             clean_llama_cli_response("<|im_start|>assistant\nHello<|im_end|>"),
             "Hello"
+        );
+    }
+
+    #[test]
+    fn reasoning_directive_defaults_to_no_think_for_simple_prompts() {
+        env::remove_var("MIVI_REASONING_MODE");
+        assert_eq!(reasoning_directive("Say hello."), "/no_think");
+    }
+
+    #[test]
+    fn reasoning_directive_auto_thinks_for_debug_prompts() {
+        env::remove_var("MIVI_REASONING_MODE");
+        assert_eq!(
+            reasoning_directive("Debug this Rust compiler error."),
+            "/think"
+        );
+    }
+
+    #[test]
+    fn reasoning_directive_env_override_wins() {
+        env::set_var("MIVI_REASONING_MODE", "no_think");
+        assert_eq!(reasoning_directive("Debug this failure."), "/no_think");
+        env::set_var("MIVI_REASONING_MODE", "think");
+        assert_eq!(reasoning_directive("Say hello."), "/think");
+        env::remove_var("MIVI_REASONING_MODE");
+    }
+
+    #[test]
+    fn strip_think_blocks_removes_private_reasoning() {
+        assert_eq!(
+            strip_think_blocks("<think>private notes</think>Final answer"),
+            "Final answer"
+        );
+        assert_eq!(strip_think_blocks("A <think>hidden</think> B"), "A  B");
+    }
+
+    #[test]
+    fn apply_reasoning_directive_preserves_explicit_user_directive() {
+        assert_eq!(
+            apply_reasoning_directive(
+                "/think
+Debug it."
+            ),
+            "/think
+Debug it."
         );
     }
 

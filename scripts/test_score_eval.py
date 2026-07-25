@@ -36,6 +36,11 @@ class ScoreEvalTests(unittest.TestCase):
         self.assertIn("missing manifest safety warning", result["reasons"])
 
 
+    def test_thought_leakage_is_rejected(self):
+        result = score_eval("chat", response("[Start thinking]private[End thinking]I am MIVI."))
+        self.assertFalse(result["semantic_ok"])
+        self.assertIn("thought leakage", result["reasons"])
+
     def test_shell_tool_requires_npm_test_command(self):
         result = score_eval(
             "tool-shell",

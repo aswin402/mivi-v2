@@ -140,3 +140,13 @@ Direct `llama-cli` peak RSS for Qwen3 0.6B Q4_K_M:
 | 3072 | 935080 KB | recommended cap |
 
 Decision: Qwen3 0.6B Q4_K_M is behaviorally good as reasoner. Use a 3072 raw context cap for practical RAM headroom; 4096 is too close to the 1000 MB ceiling and 8192 exceeds it. Keep MIVI's effective 128K through context compression, OKF memory, and RAG. `q4_k_s` and `q4_0` were tested for disk-size/RAM savings, but they peaked slightly above 1000 MB at 4096 context and were rejected locally.
+
+## Qwen3 Reasoning Mode Control
+
+Measured on 2026-07-26 with `MIVI_REASONING_MODE=auto bash scripts/eval_model_candidates.sh` after adding conservative Qwen3 reasoning directives and thought stripping.
+
+Summary: `model-eval-results/model-candidates-20260726-015412.jsonl`.
+Agent workflows: `model-eval-results/agent-workflows-20260726-015421.jsonl`.
+Small-model eval: `model-eval-results/small-model-20260726-015428.jsonl`.
+
+Result: all rows passed with zero `<think>`, `</think>`, `[Start thinking]`, or `[End thinking]` leakage. `auto` uses `/no_think` for normal agent prompts and reserves `/think` for explicit deep-reasoning prompts; manual overrides are `MIVI_REASONING_MODE=think` and `MIVI_REASONING_MODE=no_think`.

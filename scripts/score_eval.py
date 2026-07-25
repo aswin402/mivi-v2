@@ -21,6 +21,8 @@ def score_eval(kind, response_text):
     content, tool_calls = extract_message(response_text)
     text = content.lower()
     reasons = []
+    if "<think>" in text or "</think>" in text or "[start thinking]" in text or "[end thinking]" in text:
+        reasons.append("thought leakage")
 
     if kind == "chat":
         if "mivi" not in text:
@@ -33,6 +35,9 @@ def score_eval(kind, response_text):
             reasons.append("missing cargo fetch")
         if "do not delete project `cargo.toml` or `cargo.lock`" not in text:
             reasons.append("missing manifest safety warning")
+    elif kind == "reasoning-debug":
+        if "scope" not in text and "declare" not in text and "defined" not in text:
+            reasons.append("missing scope diagnosis")
     elif kind == "tool-json":
         if len(tool_calls) != 1:
             reasons.append("expected one tool call")

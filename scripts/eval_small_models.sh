@@ -14,6 +14,7 @@ PROMPTS=(
   "chat|Say who you are in one short sentence."
   "coding|Write Python code that prints the sum of 2 and 3."
   "reasoning|A tool failed because Cargo cache is corrupted. Explain the safest fix in two steps."
+  "reasoning-debug|Debug this Rust compiler error and summarize the fix in two steps: error[E0425]: cannot find value x in this scope."
   "tool-json|Use the get_weather tool for Paris."
   "tool-shell|Run npm test."
   "context|Using the project memory, what model name should agents call?"
