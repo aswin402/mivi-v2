@@ -8,7 +8,7 @@
 
 **MIVI-V2 (v0.0.5)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
 
-It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for autonomous AI agents including **Hermes Agent**, **OpenCode Agent**, **AutoGen**, **CrewAI**, **VS Code (Continue.dev)**, and **Cursor IDE**.
+It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for autonomous AI agents including **Hermes Agent**, **OpenCode Agent**, **OpenZ**, **AutoGen**, **CrewAI**, **VS Code (Continue.dev)**, and **Cursor IDE**.
 
 ---
 
@@ -160,13 +160,15 @@ MIVI keeps the external model name as `mivi` in every mode. Context is bounded t
 
 ---
 
-## 🤖 Connecting External Agents (Hermes, OpenCode, VS Code)
+## 🤖 Connecting External Agents (Hermes, OpenCode, OpenZ, VS Code)
 
 Configure your agent environment or client to use MIVI-V2 as your local backend:
 
 * **Base URL:** `http://localhost:8000/v1`
 * **API Key:** `local`
 * **Models Available:** `mivi` (auto-routes internally to best SML)
+
+For OpenZ, use MIVI as an OpenAI-compatible Chat Completions backend with base URL `http://127.0.0.1:8000/v1`, API key `local`, and model `mivi`. See [docs/OPENZ_INTEGRATION.md](docs/OPENZ_INTEGRATION.md).
 
 See [docs/AGENTS_GUIDE.md](docs/AGENTS_GUIDE.md) for full configuration guides.
 
@@ -176,6 +178,7 @@ See [docs/AGENTS_GUIDE.md](docs/AGENTS_GUIDE.md) for full configuration guides.
 
 * 📖 [Architecture Guide](docs/ARCHITECTURE.md)
 * 🤖 [External Agents Integration Guide](docs/AGENTS_GUIDE.md)
+* 🧩 [OpenZ Integration Guide](docs/OPENZ_INTEGRATION.md)
 * 📡 [REST API Reference](docs/API_REFERENCE.md)
 * 📜 [Changelog](CHANGELOG.md)
 

@@ -1,0 +1,21 @@
+{
+  "providers": {
+    "mivi": {
+      "type": "openai-compatible",
+      "baseURL": "http://127.0.0.1:8000/v1",
+      "apiKey": "local",
+      "models": {
+        "mivi": {
+          "id": "mivi",
+          "name": "MIVI Local",
+          "context": 128000,
+          "maxOutput": 4096,
+          "supportsStreaming": true,
+          "supportsTools": true,
+          "supportsVision": true
+        }
+      }
+    }
+  },
+  "defaultModel": "mivi"
+}

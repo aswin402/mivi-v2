@@ -80,7 +80,7 @@ Small-model evals are scored semantically: `scripts/eval_small_models.sh` writes
 
 ## 🛠️ Integration Configurations
 
-### 1. OpenCode / Claude Code / Hermes Agent / AutoGen / CrewAI
+### 1. OpenCode / OpenZ / Claude Code / Hermes Agent / AutoGen / CrewAI
 
 Set the following environment variables:
 
@@ -89,6 +89,8 @@ export OPENAI_API_BASE="http://localhost:8000/v1"
 export OPENAI_API_KEY="local"
 export DEFAULT_MODEL="mivi"
 ```
+
+OpenZ should use the same OpenAI-compatible values. See [OPENZ_INTEGRATION.md](OPENZ_INTEGRATION.md) for a dedicated OpenZ setup and smoke tests.
 
 Or in your `opencode.jsonc`:
 
