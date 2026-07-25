@@ -69,3 +69,15 @@ Raw output: `model-eval-results/small-model-20260724-232007.jsonl`.
 Measured on 2026-07-25 with `MIVI_TRACE=1 python3 scripts/eval_agent_workflows.py` against the local `mivi` server. All 8 OpenCode-style workflow rows passed, including injected skill metadata, 100+ tool payloads, long tool output summary, RAG, memory, and trace validation.
 
 Raw output: `model-eval-results/agent-workflows-20260725-190308.jsonl`.
+
+## Candidate Runner
+
+Use `bash scripts/eval_model_candidates.sh` to start MIVI per candidate, run agent workflow evals plus small-model evals, and write `model-eval-results/model-candidates-YYYYMMDD-HHMMSS.jsonl`. Set `MIVI_CANDIDATES_FILE` to a JSONL file with `name`, `reasoner`, and `coder` fields for additional GGUF candidates.
+
+## Candidate Comparison Run
+
+Measured on 2026-07-25 with `bash scripts/eval_model_candidates.sh`. Baseline `Llama-3.2-1B-Instruct-IQ3_M` reasoner plus `Qwen2.5-0.5B-Instruct-Q2_K` coder passed both eval suites.
+
+Summary: `model-eval-results/model-candidates-20260725-200233.jsonl`.
+Agent workflows: `model-eval-results/agent-workflows-20260725-200234.jsonl`.
+Small-model eval: `model-eval-results/small-model-20260725-200253.jsonl`.

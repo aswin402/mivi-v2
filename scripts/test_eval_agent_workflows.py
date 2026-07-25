@@ -66,6 +66,15 @@ class AgentWorkflowEvalTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
 
+    def test_long_tool_output_accepts_unable_to_find_value_summary(self):
+        result = workflows.score_workflow(
+            "long-tool-output",
+            response('The tool is unable to find the value "x" in the scope.'),
+            [],
+        )
+
+        self.assertTrue(result["ok"])
+
     def test_trace_score_accepts_request_and_final_rows(self):
         trace_rows = [
             {"kind": "request", "has_tool_involvement": True, "tools_in_request": 120},

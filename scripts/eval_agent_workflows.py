@@ -216,6 +216,7 @@ def score_workflow(kind, response_text, trace_rows):
             "error[e0425]" in text
             or "cannot find value" in text
             or "undefined variable" in text
+            or "unable to find the value" in text
             or "failed" in text
         )
         if not salient_failure:

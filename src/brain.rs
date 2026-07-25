@@ -69,6 +69,10 @@ fn scrub_generated_prompt_echo(text: &str) -> String {
         .to_string()
 }
 
+fn model_path_from_env(var: &str, default: PathBuf) -> PathBuf {
+    env::var(var).map(PathBuf::from).unwrap_or(default)
+}
+
 impl EdgeBrain {
     pub fn new() -> Self {
         let base_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -105,10 +109,22 @@ impl EdgeBrain {
             .unwrap_or_else(|| llama_cli.clone());
 
         let models_dir = base_dir.join("models");
-        let llama_path = models_dir.join("Llama-3.2-1B-Instruct-IQ3_M.gguf");
-        let qwen_path = models_dir.join("qwen2.5-0.5b-instruct-q2_k.gguf");
-        let minicpm_path = models_dir.join("MiniCPM-V-4.6-Q4_K_M.gguf");
-        let minicpm_proj = models_dir.join("mmproj-MiniCPM-V-4.6-Q8_0.gguf");
+        let llama_path = model_path_from_env(
+            "MIVI_REASONER_MODEL",
+            models_dir.join("Llama-3.2-1B-Instruct-IQ3_M.gguf"),
+        );
+        let qwen_path = model_path_from_env(
+            "MIVI_CODER_MODEL",
+            models_dir.join("qwen2.5-0.5b-instruct-q2_k.gguf"),
+        );
+        let minicpm_path = model_path_from_env(
+            "MIVI_VISION_MODEL",
+            models_dir.join("MiniCPM-V-4.6-Q4_K_M.gguf"),
+        );
+        let minicpm_proj = model_path_from_env(
+            "MIVI_VISION_PROJECTOR",
+            models_dir.join("mmproj-MiniCPM-V-4.6-Q8_0.gguf"),
+        );
         let ultra_low_ram = env::var("MIVI_ULTRA_LOW_RAM")
             .map(|v| v == "1" || v == "true")
             .unwrap_or(false);
@@ -359,6 +375,20 @@ mod tests {
         assert_eq!(
             clean_llama_cli_response("<|im_start|>assistant\nHello<|im_end|>"),
             "Hello"
+        );
+    }
+
+    #[test]
+    fn model_path_override_uses_env_when_present() {
+        let default = PathBuf::from("models/default.gguf");
+        env::set_var("MIVI_TEST_MODEL_PATH", "models/candidate.gguf");
+        let path = model_path_from_env("MIVI_TEST_MODEL_PATH", default.clone());
+        env::remove_var("MIVI_TEST_MODEL_PATH");
+
+        assert_eq!(path, PathBuf::from("models/candidate.gguf"));
+        assert_eq!(
+            model_path_from_env("MIVI_TEST_MODEL_PATH", default.clone()),
+            default
         );
     }
 

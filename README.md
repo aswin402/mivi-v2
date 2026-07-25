@@ -121,6 +121,14 @@ MIVI_TRACE=1 scripts/eval_agent_workflows.py
 
 Results are written to `model-eval-results/agent-workflows-YYYYMMDD-HHMMSS.jsonl`.
 
+Compare internal GGUF candidates while keeping the external API model as `mivi`:
+
+```bash
+bash scripts/eval_model_candidates.sh
+```
+
+Set `MIVI_CANDIDATES_FILE` to a JSONL file with `name`, `reasoner`, and `coder` fields to test additional model files.
+
 ## Latest Runtime Benchmark
 
 Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark records Rust server RSS, server process-tree RSS, and persistent worker RSS. Worker modes stayed under the 1000 MB active-RAM target, and verified RAG answers removed the previous `worker-hot` RAG timeout.

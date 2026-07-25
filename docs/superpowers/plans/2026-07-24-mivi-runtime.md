@@ -223,6 +223,7 @@
 - [x] Strict JSON repair and selected-tool validation for model-generated tool calls.
 - [x] Per-request debug traces behind `MIVI_TRACE=1`.
 - [x] Agent workflow eval script for OpenCode-style traffic.
+- [x] Candidate model eval runner with internal model path overrides.
 
 ## Additional Needed Work
 
