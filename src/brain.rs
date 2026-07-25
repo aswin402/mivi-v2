@@ -75,6 +75,15 @@ fn model_path_from_env(var: &str, default: PathBuf) -> PathBuf {
     env::var(var).map(PathBuf::from).unwrap_or(default)
 }
 
+fn cli_context_size(var: &str, default_tokens: usize) -> String {
+    env::var(var)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|tokens| *tokens >= 1024)
+        .unwrap_or(default_tokens)
+        .to_string()
+}
+
 fn cli_timeout() -> Duration {
     env::var("MIVI_CLI_TIMEOUT_SECS")
         .ok()
@@ -236,7 +245,7 @@ impl EdgeBrain {
             .arg("-ngl")
             .arg(ngl_val)
             .arg("-c")
-            .arg(eff_context)
+            .arg(&eff_context)
             .arg("-fa")
             .arg("on")
             .arg("-ctk")
@@ -269,11 +278,27 @@ impl EdgeBrain {
     }
 
     pub fn query_reasoner(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
-        self.run_cli(&self.llama_path, prompt, system_prompt, "0.2", "8192")
+        let runtime_config = RuntimeConfig::from_env();
+        let context_size = cli_context_size(
+            "MIVI_REASONER_CONTEXT_SIZE",
+            runtime_config.context.max_input_tokens,
+        );
+        self.run_cli(
+            &self.llama_path,
+            prompt,
+            system_prompt,
+            "0.2",
+            &context_size,
+        )
     }
 
     pub fn query_coder(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
-        self.run_cli(&self.qwen_path, prompt, system_prompt, "0.1", "8192")
+        let runtime_config = RuntimeConfig::from_env();
+        let context_size = cli_context_size(
+            "MIVI_CODER_CONTEXT_SIZE",
+            runtime_config.context.max_input_tokens,
+        );
+        self.run_cli(&self.qwen_path, prompt, system_prompt, "0.1", &context_size)
     }
 
     /// Speculative Decoding (ds4 DwarfStar pattern):
@@ -299,7 +324,17 @@ impl EdgeBrain {
     }
 
     pub fn query_raw(&self, prompt: &str) -> Result<String, String> {
-        let eff_context = if self.ultra_low_ram { "4096" } else { "8192" };
+        let runtime_config = RuntimeConfig::from_env();
+        let raw_context = cli_context_size(
+            "MIVI_REASONER_CONTEXT_SIZE",
+            runtime_config.context.max_input_tokens,
+        );
+        let eff_context =
+            if self.ultra_low_ram && raw_context.parse::<usize>().unwrap_or(4096) > 4096 {
+                "4096".to_string()
+            } else {
+                raw_context
+            };
         let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
 
         let prompt_file = write_prompt_file(prompt)?;
@@ -309,7 +344,7 @@ impl EdgeBrain {
             .arg("-ngl")
             .arg(ngl_val)
             .arg("-c")
-            .arg(eff_context)
+            .arg(&eff_context)
             .arg("-fa")
             .arg("on")
             .arg("-ctk")
@@ -417,6 +452,16 @@ mod tests {
             clean_llama_cli_response("<|im_start|>assistant\nHello<|im_end|>"),
             "Hello"
         );
+    }
+
+    #[test]
+    fn cli_context_size_uses_env_and_default() {
+        env::set_var("MIVI_TEST_CONTEXT_SIZE", "3072");
+        assert_eq!(cli_context_size("MIVI_TEST_CONTEXT_SIZE", 4096), "3072");
+        env::set_var("MIVI_TEST_CONTEXT_SIZE", "128");
+        assert_eq!(cli_context_size("MIVI_TEST_CONTEXT_SIZE", 4096), "4096");
+        env::remove_var("MIVI_TEST_CONTEXT_SIZE");
+        assert_eq!(cli_context_size("MIVI_TEST_CONTEXT_SIZE", 4096), "4096");
     }
 
     #[test]

@@ -54,7 +54,9 @@ MIVI supports three runtime modes through environment variables:
 | Variable | Values | Default | Purpose |
 | :--- | :--- | :--- | :--- |
 | `MIVI_RUNTIME_MODE` | `spawn`, `worker-eco`, `worker-hot` | `spawn` | Select process-per-request or persistent text worker mode |
-| `MIVI_CONTEXT_BUDGET` | integer tokens, minimum `1024` | `4096` | Sets the bounded prompt pack budget |
+| `MIVI_CONTEXT_BUDGET` | integer tokens, minimum `1024` | `4096` | Sets the bounded prompt pack and default raw text-worker/CLI context budget |
+| `MIVI_REASONER_CONTEXT_SIZE` | integer tokens, minimum `1024` | `MIVI_CONTEXT_BUDGET` | Overrides spawn-mode reasoner `llama-cli` context size |
+| `MIVI_CODER_CONTEXT_SIZE` | integer tokens, minimum `1024` | `MIVI_CONTEXT_BUDGET` | Overrides spawn-mode coder `llama-cli` context size |
 | `MIVI_CLI_TIMEOUT_SECS` | positive integer seconds | `180` | Kills stalled `llama-cli` subprocesses |
 | `MIVI_WORKER_IDLE_SECS` | positive integer seconds | `120` | Idle sleep/stop budget for worker modes |
 | `MIVI_WORKER_PORT` | local TCP port | `18080` | Internal `llama-server` worker port |

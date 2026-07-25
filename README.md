@@ -156,7 +156,7 @@ MIVI_RUNTIME_MODE=worker-eco MIVI_WORKER_IDLE_SECS=120 cargo run --release -- se
 MIVI_RUNTIME_MODE=worker-hot cargo run --release -- serve
 ```
 
-MIVI keeps the external model name as `mivi` in every mode. Context is bounded through compression, OKF memory, and gated RAG retrieval rather than raw 128K KV cache.
+MIVI keeps the external model name as `mivi` in every mode. Context is bounded through compression, OKF memory, and gated RAG retrieval rather than raw 128K KV cache. Use `MIVI_REASONER_CONTEXT_SIZE` and `MIVI_CODER_CONTEXT_SIZE` when a candidate model needs a smaller raw KV cache to stay under the RAM target.
 
 ---
 
