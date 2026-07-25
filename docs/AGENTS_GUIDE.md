@@ -48,6 +48,7 @@ Agent behavior notes:
 - Large tool lists are filtered before prompting so OpenCode-style 100+ tool payloads do not flood the tiny model.
 - Long histories are compressed into recent turns, typed tool observations, errors, code blocks, OKF memory, and gated RAG context.
 - Noisy command output is minified by tool type before prompting, keeping build/test failures visible without flooding context.
+- Model-generated tool calls are validated against the selected tool set, and argument strings are repaired only when they normalize to valid JSON objects.
 - Store durable project facts in `memory/*.md` using OKF frontmatter with `id`, `title`, `type`, and optional `tags`.
 
 ## Latest Runtime Benchmark

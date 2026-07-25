@@ -546,22 +546,24 @@ fn parse_tool_calls(text: &str) -> Vec<ToolCallOut> {
 }
 
 fn parse_single_tool_call(json_str: &str) -> Option<ToolCallOut> {
-    // Try to parse as {"name": "...", "arguments": {...}} or {"function": "...", "arguments": {...}}
     let val: serde_json::Value = serde_json::from_str(json_str).ok()?;
     let obj = val.as_object()?;
 
-    // Accept either "name" or "function" key.
+    let function_obj = obj.get("function").and_then(|value| value.as_object());
     let name = obj
         .get("name")
-        .or_else(|| obj.get("function"))
-        .and_then(|v| v.as_str())?;
+        .and_then(|value| value.as_str())
+        .or_else(|| obj.get("function").and_then(|value| value.as_str()))
+        .or_else(|| {
+            function_obj
+                .and_then(|function| function.get("name"))
+                .and_then(|value| value.as_str())
+        })?;
 
-    let arguments = match obj.get("arguments") {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(v @ serde_json::Value::Object(_)) => v.to_string(),
-        Some(v) => v.to_string(),
-        None => "{}".to_string(),
-    };
+    let arguments_value = obj
+        .get("arguments")
+        .or_else(|| function_obj.and_then(|function| function.get("arguments")));
+    let arguments = normalize_tool_arguments(arguments_value)?;
 
     Some(ToolCallOut {
         id: format!("call_{}", name),
@@ -571,6 +573,46 @@ fn parse_single_tool_call(json_str: &str) -> Option<ToolCallOut> {
             arguments,
         },
     })
+}
+
+fn parse_tool_calls_for_tools(text: &str, selected_tools: &[ToolDef]) -> Vec<ToolCallOut> {
+    parse_tool_calls(text)
+        .into_iter()
+        .filter(|call| {
+            selected_tools
+                .iter()
+                .any(|tool| tool.function.name == call.function.name)
+        })
+        .collect()
+}
+
+fn normalize_tool_arguments(value: Option<&serde_json::Value>) -> Option<String> {
+    match value {
+        None => Some("{}".to_string()),
+        Some(serde_json::Value::Object(_)) => value.map(|json| json.to_string()),
+        Some(serde_json::Value::String(text)) => repair_tool_argument_string(text),
+        _ => None,
+    }
+}
+
+fn repair_tool_argument_string(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Some("{}".to_string());
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return value.as_object().map(|_| value.to_string());
+    }
+
+    if trimmed.contains('\'') && !trimmed.contains('"') {
+        let repaired = trimmed.replace('\'', "\"");
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&repaired) {
+            return value.as_object().map(|_| value.to_string());
+        }
+    }
+
+    None
 }
 
 fn strip_tagged_block_prefix<'a>(text: &'a str, tag: &str) -> &'a str {
@@ -774,8 +816,8 @@ fn generate_tool_calls(
         debug_preview
     );
 
-    // Parse tool calls from output.
-    let calls = parse_tool_calls(&raw);
+    // Parse, repair, and validate tool calls from output.
+    let calls = parse_tool_calls_for_tools(&raw, &selected_tools);
 
     if calls.is_empty() {
         // No tool call detected — use raw output as content response.
@@ -1291,6 +1333,29 @@ mod tests {
         )]);
 
         assert!(has_tool_involvement(&req));
+    }
+
+    #[test]
+    fn repaired_tool_arguments_are_valid_json() {
+        let raw = r#"<tool_call>{"name":"bash","arguments":"{'cmd':'npm test'}"}</tool_call>"#;
+        let calls = parse_tool_calls_for_tools(raw, &[server_tool("bash", "Run shell commands")]);
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "bash");
+        let args: serde_json::Value = serde_json::from_str(&calls[0].function.arguments)
+            .expect("tool arguments must be valid JSON");
+        assert_eq!(
+            args.get("cmd").and_then(|value| value.as_str()),
+            Some("npm test")
+        );
+    }
+
+    #[test]
+    fn rejects_tool_calls_not_present_in_selected_tools() {
+        let raw = r#"<tool_call>{"name":"delete_everything","arguments":{}}</tool_call>"#;
+        let calls = parse_tool_calls_for_tools(raw, &[server_tool("bash", "Run shell commands")]);
+
+        assert!(calls.is_empty());
     }
 
     #[test]
