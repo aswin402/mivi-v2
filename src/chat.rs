@@ -61,7 +61,7 @@ pub async fn run_chat_interactive(brain: EdgeBrain, router: NeedleRouter) {
                     println!("{}", "  (No image provided, skipping vision)".yellow());
                     continue;
                 }
-                match brain.query_vision(&img_path, &prompt) {
+                match brain.query_vision(&img_path, &prompt).await {
                     Ok(res) => res,
                     Err(e) => format!("Vision error: {}", e),
                 }
@@ -74,6 +74,7 @@ pub async fn run_chat_interactive(brain: EdgeBrain, router: NeedleRouter) {
                 );
                 brain
                     .query_coder(&prompt, &system_prompt)
+                    .await
                     .unwrap_or_else(|e| format!("Error: {}", e))
             }
             _ => {
@@ -84,6 +85,7 @@ pub async fn run_chat_interactive(brain: EdgeBrain, router: NeedleRouter) {
                 );
                 brain
                     .query_reasoner(&prompt, &system_prompt)
+                    .await
                     .unwrap_or_else(|e| format!("Error: {}", e))
             }
         };

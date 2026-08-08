@@ -3,10 +3,10 @@ use crate::runtime::RuntimeConfig;
 use crate::worker::{WorkerConfig, WorkerManager};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tracing::{info, warn};
 
 #[derive(Clone)]
 pub struct EdgeBrain {
@@ -106,29 +106,41 @@ fn strip_think_blocks(text: &str) -> String {
 }
 
 fn clean_llama_cli_response(stdout: &str) -> String {
-    let response = if let Some(pos) = stdout.rfind("<|im_start|>assistant") {
-        &stdout[pos + "<|im_start|>assistant".len()..]
+    let t = crate::server::active_chat_template();
+    let assistant_marker = t.assistant_start.trim();
+    let response = if !assistant_marker.is_empty() {
+        if let Some(pos) = stdout.rfind(assistant_marker) {
+            &stdout[pos + assistant_marker.len()..]
+        } else if let Some(pos) = stdout.find("> ") {
+            &stdout[pos + 2..]
+        } else {
+            stdout
+        }
     } else if let Some(pos) = stdout.find("> ") {
         &stdout[pos + 2..]
     } else {
         stdout
     };
 
-    let clean = response
+    let mut clean = response
         .split("[ Prompt:")
         .next()
         .unwrap_or(response)
         .split("Exiting...")
         .next()
         .unwrap_or(response)
-        .replace("<|im_end|>", "")
-        .trim()
         .to_string();
+
+    for stop in &t.stop_words {
+        clean = clean.replace(stop, "");
+    }
+    clean = clean.trim().to_string();
 
     strip_think_blocks(&scrub_generated_prompt_echo(&clean))
 }
 
 fn scrub_generated_prompt_echo(text: &str) -> String {
+    let t = crate::server::active_chat_template();
     let mut cleaned = text.trim();
 
     if let Some((_, tail)) = cleaned.rsplit_once("... (truncated)") {
@@ -141,19 +153,23 @@ fn scrub_generated_prompt_echo(text: &str) -> String {
         }
     }
 
-    if cleaned.contains("<|im_start|>system") {
-        if let Some((_, tail)) = cleaned.rsplit_once("<|im_start|>user") {
-            if let Some((_, answer)) = tail.split_once("\n\n") {
-                cleaned = answer.trim();
+    let sys_prefix = t.system_prefix.trim();
+    let user_prefix = t.user_prefix.trim();
+    if !sys_prefix.is_empty() && cleaned.contains(sys_prefix) {
+        if !user_prefix.is_empty() {
+            if let Some((_, tail)) = cleaned.rsplit_once(user_prefix) {
+                if let Some((_, answer)) = tail.split_once("\n\n") {
+                    cleaned = answer.trim();
+                }
             }
         }
     }
 
-    cleaned
-        .replace("<|im_start|>", "")
-        .replace("<|im_end|>", "")
-        .trim()
-        .to_string()
+    let mut res = cleaned.to_string();
+    for stop in &t.stop_words {
+        res = res.replace(stop, "");
+    }
+    res.trim().to_string()
 }
 
 fn model_path_from_env(var: &str, default: PathBuf) -> PathBuf {
@@ -178,33 +194,22 @@ fn cli_timeout() -> Duration {
         .unwrap_or_else(|| Duration::from_secs(180))
 }
 
-fn command_output_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, String> {
+async fn command_output_with_timeout(
+    mut cmd: tokio::process::Command,
+    timeout: Duration,
+) -> Result<Output, String> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .map_err(|err| format!("Failed to execute llama-cli: {}", err))?;
-    let start = Instant::now();
 
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return child.wait_with_output().map_err(|err| err.to_string()),
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!(
-                        "llama-cli timed out after {} seconds",
-                        timeout.as_secs()
-                    ));
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(err) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(err.to_string());
-            }
-        }
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(err)) => Err(format!("llama-cli execution error: {}", err)),
+        Err(_) => Err(format!(
+            "llama-cli timed out after {} seconds",
+            timeout.as_secs()
+        )),
     }
 }
 
@@ -274,9 +279,7 @@ impl EdgeBrain {
         )));
 
         if ultra_low_ram {
-            println!(
-                "[AIRLLM/COLIBRI MODE] Ultra-Low-RAM mmap streaming active (< 40 MB RAM target)"
-            );
+            info!("[AIRLLM/COLIBRI MODE] Ultra-Low-RAM mmap streaming active (< 40 MB RAM target)");
         }
 
         Self {
@@ -291,7 +294,7 @@ impl EdgeBrain {
         }
     }
 
-    fn run_cli(
+    async fn run_cli(
         &self,
         model_path: &Path,
         prompt: &str,
@@ -301,18 +304,26 @@ impl EdgeBrain {
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
-            match self.text_worker.query_chat(prompt, system_prompt, temp) {
+            let fut = self.text_worker.query_chat(prompt, system_prompt, temp);
+            match fut.await {
                 Ok(response) => return Ok(response),
-                Err(err) => eprintln!(
+                Err(err) => warn!(
                     "[MIVI-V2 Worker] Falling back to llama-cli after worker error: {}",
                     err
                 ),
             }
         }
 
+        let t = crate::server::active_chat_template();
         let formatted_prompt = format!(
-            "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-            system_prompt, prompt
+            "{}{}{}{}{}{}{}",
+            t.system_prefix,
+            system_prompt,
+            t.system_suffix,
+            t.user_prefix,
+            prompt,
+            t.user_suffix,
+            t.assistant_start
         );
 
         let eff_context = if self.ultra_low_ram && context_size == "8192" {
@@ -324,7 +335,7 @@ impl EdgeBrain {
         let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
 
         let prompt_file = write_prompt_file(&formatted_prompt)?;
-        let mut cmd = Command::new(&self.llama_cli);
+        let mut cmd = tokio::process::Command::new(&self.llama_cli);
         cmd.arg("-m")
             .arg(model_path)
             .arg("-ngl")
@@ -349,7 +360,7 @@ impl EdgeBrain {
             cmd.arg("--mmap");
         }
 
-        let output = match command_output_with_timeout(cmd, cli_timeout()) {
+        let output = match command_output_with_timeout(cmd, cli_timeout()).await {
             Ok(output) => output,
             Err(e) => {
                 let _ = std::fs::remove_file(&prompt_file);
@@ -362,7 +373,11 @@ impl EdgeBrain {
         Ok(clean_llama_cli_response(&stdout))
     }
 
-    pub fn query_reasoner(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
+    pub async fn query_reasoner(
+        &self,
+        prompt: &str,
+        system_prompt: &str,
+    ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         let context_size = cli_context_size(
             "MIVI_REASONER_CONTEXT_SIZE",
@@ -376,40 +391,55 @@ impl EdgeBrain {
             "0.2",
             &context_size,
         )
+        .await
     }
 
-    pub fn query_coder(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
+    pub async fn query_coder(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         let context_size = cli_context_size(
             "MIVI_CODER_CONTEXT_SIZE",
             runtime_config.context.max_input_tokens,
         );
         self.run_cli(&self.qwen_path, prompt, system_prompt, "0.1", &context_size)
+            .await
     }
 
     /// Speculative Decoding (ds4 DwarfStar pattern):
     /// Uses the configured coder to draft tokens fast, then uses the configured reasoner to verify.
-    pub fn query_speculative(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
-        println!("[DS4 SPECULATIVE] Drafting with configured coder...");
-        let draft = self.query_coder(prompt, system_prompt)?;
+    pub async fn query_speculative(
+        &self,
+        prompt: &str,
+        system_prompt: &str,
+    ) -> Result<String, String> {
+        info!("[DS4 SPECULATIVE] Drafting with configured coder...");
+        let draft = self.query_coder(prompt, system_prompt).await?;
 
         if draft.trim().is_empty() {
-            return self.query_reasoner(prompt, system_prompt);
+            return self.query_reasoner(prompt, system_prompt).await;
         }
 
-        println!("[DS4 SPECULATIVE] Verifying draft with configured reasoner...");
+        info!("[DS4 SPECULATIVE] Verifying draft with configured reasoner...");
         let verify_prompt = format!(
             "Verify and improve this response for accuracy:\nUSER: {}\nPROPOSED RESPONSE:\n{}\nIf accurate, output the response as is. Otherwise output the corrected version.",
             apply_reasoning_directive(prompt), draft
         );
 
-        match self.query_reasoner(&verify_prompt, system_prompt) {
+        match self.query_reasoner(&verify_prompt, system_prompt).await {
             Ok(verified) if !verified.trim().is_empty() => Ok(verified),
             _ => Ok(draft),
         }
     }
 
-    pub fn query_raw(&self, prompt: &str) -> Result<String, String> {
+    pub async fn query_raw(
+        &self,
+        prompt: &str,
+        temp: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        stop: Option<serde_json::Value>,
+        seed: Option<u64>,
+        json_schema: Option<String>,
+    ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         let raw_context = cli_context_size(
             "MIVI_REASONER_CONTEXT_SIZE",
@@ -424,7 +454,7 @@ impl EdgeBrain {
         let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
 
         let prompt_file = write_prompt_file(prompt)?;
-        let mut cmd = Command::new(&self.llama_cli);
+        let mut cmd = tokio::process::Command::new(&self.llama_cli);
         cmd.arg("-m")
             .arg(&self.llama_path)
             .arg("-ngl")
@@ -438,18 +468,42 @@ impl EdgeBrain {
             .arg("-ctv")
             .arg("q8_0")
             .arg("-f")
-            .arg(&prompt_file)
-            .arg("--temp")
-            .arg("0.2")
-            .arg("--simple-io")
-            .arg("--no-display-prompt")
-            .arg("-st");
+            .arg(&prompt_file);
+
+        let temp_str = temp.unwrap_or(0.2).to_string();
+        cmd.arg("--temp").arg(&temp_str);
+
+        if let Some(tp) = top_p {
+            cmd.arg("--top-p").arg(tp.to_string());
+        }
+        if let Some(mt) = max_tokens {
+            cmd.arg("-n").arg(mt.to_string());
+        }
+        if let Some(sd) = seed {
+            cmd.arg("--seed").arg(sd.to_string());
+        }
+        if let Some(ref schema) = json_schema {
+            cmd.arg("--json-schema").arg(schema);
+        }
+        if let Some(stop_val) = stop {
+            if let Some(s) = stop_val.as_str() {
+                cmd.arg("--stop").arg(s);
+            } else if let Some(arr) = stop_val.as_array() {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        cmd.arg("--stop").arg(s);
+                    }
+                }
+            }
+        }
+
+        cmd.arg("--simple-io").arg("--no-display-prompt").arg("-st");
 
         if self.ultra_low_ram {
             cmd.arg("--mmap");
         }
 
-        let output = match command_output_with_timeout(cmd, cli_timeout()) {
+        let output = match command_output_with_timeout(cmd, cli_timeout()).await {
             Ok(output) => output,
             Err(e) => {
                 let _ = std::fs::remove_file(&prompt_file);
@@ -461,12 +515,25 @@ impl EdgeBrain {
 
         // Try extracting from after last <|im_start|>assistant tag (prompt echo).
         // If not echoed, find the first JSON object or take the last non-empty line.
-        let response = if let Some(pos) = stdout.rfind("<|im_start|>assistant") {
-            let after = &stdout[pos + "<|im_start|>assistant".len()..];
-            if let Some(echo_end) = after.find("<|im_start|>") {
-                &after[..echo_end]
+        let t = crate::server::active_chat_template();
+        let assistant_marker = t.assistant_start.trim();
+        let response = if !assistant_marker.is_empty() {
+            if let Some(pos) = stdout.rfind(assistant_marker) {
+                let after = &stdout[pos + assistant_marker.len()..];
+                let sys_prefix = t.system_prefix.trim();
+                let user_prefix = t.user_prefix.trim();
+                let assist_prefix = t.assistant_prefix.trim();
+                if let Some(echo_end) = after
+                    .find(sys_prefix)
+                    .or_else(|| after.find(user_prefix))
+                    .or_else(|| after.find(assist_prefix))
+                {
+                    &after[..echo_end]
+                } else {
+                    after
+                }
             } else {
-                after
+                &stdout
             }
         } else {
             // Fallback: skip loading banner and take the last non-empty block.
@@ -490,7 +557,7 @@ impl EdgeBrain {
         Ok(strip_think_blocks(clean))
     }
 
-    pub fn query_vision(&self, image_path: &str, prompt: &str) -> Result<String, String> {
+    pub async fn query_vision(&self, image_path: &str, prompt: &str) -> Result<String, String> {
         if !Path::new(image_path).exists() {
             return Err(format!("Image file not found at: {}", image_path));
         }
@@ -502,8 +569,8 @@ impl EdgeBrain {
             ));
         }
 
-        let output = Command::new(&self.minicpm_cli)
-            .arg("-m")
+        let mut cmd = tokio::process::Command::new(&self.minicpm_cli);
+        cmd.arg("-m")
             .arg(&self.minicpm_path)
             .arg("--mmproj")
             .arg(&self.minicpm_proj)
@@ -512,8 +579,11 @@ impl EdgeBrain {
             .arg("--image")
             .arg(image_path)
             .arg("-p")
-            .arg(prompt)
+            .arg(prompt);
+
+        let output = cmd
             .output()
+            .await
             .map_err(|e| format!("Failed to execute vision cli: {}", e))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -524,6 +594,12 @@ impl EdgeBrain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn clean_response_uses_last_assistant_marker() {
@@ -542,12 +618,14 @@ mod tests {
 
     #[test]
     fn reasoning_directive_defaults_to_no_think_for_simple_prompts() {
+        let _guard = env_lock();
         env::remove_var("MIVI_REASONING_MODE");
         assert_eq!(reasoning_directive("Say hello."), "/no_think");
     }
 
     #[test]
     fn reasoning_directive_auto_is_conservative_for_agent_prompts() {
+        let _guard = env_lock();
         env::remove_var("MIVI_REASONING_MODE");
         assert_eq!(
             reasoning_directive("Debug this Rust compiler error."),
@@ -561,6 +639,7 @@ mod tests {
 
     #[test]
     fn reasoning_directive_env_override_wins() {
+        let _guard = env_lock();
         env::set_var("MIVI_REASONING_MODE", "no_think");
         assert_eq!(reasoning_directive("Debug this failure."), "/no_think");
         env::set_var("MIVI_REASONING_MODE", "think");

@@ -139,6 +139,7 @@ impl AgentOrchestrator {
                     request,
                     "You are a helpful, concise AI assistant. Answer the user's question directly.",
                 )
+                .await
                 .unwrap_or_else(|e| format!("Error: {}", e));
             return (true, response);
         }
@@ -164,11 +165,12 @@ impl AgentOrchestrator {
             println!("[SAKANA FUGU ROUTER] Complex task detected -> Engaging configured reasoner planner...");
             let system_prompt = "You are the Orchestrator Brain. Break down the user's request into the MINIMAL number of necessary executable coding steps (1 to 3 steps max).\nRespond ONLY with a valid JSON array of step objects inside a ```json ... ``` block.\nEach step object must have keys:\n- 'step': integer\n- 'description': string description of what to write\n- 'language': string ('python' or 'javascript')";
 
-            let plan_opt = if let Ok(raw_plan) = self.brain.query_reasoner(request, system_prompt) {
-                self.extract_json_plan(&raw_plan)
-            } else {
-                None
-            };
+            let plan_opt =
+                if let Ok(raw_plan) = self.brain.query_reasoner(request, system_prompt).await {
+                    self.extract_json_plan(&raw_plan)
+                } else {
+                    None
+                };
 
             plan_opt.unwrap_or_else(|| {
                 vec![PlanStep {
@@ -220,7 +222,7 @@ impl AgentOrchestrator {
                 prompt = format!("{}\n\n{}", prompt, rag_context);
             }
 
-            let (code_opt, output) = self.verifier.generate_and_verify(&prompt, lang, 3);
+            let (code_opt, output) = self.verifier.generate_and_verify(&prompt, lang, 3).await;
             if let Some(code) = code_opt {
                 self.dataset
                     .save_sample(&step_info.description, &code, &output, lang);

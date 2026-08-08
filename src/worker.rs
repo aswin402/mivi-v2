@@ -1,13 +1,11 @@
 use crate::runtime::RuntimeConfig;
 use serde_json::json;
 use std::env;
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
+use tokio::time::timeout as tokio_timeout;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerEndpoint {
@@ -125,31 +123,35 @@ impl WorkerManager {
         ]
     }
 
-    pub fn ensure_text_worker(&self) -> Result<WorkerEndpoint, String> {
-        {
+    pub async fn ensure_text_worker(&self) -> Result<WorkerEndpoint, String> {
+        let endpoint_to_check = {
             let slot = self
                 .slot
                 .lock()
                 .map_err(|_| "worker lock poisoned".to_string())?;
             if slot.state == WorkerState::Ready {
-                if let Some(endpoint) = &slot.endpoint {
-                    if self.health_check(endpoint) {
-                        return Ok(endpoint.clone());
-                    }
-                }
+                slot.endpoint.clone()
+            } else {
+                None
+            }
+        };
+
+        if let Some(endpoint) = endpoint_to_check {
+            if self.health_check(&endpoint).await {
+                return Ok(endpoint);
             }
         }
 
-        self.start_worker()
+        self.start_worker().await
     }
 
-    pub fn query_chat(
+    pub async fn query_chat(
         &self,
         prompt: &str,
         system_prompt: &str,
         temp: &str,
     ) -> Result<String, String> {
-        let endpoint = self.ensure_text_worker()?;
+        let endpoint = self.ensure_text_worker().await?;
         let body = json!({
             "model": "mivi-worker",
             "messages": [
@@ -165,8 +167,75 @@ impl WorkerManager {
             "/v1/chat/completions",
             Some(&body.to_string()),
             Duration::from_secs(300),
-        )?;
+        )
+        .await?;
         parse_chat_response(&response)
+    }
+
+    pub async fn query_chat_full(
+        &self,
+        messages: serde_json::Value,
+        tools: Option<serde_json::Value>,
+        tool_choice: Option<serde_json::Value>,
+        response_format: Option<serde_json::Value>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        stop: Option<serde_json::Value>,
+        seed: Option<u64>,
+        frequency_penalty: Option<f32>,
+        presence_penalty: Option<f32>,
+    ) -> Result<serde_json::Value, String> {
+        let endpoint = self.ensure_text_worker().await?;
+        let mut body = json!({
+            "model": "mivi-worker",
+            "messages": messages,
+            "stream": false
+        });
+        if let Some(temp) = temperature {
+            body["temperature"] = json!(temp);
+        }
+        if let Some(tp) = top_p {
+            body["top_p"] = json!(tp);
+        }
+        if let Some(mt) = max_tokens {
+            body["max_tokens"] = json!(mt);
+        }
+        if let Some(st) = stop {
+            body["stop"] = st;
+        }
+        if let Some(sd) = seed {
+            body["seed"] = json!(sd);
+        }
+        if let Some(fp) = frequency_penalty {
+            body["frequency_penalty"] = json!(fp);
+        }
+        if let Some(pp) = presence_penalty {
+            body["presence_penalty"] = json!(pp);
+        }
+        if let Some(t) = tools {
+            body["tools"] = t;
+        }
+        if let Some(tc) = tool_choice {
+            body["tool_choice"] = tc;
+        }
+        if let Some(rf) = response_format {
+            body["response_format"] = rf;
+        }
+        let response = http_request(
+            &endpoint,
+            "POST",
+            "/v1/chat/completions",
+            Some(&body.to_string()),
+            Duration::from_secs(300),
+        )
+        .await?;
+        let body_str = response
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .ok_or_else(|| "worker response missing HTTP body".to_string())?;
+        serde_json::from_str(body_str)
+            .map_err(|err| format!("failed to parse worker JSON response: {err}"))
     }
 
     pub fn stop_idle_workers(&self) -> Result<(), String> {
@@ -183,7 +252,7 @@ impl WorkerManager {
         Ok(())
     }
 
-    fn start_worker(&self) -> Result<WorkerEndpoint, String> {
+    async fn start_worker(&self) -> Result<WorkerEndpoint, String> {
         {
             let mut slot = self
                 .slot
@@ -231,7 +300,10 @@ impl WorkerManager {
             slot.endpoint = Some(endpoint.clone());
         }
 
-        if self.wait_until_ready(&endpoint, Duration::from_secs(60)) {
+        if self
+            .wait_until_ready(&endpoint, Duration::from_secs(60))
+            .await
+        {
             let mut slot = self
                 .slot
                 .lock()
@@ -246,20 +318,24 @@ impl WorkerManager {
         }
     }
 
-    fn wait_until_ready(&self, endpoint: &WorkerEndpoint, timeout: Duration) -> bool {
+    async fn wait_until_ready(&self, endpoint: &WorkerEndpoint, timeout: Duration) -> bool {
         let start = Instant::now();
         while start.elapsed() < timeout {
-            if self.health_check(endpoint) {
+            if self.health_check(endpoint).await {
                 return true;
             }
-            thread::sleep(Duration::from_millis(250));
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
         false
     }
 
-    fn health_check(&self, endpoint: &WorkerEndpoint) -> bool {
-        http_request(endpoint, "GET", "/health", None, Duration::from_secs(2)).is_ok()
-            || http_request(endpoint, "GET", "/v1/models", None, Duration::from_secs(2)).is_ok()
+    async fn health_check(&self, endpoint: &WorkerEndpoint) -> bool {
+        http_request(endpoint, "GET", "/health", None, Duration::from_secs(2))
+            .await
+            .is_ok()
+            || http_request(endpoint, "GET", "/v1/models", None, Duration::from_secs(2))
+                .await
+                .is_ok()
     }
 
     fn mark_failed(&self, error: String) {
@@ -292,21 +368,21 @@ impl Drop for WorkerManager {
     }
 }
 
-fn http_request(
+async fn http_request(
     endpoint: &WorkerEndpoint,
     method: &str,
     path: &str,
     body: Option<&str>,
     timeout: Duration,
 ) -> Result<String, String> {
-    let mut stream = TcpStream::connect(endpoint.base_url())
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let connect_fut = TcpStream::connect(endpoint.base_url());
+    let mut stream = tokio_timeout(timeout, connect_fut)
+        .await
+        .map_err(|_| "worker connection timeout".to_string())?
         .map_err(|err| format!("failed to connect to worker: {err}"))?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(|err| format!("failed to set read timeout: {err}"))?;
-    stream
-        .set_write_timeout(Some(timeout))
-        .map_err(|err| format!("failed to set write timeout: {err}"))?;
 
     let body = body.unwrap_or("");
     let request = format!(
@@ -315,13 +391,18 @@ fn http_request(
         body.len(),
         body
     );
-    stream
-        .write_all(request.as_bytes())
+
+    let write_fut = stream.write_all(request.as_bytes());
+    tokio_timeout(timeout, write_fut)
+        .await
+        .map_err(|_| "worker write timeout".to_string())?
         .map_err(|err| format!("failed to write worker request: {err}"))?;
 
     let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
+    let read_fut = stream.read_to_string(&mut response);
+    tokio_timeout(timeout, read_fut)
+        .await
+        .map_err(|_| "worker read timeout".to_string())?
         .map_err(|err| format!("failed to read worker response: {err}"))?;
 
     if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {

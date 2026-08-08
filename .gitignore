@@ -22,3 +22,14 @@
 memory.db
 memory.db-shm
 memory.db-wal
+.fastembed_cache/
+__pycache__/
+*.pyc
+*.bak
+cargo_check.out
+thoughts/
+outline*.txt
+split_*.py
+splitter/
+extract.py
+src_server_outline.txt

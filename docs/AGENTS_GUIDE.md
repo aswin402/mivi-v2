@@ -49,7 +49,7 @@ Agent behavior notes:
 - Long histories are compressed into recent turns, typed tool observations, errors, code blocks, OKF memory, and gated RAG context.
 - Noisy command output is minified by tool type before prompting, keeping build/test failures visible without flooding context.
 - Model-generated tool calls are validated against the selected tool set, and argument strings are repaired only when they normalize to valid JSON objects.
-- Set `MIVI_TRACE=1` when diagnosing agent failures; trace rows include request summary, selected tools, tool-call repair/rejection counts, and final route.
+- Set `MIVI_TRACE=1` when diagnosing agent failures; trace rows include request summary, selected tools, tool-call repair/rejection counts, final route, and tool-result metadata such as matched IDs, aggregate count, protocol issues, and error categories.
 - Use `MIVI_REASONER_MODEL` and `MIVI_CODER_MODEL` only for internal candidate testing; agents should still request `model: mivi`.
 - Store durable project facts in `memory/*.md` using OKF frontmatter with `id`, `title`, `type`, and optional `tags`.
 
@@ -66,11 +66,19 @@ Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark records Ru
 Benchmark output: `benchmarks/runtime-20260724-203641.jsonl`.
 
 
-Agent workflow evals simulate OpenCode-style traffic with injected skill metadata, 100+ tools, long tool output, RAG/memory prompts, and optional trace rows:
+Agent workflow evals simulate OpenCode-style traffic with injected skill metadata, 100+ tools, long tool output, RAG/memory prompts, tool-result aggregation, and optional trace rows:
 
 ```bash
 MIVI_TRACE=1 scripts/eval_agent_workflows.py
 ```
+
+Run the local compatibility gate in one command:
+
+```bash
+scripts/check_agent_compat.py --live auto
+```
+
+`--live auto` runs local tests/builds and adds HTTP smoke checks when a MIVI server is already reachable. Trace-backed evals require starting the server with `MIVI_TRACE=1` and passing `--live-eval on`.
 
 Results are written to `model-eval-results/agent-workflows-YYYYMMDD-HHMMSS.jsonl`.
 

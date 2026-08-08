@@ -5,6 +5,31 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.6] - 2026-08-09
+
+### 🛡️ Phase 5: Production Stability & Code Quality (COMPLETE)
+
+#### Fixed
+* 🔄 **Async/Await Migration**: Fully migrated CLI-worker interface to non-blocking async `tokio` primitives — eliminated all `thread::sleep` polling loops and `block_on()` deadlock risks in `brain.rs`.
+* 💥 **Crash Hardening**: Added request body size limits (16 MB), message count validation (max 256), tool count limits (max 128), RAG indexing limits (1 MB/file, 5000 files max), and LRU cache eviction (max 512 entries).
+* 🚨 **Error Propagation**: Converted `vision_response`, `reasoner_chat`, `code_chat` to return `Result` types with proper HTTP 500 JSON error responses instead of embedding errors in response content.
+* 🔌 **Port Bind Panic**: Fixed `start_api_server` to return `Result` with descriptive error instead of panicking when port is in use.
+
+#### Improved
+* 📋 **Structured Logging**: Replaced 86 `eprintln!`/`println!` calls in serving paths with `tracing` crate macros (`info!`, `warn!`, `error!`, `debug!`) with `RUST_LOG` filtering.
+* 🏗️ **Server Modularization**: Split 4541-line monolithic `src/server.rs` into clean module structure: `server/mod.rs` (State), `server/types.rs` (Structs), `server/handlers.rs` (Routes), `server/helpers.rs` (Prompting), `server/tests.rs` (Tests).
+* ✅ All 123 unit tests passing, `make check-agent` CI gate green.
+
+### 📋 Phase 6-9 Roadmap Published
+
+#### Added
+* 🗺️ **Detailed 4-phase roadmap** with 26 concrete tasks inspired by cross-project research:
+  * **Phase 6**: Performance & Serving — `reqwest` connection pooling, `worker-eco` default mode, true SSE stream proxying, adaptive RAG caching.
+  * **Phase 7**: Smart Routing — model-driven intent classification (replacing keyword heuristics), Thinker→Worker→Verifier state machine, scaffold-aligned prompt templates.
+  * **Phase 8**: Pure Rust Native Inference — `candle-core` GGUF runtime integration, native KV-cache management, in-process token streaming, zero external binary dependencies.
+  * **Phase 9**: Advanced Capabilities — MoE expert disk streaming, `O_DIRECT` I/O, multi-model concurrent serving, WebAssembly target.
+* 🔬 **Inspiration research report** analyzing 5 cutting-edge projects: [kimi-k3-in-c](https://github.com/FareedKhan-dev/kimi-k3-in-c), [Fugu](https://github.com/SakanaAI/fugu), [Colibri](https://github.com/JustVugg/colibri), [Candle](https://github.com/huggingface/candle), [Ornith-1](https://github.com/ornith-ai/Ornith-1).
+
 ## [v0.0.5] - 2026-07-25
 
 ### Improved

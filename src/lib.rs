@@ -5,6 +5,7 @@ pub mod chat;
 pub mod cli;
 pub mod context_compressor;
 pub mod logger;
+pub mod model_catalog;
 pub mod model_process;
 pub mod okf_memory;
 pub mod orchestrator;

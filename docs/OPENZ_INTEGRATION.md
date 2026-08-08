@@ -148,10 +148,18 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 
 Expected: MIVI answers that OpenZ/OpenAI-compatible client provided callable tools in this request.
 
+Run the HTTP compatibility smoke suite against a running MIVI server:
+
+```bash
+scripts/smoke_openai_compat.py
+```
+
+It checks `/v1/models`, Chat Completions, streaming usage chunks, tool calls, `/v1/responses`, URL research tool selection, the full tool-result follow-up loop, and multi-tool result aggregation. Use `MIVI_SMOKE_BASE_URL` when testing a non-default port or host.
+
 ## 6. Troubleshooting
 
 If OpenZ says the model does not support images, the issue is OpenZ model metadata. Mark `mivi` as vision-capable/multimodal in OpenZ so it sends `image_url` content to MIVI.
 
 If OpenZ asks what MCPs exist and MIVI cannot name MCP servers, check whether OpenZ exposes MCP server names in tool names or descriptions. MIVI can only see the tool schemas sent in the request.
 
-If OpenZ uses the OpenAI Responses API only, it needs a Chat Completions adapter or MIVI needs a `/v1/responses` compatibility endpoint in a future update.
+If OpenZ uses the OpenAI Responses API, point it at MIVI's `/v1/responses` compatibility endpoint. For older OpenZ versions, Chat Completions remains the most tested path.

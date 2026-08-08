@@ -14,13 +14,16 @@ pub async fn run_system_audit() {
     println!("[Audit 1/4] Checking EdgeBrain Hardware & Model Engines...");
     let brain = EdgeBrain::new();
     let sys_prompt = "You are a helpful assistant.";
-    if let Ok(res) = brain.query_reasoner("Reply with 'Reasoner OK'", sys_prompt) {
+    if let Ok(res) = brain
+        .query_reasoner("Reply with 'Reasoner OK'", sys_prompt)
+        .await
+    {
         println!(
             "[OK] Reasoner Engine Output: {}",
             res.lines().next().unwrap_or("")
         );
     }
-    if let Ok(res) = brain.query_coder("print('Coder OK')", sys_prompt) {
+    if let Ok(res) = brain.query_coder("print('Coder OK')", sys_prompt).await {
         println!(
             "[OK] Coder Engine Output: {}",
             res.lines().next().unwrap_or("")

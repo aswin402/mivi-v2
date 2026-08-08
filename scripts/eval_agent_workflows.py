@@ -21,6 +21,7 @@ WORKFLOWS = [
     "rag-router",
     "memory-model-name",
     "trace-tool-shell",
+    "trace-multi-tool-result",
 ]
 
 
@@ -95,6 +96,56 @@ def payload_for(kind):
             "messages": [{"role": "user", "content": "Run npm test."}],
             "tools": large_agent_tools(),
         }
+    if kind == "trace-multi-tool-result":
+        return {
+            "model": "mivi",
+            "stream": False,
+            "messages": [
+                {"role": "user", "content": "Research Hono and run tests."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_webfetch",
+                            "type": "function",
+                            "function": {
+                                "name": "webfetch",
+                                "arguments": json.dumps({"url": "https://hono.dev/"}),
+                            },
+                        },
+                        {
+                            "id": "call_bash",
+                            "type": "function",
+                            "function": {
+                                "name": "bash",
+                                "arguments": json.dumps({"cmd": "cargo test"}),
+                            },
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_webfetch",
+                    "content": (
+                        '---\n'
+                        'title: "Hono"\n'
+                        'description: Web framework built on Web Standards.\n'
+                        '---\n'
+                        'Hono is a fast web framework.'
+                    ),
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_bash",
+                    "content": "test result: ok. 152 passed",
+                },
+            ],
+            "tools": [
+                make_tool("webfetch", "Fetch a URL from the web", {"url": {"type": "string"}}, ["url"]),
+                make_tool("bash", "Run a shell command in the project terminal", {"cmd": {"type": "string"}}, ["cmd"]),
+            ],
+        }
     if kind == "long-tool-output":
         noise = "\n".join(f"compiling filler crate {index}" for index in range(80))
         return {
@@ -166,6 +217,16 @@ def trace_has(trace_rows, kind=None, route=None):
     return False
 
 
+def trace_row(trace_rows, kind=None, route=None):
+    for row in trace_rows:
+        if kind is not None and row.get("kind") != kind:
+            continue
+        if route is not None and row.get("route") != route:
+            continue
+        return row
+    return None
+
+
 def score_workflow(kind, response_text, trace_rows):
     content, tool_calls = extract_message(response_text)
     text = content.lower()
@@ -211,6 +272,25 @@ def score_workflow(kind, response_text, trace_rows):
                 reasons.append("missing tool generation trace row")
             if not trace_has(trace_rows, "final_response", "tool_calls"):
                 reasons.append("missing tool_calls final trace row")
+    elif kind == "trace-multi-tool-result":
+        if "tool results" not in text:
+            reasons.append("missing aggregate tool-results heading")
+        if "hono" not in text:
+            reasons.append("missing web tool summary")
+        if "bash" not in text or "152 passed" not in text:
+            reasons.append("missing shell tool summary")
+        final_trace = trace_row(trace_rows, "final_response", "verified_tool_result")
+        metadata = (final_trace or {}).get("tool_result") or {}
+        matched_ids = set(metadata.get("matched_tool_call_ids") or [])
+        matched_names = set(metadata.get("matched_tool_names") or [])
+        if not metadata or metadata.get("tool_result_count") != 2 or not metadata.get("aggregated_tool_results"):
+            reasons.append("missing multi-tool trace metadata")
+        if matched_ids != {"call_bash", "call_webfetch"}:
+            reasons.append("missing matched tool call ids")
+        if matched_names != {"bash", "webfetch"}:
+            reasons.append("missing matched tool names")
+        if metadata.get("protocol_issues"):
+            reasons.append("unexpected protocol issues")
     elif kind == "long-tool-output":
         salient_failure = (
             "error[e0425]" in text

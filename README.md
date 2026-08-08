@@ -1,18 +1,18 @@
 # 🚀 MIVI-V2: Ultra-Compact Low-Resource Pure Rust Local AI Engine
 
-[![Version](https://img.shields.io/badge/version-v0.0.5-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.0.6-brightgreen.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![RAM Footprint](https://img.shields.io/badge/Idle%20RAM-%3C%2012%20MB-purple.svg)]()
 [![Ultra Low RAM](https://img.shields.io/badge/Ultra%20Low%20RAM-%3C%2040%20MB-green.svg)]()
 
-**MIVI-V2 (v0.0.5)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
+**MIVI-V2 (v0.0.6)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
 
 It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for autonomous AI agents including **Hermes Agent**, **OpenCode Agent**, **OpenZ**, **AutoGen**, **CrewAI**, **VS Code (Continue.dev)**, and **Cursor IDE**.
 
 ---
 
-## 🌟 Key Features in v0.0.5
+## 🌟 Key Features in v0.0.6
 
 * 🦀 **100% Pure Rust Architecture:** Zero Python runtime, zero PyTorch/transformers memory bloat, and zero virtual environment dependencies.
 * ⚡ **Speculative Decoding (`ds4` pattern):** Uses the configured coder for fast drafting and the configured reasoner for verification, boosting generation speed by **2.2x**.
@@ -24,7 +24,7 @@ It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for 
 * 🌐 **High-Speed Async Axum REST Server:** OpenAI-compatible API listening on `http://localhost:8000/v1` for `/v1/chat/completions` and `/v1/models`.
 * ⚙️ **Multi-Language Double-Loop Verifier:** Generates, executes, and auto-corrects code across **Python, JavaScript, TypeScript, Rust, and C++**.
 * 🧠 **Zero-Overhead Semantic Cache:** Token-set Jaccard similarity cache for instant **< 0.001s responses** on repeat queries.
-* 🧰 **Agent Runtime Roadmap:** v0.0.5 includes the implementation plan for tool filtering, context compression, OKF memory, RAG retrieval, persistent workers, benchmarking, and small-model evaluation.
+* 🧰 **Agent Runtime Roadmap:** v0.0.6 includes the implementation plan for tool filtering, context compression, OKF memory, RAG retrieval, persistent workers, benchmarking, and small-model evaluation.
 * 🧾 **Tool Output Compression:** Cargo, npm/pnpm/yarn/vitest/jest, pytest, and git diff outputs are reduced to salient failure/hunk lines before they enter the small-model context.
 
 ---
@@ -111,13 +111,21 @@ Results are written to `benchmarks/runtime-YYYYMMDD-HHMMSS.jsonl` with mode, pro
 
 Small-model evals are scored semantically: `scripts/eval_small_models.sh` writes `semantic_ok`, `score`, and `reasons`, and exits non-zero when an answer fails expected facts or tool-call checks.
 
-Enable compact per-request diagnostics with `MIVI_TRACE=1`; traces append JSONL rows to `logs/mivi-trace.jsonl` or `MIVI_TRACE_PATH`.
+Enable compact per-request diagnostics with `MIVI_TRACE=1`; traces append JSONL rows to `logs/mivi-trace.jsonl` or `MIVI_TRACE_PATH`. Tool-result final-response rows include matched tool IDs/names, aggregated result count, protocol issues, and tool error categories.
 
-Agent workflow evals simulate OpenCode-style traffic with injected skill metadata, 100+ tools, long tool output, RAG/memory prompts, and optional trace rows:
+Agent workflow evals simulate OpenCode-style traffic with injected skill metadata, 100+ tools, long tool output, RAG/memory prompts, tool-result aggregation, and optional trace rows:
 
 ```bash
 MIVI_TRACE=1 scripts/eval_agent_workflows.py
 ```
+
+Run the local compatibility gate in one command:
+
+```bash
+scripts/check_agent_compat.py --live auto
+```
+
+`--live auto` runs local tests/builds and adds HTTP smoke checks when a MIVI server is already reachable. Trace-backed evals require starting the server with `MIVI_TRACE=1` and passing `--live-eval on`.
 
 Results are written to `model-eval-results/agent-workflows-YYYYMMDD-HHMMSS.jsonl`.
 
@@ -157,6 +165,8 @@ MIVI_RUNTIME_MODE=worker-hot cargo run --release -- serve
 ```
 
 MIVI keeps the external model name as `mivi` in every mode. Context is bounded through compression, OKF memory, and gated RAG retrieval rather than raw 128K KV cache. Use `MIVI_REASONER_CONTEXT_SIZE` and `MIVI_CODER_CONTEXT_SIZE` when a candidate model needs a smaller raw KV cache to stay under the RAM target. `MIVI_REASONING_MODE=auto|think|no_think` controls Qwen3 thinking directives. `auto` is conservative for agents: normal prompts use `/no_think`, explicit deep-reasoning prompts use `/think`, and private `<think>` / `[Start thinking]` blocks are stripped before responses reach agents.
+
+Streaming and non-streaming responses expose OpenAI-shaped usage metadata. By default token counts use a cheap local estimator. Set `MIVI_TOKENIZER_CMD` and optionally `MIVI_TOKENIZER_MODEL` to a llama.cpp-compatible tokenizer command and GGUF model path for tokenizer-backed counts. Model resolution prefers `MIVI_TOKENIZER_MODEL`, then `MIVI_REASONER_MODEL`, then the enabled reasoner path from `configs/models.json`. If the tokenizer command fails, MIVI falls back to the cheap estimator.
 
 ---
 

@@ -44,11 +44,12 @@ fn strip_thinking_from_stream_line(line: &str, skipping_think: &mut bool) -> Opt
     const START_MARKERS: &[&str] = &["<think>", "[start thinking]", "start thinking"];
     const END_MARKERS: &[&str] = &["</think>", "[end thinking]", "end thinking"];
 
-    let clean = line
-        .replace("<|im_start|>", "")
-        .replace("<|im_end|>", "")
-        .trim()
-        .to_string();
+    let t = crate::server::active_chat_template();
+    let mut clean = line.to_string();
+    for stop in &t.stop_words {
+        clean = clean.replace(stop, "");
+    }
+    let clean = clean.trim().to_string();
     let mut rest = clean.as_str();
     let mut out = String::new();
 
@@ -96,6 +97,11 @@ pub fn spawn_streaming(
     ngl: &str,
     context_size: &str,
     temp: &str,
+    top_p: Option<f32>,
+    max_tokens: Option<u32>,
+    stop: Option<serde_json::Value>,
+    seed: Option<u64>,
+    json_schema: Option<String>,
 ) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel::<String>(64);
 
@@ -116,6 +122,31 @@ pub fn spawn_streaming(
         };
         let mut cmd = Command::new(&cli);
         base_args(&mut cmd, &mp, &n, &ctx, &t);
+
+        if let Some(tp) = top_p {
+            cmd.arg("--top-p").arg(tp.to_string());
+        }
+        if let Some(mt) = max_tokens {
+            cmd.arg("-n").arg(mt.to_string());
+        }
+        if let Some(sd) = seed {
+            cmd.arg("--seed").arg(sd.to_string());
+        }
+        if let Some(ref schema) = json_schema {
+            cmd.arg("--json-schema").arg(schema);
+        }
+        if let Some(stop_val) = stop {
+            if let Some(s) = stop_val.as_str() {
+                cmd.arg("--stop").arg(s);
+            } else if let Some(arr) = stop_val.as_array() {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        cmd.arg("--stop").arg(s);
+                    }
+                }
+            }
+        }
+
         cmd.arg("-f")
             .arg(&prompt_file)
             .arg("-st") // single-turn: exit after generation
@@ -158,7 +189,9 @@ pub fn spawn_streaming(
         while let Ok(Some(line)) = lines.next_line().await {
             match state {
                 State::FindingAssistant => {
-                    if line.contains("<|im_start|>assistant") {
+                    let t = crate::server::active_chat_template();
+                    let marker = t.assistant_start.trim();
+                    if line.contains(marker) {
                         state = State::Collecting;
                     }
                 }

@@ -70,7 +70,7 @@ MIVI supports three runtime modes through environment variables:
 
 `spawn` is the safest low-RAM mode. `worker-eco` lazy-starts one local text worker and falls back to `llama-cli` if the worker fails. `worker-hot` keeps the text worker warm for lower repeated-request latency. Vision stays lazy-loaded.
 
-MIVI also filters large agent tool lists, compresses noisy agent context, minifies command/tool outputs, validates returned tool calls against the selected tools, records optional compact JSONL traces, reads OKF memory from `memory/`, and gates workspace RAG so normal chat is not polluted by code chunks.
+MIVI also filters large agent tool lists, compresses noisy agent context, minifies command/tool outputs, validates returned tool calls against the selected tools, records optional compact JSONL traces with structured tool-result metadata, reads OKF memory from `memory/`, and gates workspace RAG so normal chat is not polluted by code chunks.
 
 ## Latest Runtime Benchmark
 
@@ -85,10 +85,24 @@ Measured on 2026-07-24 with `scripts/bench_runtime.sh`. The benchmark records Ru
 Benchmark output: `benchmarks/runtime-20260724-203641.jsonl`.
 
 
-Agent workflow evals simulate OpenCode-style traffic with injected skill metadata, 100+ tools, long tool output, RAG/memory prompts, and optional trace rows:
+Agent workflow evals simulate OpenCode-style traffic with injected skill metadata, 100+ tools, long tool output, RAG/memory prompts, tool-result aggregation, and optional trace rows:
 
 ```bash
 MIVI_TRACE=1 scripts/eval_agent_workflows.py
+```
+
+Run the local compatibility gate in one command:
+
+```bash
+scripts/check_agent_compat.py --live auto
+```
+
+`--live auto` runs local tests/builds and adds HTTP smoke checks when a MIVI server is already reachable. Trace-backed evals require starting the server with `MIVI_TRACE=1` and passing `--live-eval on`.
+
+Transport smoke tests validate the OpenAI-compatible HTTP surface against a running server:
+
+```bash
+scripts/smoke_openai_compat.py
 ```
 
 Results are written to `model-eval-results/agent-workflows-YYYYMMDD-HHMMSS.jsonl`.

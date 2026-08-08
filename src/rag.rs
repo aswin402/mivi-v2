@@ -113,36 +113,55 @@ impl TurboVecRAG {
     }
 
     pub async fn index_directory(&self, path: &str) -> usize {
-        let mut all_chunks = Vec::new();
+        let path = path.to_string();
+        let chunks_result = tokio::task::spawn_blocking(move || {
+            let mut all_chunks = Vec::new();
+            let mut file_count = 0;
 
-        for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
-            if entry.file_type().is_file() {
-                let path_str = entry.path().display().to_string();
-                if should_skip_path(&path_str) {
-                    continue;
-                }
+            for entry in WalkDir::new(&path).into_iter().filter_map(|e| e.ok()) {
+                if entry.file_type().is_file() {
+                    let path_str = entry.path().display().to_string();
+                    if should_skip_path(&path_str) {
+                        continue;
+                    }
 
-                if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
-                    if matches!(ext, "py" | "md" | "rs" | "json" | "js" | "ts" | "toml") {
-                        if let Ok(content) = fs::read_to_string(entry.path()) {
-                            let lines: Vec<&str> = content.lines().collect();
-                            let chunk_size = 25;
-                            for (i, chunk_lines) in lines.chunks(chunk_size).enumerate() {
-                                let chunk_text = chunk_lines.join("\n");
-                                if chunk_text.trim().len() > 10 {
-                                    all_chunks.push(RagChunk {
-                                        file_path: path_str.clone(),
-                                        line_start: (i * chunk_size) + 1,
-                                        text: chunk_text,
-                                    });
+                    if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
+                        if matches!(ext, "py" | "md" | "rs" | "json" | "js" | "ts" | "toml") {
+                            if let Ok(metadata) = entry.metadata() {
+                                if metadata.len() > 1_048_576 {
+                                    continue; // Skip files > 1 MB
+                                }
+                            } else {
+                                continue;
+                            }
+
+                            if let Ok(content) = fs::read_to_string(entry.path()) {
+                                let lines: Vec<&str> = content.lines().collect();
+                                let chunk_size = 25;
+                                for (i, chunk_lines) in lines.chunks(chunk_size).enumerate() {
+                                    let chunk_text = chunk_lines.join("\n");
+                                    if chunk_text.trim().len() > 10 {
+                                        all_chunks.push(RagChunk {
+                                            file_path: path_str.clone(),
+                                            line_start: (i * chunk_size) + 1,
+                                            text: chunk_text,
+                                        });
+                                    }
+                                }
+                                file_count += 1;
+                                if file_count >= 5000 {
+                                    break;
                                 }
                             }
                         }
                     }
                 }
             }
-        }
+            all_chunks
+        })
+        .await;
 
+        let all_chunks = chunks_result.unwrap_or_default();
         let count = all_chunks.len();
         let mut guard = self.chunks.lock().await;
         *guard = all_chunks;

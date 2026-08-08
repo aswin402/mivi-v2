@@ -239,7 +239,7 @@ impl CompilerVerifier {
         Some(format!("print({} + {})", left, right))
     }
 
-    pub fn generate_and_verify(
+    pub async fn generate_and_verify(
         &self,
         task: &str,
         language: &str,
@@ -257,7 +257,7 @@ impl CompilerVerifier {
                 "[CompilerVerifier] Attempt {}/{} generating code...",
                 attempt, max_retries
             );
-            if let Ok(raw_res) = self.brain.query_coder(&prompt, sys_prompt) {
+            if let Ok(raw_res) = self.brain.query_coder(&prompt, sys_prompt).await {
                 let code = self.extract_code_block(&raw_res);
                 let (success, output) = self.run_local_code(&code, language);
                 let output_satisfies_task = !(language.eq_ignore_ascii_case("python")

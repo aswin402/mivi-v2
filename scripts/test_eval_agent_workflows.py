@@ -86,6 +86,42 @@ class AgentWorkflowEvalTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
 
+    def test_trace_multi_tool_result_score_requires_trace_metadata(self):
+        trace_rows = [
+            {"kind": "request", "messages": 4},
+            {
+                "kind": "final_response",
+                "route": "verified_tool_result",
+                "tool_result": {
+                    "tool_result_count": 2,
+                    "aggregated_tool_results": True,
+                    "matched_tool_call_ids": ["call_bash", "call_webfetch"],
+                    "matched_tool_names": ["bash", "webfetch"],
+                    "unmatched_tool_call_ids": [],
+                    "protocol_issues": [],
+                    "tool_error_categories": [],
+                },
+            },
+        ]
+
+        result = workflows.score_workflow(
+            "trace-multi-tool-result",
+            response("Tool results:\n- Page: Hono. Web framework.\n- Tool `bash` returned: test result: ok. 152 passed"),
+            trace_rows,
+        )
+
+        self.assertTrue(result["ok"])
+
+    def test_trace_multi_tool_result_score_rejects_missing_trace_metadata(self):
+        result = workflows.score_workflow(
+            "trace-multi-tool-result",
+            response("Tool results:\n- Page: Hono. Web framework.\n- Tool `bash` returned: test result: ok. 152 passed"),
+            [{"kind": "final_response", "route": "verified_tool_result"}],
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertIn("missing multi-tool trace metadata", result["reasons"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,201 @@
+{
+  "aliases": {
+    "internet": [
+      "web",
+      "webfetch",
+      "websearch",
+      "browser",
+      "browse",
+      "fetch",
+      "crawl",
+      "http",
+      "https",
+      "url"
+    ],
+    "online": [
+      "web",
+      "webfetch",
+      "websearch",
+      "browser",
+      "browse",
+      "fetch",
+      "crawl",
+      "http",
+      "https",
+      "url"
+    ],
+    "browse": [
+      "web",
+      "webfetch",
+      "websearch",
+      "browser",
+      "fetch",
+      "http",
+      "https",
+      "url"
+    ],
+    "browsing": [
+      "web",
+      "webfetch",
+      "websearch",
+      "browser",
+      "fetch",
+      "http",
+      "https",
+      "url"
+    ],
+    "browser": [
+      "web",
+      "webfetch",
+      "websearch",
+      "fetch",
+      "http",
+      "https",
+      "url"
+    ],
+    "web": [
+      "internet",
+      "webfetch",
+      "websearch",
+      "browser",
+      "fetch",
+      "http",
+      "https",
+      "url"
+    ],
+    "website": [
+      "web",
+      "webfetch",
+      "browser",
+      "fetch",
+      "http",
+      "https",
+      "url"
+    ],
+    "webpage": [
+      "web",
+      "webfetch",
+      "browser",
+      "fetch",
+      "http",
+      "https",
+      "url"
+    ]
+  },
+  "tool_taxonomy": {
+    "web": [
+      "web",
+      "internet",
+      "browser",
+      "browse",
+      "fetch",
+      "crawl",
+      "http",
+      "https",
+      "url",
+      "link",
+      "website",
+      "webpage",
+      "research",
+      "search"
+    ],
+    "file": [
+      "file",
+      "read",
+      "path",
+      "filesystem",
+      "workspace",
+      "uri"
+    ],
+    "shell": [
+      "shell",
+      "terminal",
+      "command",
+      "bash",
+      "exec",
+      "process"
+    ],
+    "local_exclude": [
+      "workspace",
+      "local",
+      "artifact",
+      "skill"
+    ]
+  },
+  "tool_error_markers": [
+    "error",
+    "failed",
+    "failure",
+    "panic",
+    "exception",
+    "traceback",
+    "timed out",
+    "timeout",
+    "network error"
+  ],
+  "tool_salient_markers": [
+    "error",
+    "failed",
+    "failure",
+    "panic",
+    "exception",
+    "traceback",
+    "warning",
+    "test result",
+    "exit",
+    "status",
+    "timed out",
+    "timeout",
+    "network error"
+  ],
+  "tool_error_categories": {
+    "schema_error": [
+      "schema error",
+      "validation error",
+      "invalid arguments",
+      "missing required",
+      "json schema"
+    ],
+    "permission_error": [
+      "permission denied",
+      "not permitted",
+      "access denied",
+      "unauthorized",
+      "forbidden"
+    ],
+    "timeout": [
+      "timed out",
+      "timeout",
+      "deadline exceeded"
+    ],
+    "network_error": [
+      "network error",
+      "connection refused",
+      "connection reset",
+      "dns",
+      "host resolution",
+      "http 5",
+      "http 4"
+    ],
+    "not_found": [
+      "not found",
+      "no such file",
+      "404"
+    ],
+    "command_failed": [
+      "test result: failed",
+      "command failed",
+      "exit code",
+      "error[",
+      "failed"
+    ]
+  },
+  "tool_error_category_priority": [
+    "schema_error",
+    "permission_error",
+    "timeout",
+    "network_error",
+    "not_found",
+    "command_failed"
+  ]
+}

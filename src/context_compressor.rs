@@ -156,6 +156,7 @@ fn normalize_context_text(text: &str) -> String {
     ] {
         normalized = strip_tagged_block(&normalized, tag);
     }
+    normalized = strip_all_tagged_blocks(&normalized, "think");
     normalized.trim().to_string()
 }
 
@@ -171,6 +172,31 @@ fn strip_tagged_block(text: &str, tag: &str) -> String {
     }
 
     trimmed.to_string()
+}
+
+fn strip_all_tagged_blocks(text: &str, tag: &str) -> String {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let mut remaining = text;
+    let mut cleaned = String::new();
+
+    loop {
+        let lower = remaining.to_ascii_lowercase();
+        let Some(start) = lower.find(&open) else {
+            cleaned.push_str(remaining);
+            break;
+        };
+        cleaned.push_str(&remaining[..start]);
+        let after_open = &remaining[start + open.len()..];
+        let after_open_lower = after_open.to_ascii_lowercase();
+        if let Some(end) = after_open_lower.find(&close) {
+            remaining = &after_open[end + close.len()..];
+        } else {
+            break;
+        }
+    }
+
+    cleaned.trim().to_string()
 }
 
 fn is_low_value_turn(role: &str, text: &str) -> bool {
@@ -270,6 +296,29 @@ mod tests {
             .tool_observations
             .iter()
             .any(|turn| turn.contains("No such file")));
+    }
+
+    #[test]
+    fn strips_assistant_think_blocks_from_recent_context() {
+        let messages = vec![
+            msg("user", "so what are the features u have"),
+            msg(
+                "assistant",
+                "<think>Classified request as capability_inventory; selected tools: openz_inventory</think>
+Your agent has tools.",
+            ),
+            msg("user", "ok research and tell me about that"),
+        ];
+
+        let compressed = compress_context(&messages, ContextBudget::from_max_input_tokens(1024));
+        let recent = compressed.protected_recent.join(
+            "
+",
+        );
+
+        assert!(!recent.contains("<think>"));
+        assert!(!recent.contains("Classified request"));
+        assert!(recent.contains("Your agent has tools."));
     }
 
     #[test]
