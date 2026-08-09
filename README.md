@@ -1,18 +1,18 @@
 # 🚀 MIVI-V2: Ultra-Compact Low-Resource Pure Rust Local AI Engine
 
-[![Version](https://img.shields.io/badge/version-v0.0.9-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.0.10-brightgreen.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![RAM Footprint](https://img.shields.io/badge/Idle%20RAM-%3C%2012%20MB-purple.svg)]()
 [![Ultra Low RAM](https://img.shields.io/badge/Ultra%20Low%20RAM-%3C%2040%20MB-green.svg)]()
 
-**MIVI-V2 (v0.0.9)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
+**MIVI-V2 (v0.0.10)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
 
 It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for autonomous AI agents including **Hermes Agent**, **OpenCode Agent**, **OpenZ**, **AutoGen**, **CrewAI**, **VS Code (Continue.dev)**, and **Cursor IDE**.
 
 ---
 
-## 🌟 Key Features in v0.0.9
+## 🌟 Key Features in v0.0.10
 
 * 🦀 **100% Pure Rust Architecture:** Zero Python runtime, zero PyTorch/transformers memory bloat, and zero virtual environment dependencies.
 * ⚡ **Reqwest Connection Pooling:** Pooled HTTP client in `worker.rs` with keep-alive socket reuse, reducing API server request overhead.

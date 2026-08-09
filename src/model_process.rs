@@ -40,7 +40,10 @@ fn find_marker_case_insensitive(text: &str, markers: &[&str]) -> Option<(usize, 
         .min_by_key(|(index, _)| *index)
 }
 
-fn strip_thinking_from_stream_line(line: &str, skipping_think: &mut bool) -> Option<String> {
+pub(crate) fn strip_thinking_from_stream_line(
+    line: &str,
+    skipping_think: &mut bool,
+) -> Option<String> {
     const START_MARKERS: &[&str] = &["<think>", "[start thinking]", "start thinking"];
     const END_MARKERS: &[&str] = &["</think>", "[end thinking]", "end thinking"];
 

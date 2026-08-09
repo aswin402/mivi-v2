@@ -65,6 +65,8 @@ pub struct ModelCatalogEntry {
     pub notes: Option<String>,
     #[serde(default)]
     pub chat_template: Option<ChatTemplateConfig>,
+    #[serde(default)]
+    pub tokenizer_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

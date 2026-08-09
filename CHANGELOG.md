@@ -5,6 +5,16 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.10] - 2026-08-09
+
+### 🦀 Phase 8: In-Process Native Inference (COMPLETE)
+
+#### Added
+* 🏎️ **Unified GGUF Model Loading**: Added a unified `QuantizedModel` loading abstraction in `native_brain.rs` that automatically detects `general.architecture` from GGUF metadata, routing weight loading and model execution between Llama and Qwen2 architectures.
+* 🌊 **In-Process Token-by-Token Streaming**: Implemented stateful incremental token-by-token UTF-8 decoding and Qwen thinking block filtering inside `NativeBrain::query_stream`.
+* 🔌 **Axum Server Integration**: Integrated `NativeBrain::query_stream` into `handle_streaming` and `handle_responses_streaming` inside `src/server/helpers.rs` under the `#[cfg(feature = "native")]` compilation gate, allowing the server to stream tokens in-process without spawning external CLI runner binaries.
+* 🧪 **Async Tokio Stream Verification Tests**: Added comprehensive async tokio stream verification tests inside the native brain test suite, successfully running end-to-end token generation loops in release-compiled test suites.
+
 ## [v0.0.9] - 2026-08-09
 
 ### 🧠 Phase 7: Smarter Routing & Orchestration (COMPLETE)

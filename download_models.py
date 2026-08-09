@@ -58,6 +58,18 @@ def download_models():
             "repo_id": "Cactus-Compute/needle",
             "filename": "model.safetensors",
             "target": os.path.join(models_dir, "needle-model.safetensors")
+        },
+        {
+            "name": "Qwen 2.5 0.5B Instruct Tokenizer (tokenizer.json)",
+            "repo_id": "Qwen/Qwen2.5-0.5B-Instruct",
+            "filename": "tokenizer.json",
+            "target": os.path.join(models_dir, "qwen2.5-0.5b-tokenizer.json")
+        },
+        {
+            "name": "Llama 3.2 1B Instruct Tokenizer (tokenizer.json)",
+            "repo_id": "unsloth/Llama-3.2-1B-Instruct",
+            "filename": "tokenizer.json",
+            "target": os.path.join(models_dir, "Llama-3.2-1B-Instruct-tokenizer.json")
         }
     ]
 

@@ -8,6 +8,7 @@
 # GGUF Model Checkpoints (downloaded via download_models.py)
 /models/*.gguf
 /models/.cache/
+/models/*.json
 
 # Generated dataset & telemetry logs
 /dataset

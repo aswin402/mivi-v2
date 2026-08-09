@@ -7,6 +7,7 @@ pub mod context_compressor;
 pub mod logger;
 pub mod model_catalog;
 pub mod model_process;
+pub mod native_brain;
 pub mod okf_memory;
 pub mod orchestrator;
 pub mod prompt_file;

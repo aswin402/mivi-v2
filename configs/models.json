@@ -9,6 +9,7 @@
       "context_tokens": 32768,
       "ram_mb_estimate": 540,
       "enabled": true,
+      "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
       "notes": "Default low-resource chat and reasoning worker candidate. Agents should still call only external model mivi."
     },
     {
@@ -19,6 +20,7 @@
       "context_tokens": 32768,
       "ram_mb_estimate": 430,
       "enabled": true,
+      "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
       "notes": "Default coding and tool-call worker candidate. Agents should still call only external model mivi."
     },
     {

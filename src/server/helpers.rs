@@ -2065,22 +2065,46 @@ pub async fn handle_responses_streaming(
     let json_schema = extract_json_schema(&chat_req);
 
     tokio::spawn(async move {
-        let mut spawn_rx = spawn_streaming(
-            &cli_path,
-            &model_path,
-            &formatted,
-            if brain.ultra_low_ram { "0" } else { "999" },
-            &streaming_context,
-            &temp_str,
-            top_p,
-            max_tokens,
-            stop,
-            seed,
-            json_schema,
-        );
-        while let Some(token) = spawn_rx.recv().await {
-            if tx.send(token).await.is_err() {
-                break;
+        #[cfg(feature = "native")]
+        {
+            match brain.native.query_stream(
+                std::path::Path::new(&model_path),
+                &model_user_prompt,
+                &system_prompt,
+                &temp_str,
+                max_tokens.unwrap_or(512) as usize,
+            ) {
+                Ok(mut native_rx) => {
+                    while let Some(token) = native_rx.recv().await {
+                        if tx.send(token).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(err) => {
+                    error!("[NativeBrain] Native stream error: {}", err);
+                }
+            }
+        }
+        #[cfg(not(feature = "native"))]
+        {
+            let mut spawn_rx = spawn_streaming(
+                &cli_path,
+                &model_path,
+                &formatted,
+                if brain.ultra_low_ram { "0" } else { "999" },
+                &streaming_context,
+                &temp_str,
+                top_p,
+                max_tokens,
+                stop,
+                seed,
+                json_schema,
+            );
+            while let Some(token) = spawn_rx.recv().await {
+                if tx.send(token).await.is_err() {
+                    break;
+                }
             }
         }
     });
@@ -2959,26 +2983,53 @@ pub async fn handle_streaming(
                 }
             }
         } else {
-            let mut rx = spawn_streaming(
-                &cli_path,
-                &model_path,
-                &formatted,
-                if brain.ultra_low_ram { "0" } else { "999" },
-                &streaming_context,
-                &temp_str,
-                top_p,
-                max_tokens,
-                stop,
-                seed,
-                json_schema,
-            );
-
-            while let Some(token) = rx.recv().await {
-                if !token.trim().is_empty() {
-                    emitted = true;
+            #[cfg(feature = "native")]
+            {
+                match brain.native.query_stream(
+                    std::path::Path::new(&model_path),
+                    &fallback_user_prompt,
+                    &system_prompt,
+                    &temp_str,
+                    max_tokens.unwrap_or(512) as usize,
+                ) {
+                    Ok(mut native_rx) => {
+                        while let Some(token) = native_rx.recv().await {
+                            if !token.trim().is_empty() {
+                                emitted = true;
+                            }
+                            if tx.send(token).await.is_err() {
+                                return; // Receiver dropped (client disconnected).
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!("[NativeBrain] Native stream error: {}", err);
+                    }
                 }
-                if tx.send(token).await.is_err() {
-                    return; // Receiver dropped (client disconnected).
+            }
+            #[cfg(not(feature = "native"))]
+            {
+                let mut rx = spawn_streaming(
+                    &cli_path,
+                    &model_path,
+                    &formatted,
+                    if brain.ultra_low_ram { "0" } else { "999" },
+                    &streaming_context,
+                    &temp_str,
+                    top_p,
+                    max_tokens,
+                    stop,
+                    seed,
+                    json_schema,
+                );
+
+                while let Some(token) = rx.recv().await {
+                    if !token.trim().is_empty() {
+                        emitted = true;
+                    }
+                    if tx.send(token).await.is_err() {
+                        return; // Receiver dropped (client disconnected).
+                    }
                 }
             }
         }

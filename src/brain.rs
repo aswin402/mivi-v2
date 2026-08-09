@@ -18,6 +18,7 @@ pub struct EdgeBrain {
     pub minicpm_proj: PathBuf,
     pub ultra_low_ram: bool,
     pub text_worker: Arc<WorkerManager>,
+    pub native: crate::native_brain::NativeBrain,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,13 +99,14 @@ fn strip_delimited_block(text: &str, open: &str, close: &str) -> String {
     out.trim().to_string()
 }
 
-fn strip_think_blocks(text: &str) -> String {
+pub(crate) fn strip_think_blocks(text: &str) -> String {
     let without_xml = strip_delimited_block(text, "<think>", "</think>");
     let without_bracketed =
         strip_delimited_block(&without_xml, "[start thinking]", "[end thinking]");
     strip_delimited_block(&without_bracketed, "start thinking", "end thinking")
 }
 
+#[allow(dead_code)]
 fn clean_llama_cli_response(stdout: &str) -> String {
     let t = crate::server::active_chat_template();
     let assistant_marker = t.assistant_start.trim();
@@ -139,6 +141,7 @@ fn clean_llama_cli_response(stdout: &str) -> String {
     strip_think_blocks(&scrub_generated_prompt_echo(&clean))
 }
 
+#[allow(dead_code)]
 fn scrub_generated_prompt_echo(text: &str) -> String {
     let t = crate::server::active_chat_template();
     let mut cleaned = text.trim();
@@ -282,6 +285,8 @@ impl EdgeBrain {
             info!("[AIRLLM/COLIBRI MODE] Ultra-Low-RAM mmap streaming active (< 40 MB RAM target)");
         }
 
+        let native = crate::native_brain::NativeBrain::new();
+
         Self {
             llama_cli,
             minicpm_cli,
@@ -291,9 +296,35 @@ impl EdgeBrain {
             minicpm_proj,
             ultra_low_ram,
             text_worker,
+            native,
         }
     }
 
+    #[cfg(feature = "native")]
+    async fn run_cli(
+        &self,
+        model_path: &Path,
+        prompt: &str,
+        system_prompt: &str,
+        temp: &str,
+        _context_size: &str,
+    ) -> Result<String, String> {
+        let runtime_config = RuntimeConfig::from_env();
+        if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
+            let fut = self.text_worker.query_chat(prompt, system_prompt, temp);
+            match fut.await {
+                Ok(response) => return Ok(response),
+                Err(err) => warn!(
+                    "[MIVI-V2 Worker] Falling back to native inference after worker error: {}",
+                    err
+                ),
+            }
+        }
+        self.native
+            .query(model_path, prompt, system_prompt, temp, 512)
+    }
+
+    #[cfg(not(feature = "native"))]
     async fn run_cli(
         &self,
         model_path: &Path,
