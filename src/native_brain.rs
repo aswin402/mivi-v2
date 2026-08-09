@@ -114,6 +114,24 @@ pub struct NativeBrain {
 #[cfg(feature = "native")]
 impl NativeBrain {
     pub fn new() -> Self {
+        let mut features = Vec::new();
+        if cfg!(target_feature = "avx2") {
+            features.push("AVX2");
+        }
+        if cfg!(target_feature = "fma") {
+            features.push("FMA");
+        }
+        if cfg!(target_feature = "f16c") {
+            features.push("F16C");
+        }
+        if cfg!(target_feature = "neon") {
+            features.push("NEON");
+        }
+        info!(
+            "[NativeBrain] Native CPU vectorization active: {:?}",
+            features
+        );
+
         Self {
             models: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -454,6 +472,11 @@ impl NativeBrain {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn test_native_brain_new() {
+        let _brain = NativeBrain::new();
+    }
 
     #[cfg(feature = "native")]
     #[test]
