@@ -79,6 +79,13 @@ cd mivi-v2
 cargo build --release
 ```
 
+### Native CPU SIMD Acceleration
+To build and run MIVI-V2 with native in-process GGUF inference accelerated by host CPU vector extensions (AVX2, FMA, F16C, or NEON), run:
+```bash
+make build-native
+make run-native
+```
+
 ### 2. Download Model Weights
 
 Fetch the ultra-compact GGUF model suite using the downloader:
