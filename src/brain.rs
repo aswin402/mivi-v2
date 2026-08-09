@@ -418,9 +418,8 @@ impl EdgeBrain {
             return self.query_reasoner(prompt, system_prompt).await;
         }
 
-        info!("[DS4 SPECULATIVE] Verifying draft with configured reasoner...");
         let verify_prompt = format!(
-            "Verify and improve this response for accuracy:\nUSER: {}\nPROPOSED RESPONSE:\n{}\nIf accurate, output the response as is. Otherwise output the corrected version.",
+            "### Task Verification\nVerify and improve the proposed response for accuracy based on the user request.\n\n#### User Request:\n{}\n\n#### Proposed Response:\n{}\n\nIf the proposed response is accurate, output the response as is. Otherwise output the corrected version.",
             apply_reasoning_directive(prompt), draft
         );
 

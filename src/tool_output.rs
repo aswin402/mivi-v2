@@ -1,21 +1,35 @@
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DiagnosticEntry {
+    pub category: String,
+    pub code: Option<String>,
+    pub file: Option<String>,
+    pub line: Option<usize>,
+    pub col: Option<usize>,
+    pub message: String,
+    pub context: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompressedToolOutput {
     pub kind: String,
     pub summary: String,
     pub important_lines: Vec<String>,
     pub original_chars: usize,
+    pub diagnostics: Vec<DiagnosticEntry>,
 }
 
 pub fn compress_tool_output(command: &str, output: &str, max_lines: usize) -> CompressedToolOutput {
     let kind = classify_command(command, output);
     let important_lines = select_important_lines(&kind, output, max_lines);
     let summary = summarize(&kind, &important_lines, output);
+    let diagnostics = extract_diagnostics(&kind, output);
 
     CompressedToolOutput {
         kind,
         summary,
         important_lines,
         original_chars: output.chars().count(),
+        diagnostics,
     }
 }
 
@@ -28,6 +42,13 @@ pub fn render_compressed_tool_output(command: &str, output: &str, max_lines: usi
     if !compressed.important_lines.is_empty() {
         rendered.push_str("\nimportant:\n");
         rendered.push_str(&compressed.important_lines.join("\n"));
+    }
+    if !compressed.diagnostics.is_empty() {
+        rendered.push_str("\nstructured-diagnostics:\n");
+        for diag in &compressed.diagnostics {
+            let diag_json = serde_json::to_string(diag).unwrap_or_default();
+            rendered.push_str(&format!("{}\n", diag_json));
+        }
     }
     rendered
 }
@@ -131,6 +152,135 @@ fn summarize(kind: &str, important_lines: &[String], output: &str) -> String {
     format!("{} {}: {}", kind, status, first)
 }
 
+fn extract_diagnostics(kind: &str, output: &str) -> Vec<DiagnosticEntry> {
+    let mut diagnostics = Vec::new();
+    let lines: Vec<&str> = output.lines().collect();
+
+    match kind {
+        "cargo" => {
+            let re_err = regex::Regex::new(r"^(error|warning)\[(E\d+)\]:\s*(.*)$").unwrap();
+            let re_loc = regex::Regex::new(r"^\s*-->\s*([^:]+):(\d+):(\d+)").unwrap();
+            for i in 0..lines.len() {
+                let line = lines[i].trim();
+                if let Some(caps) = re_err.captures(line) {
+                    let category = caps
+                        .get(1)
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_else(|| "error".to_string());
+                    let code = caps.get(2).map(|m| m.as_str().to_string());
+                    let message = caps
+                        .get(3)
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default();
+
+                    let mut file = None;
+                    let mut line_num = None;
+                    let mut col_num = None;
+                    let mut context_lines = vec![lines[i].to_string()];
+                    for j in (i + 1)..std::cmp::min(i + 6, lines.len()) {
+                        let next_line = lines[j];
+                        context_lines.push(next_line.to_string());
+                        if let Some(loc_caps) = re_loc.captures(next_line) {
+                            file = loc_caps.get(1).map(|m| m.as_str().to_string());
+                            line_num = loc_caps
+                                .get(2)
+                                .and_then(|m| m.as_str().parse::<usize>().ok());
+                            col_num = loc_caps
+                                .get(3)
+                                .and_then(|m| m.as_str().parse::<usize>().ok());
+                            break;
+                        }
+                    }
+
+                    diagnostics.push(DiagnosticEntry {
+                        category,
+                        code,
+                        file,
+                        line: line_num,
+                        col: col_num,
+                        message,
+                        context: context_lines.join("\n"),
+                    });
+                }
+            }
+        }
+        "node-test" => {
+            let re_tsc = regex::Regex::new(
+                r"^([^(\s]+)\((\d+),(\d+)\):\s*(error|warning)\s+(TS\d+):\s*(.*)$",
+            )
+            .unwrap();
+            for line in &lines {
+                let trimmed = line.trim();
+                if let Some(caps) = re_tsc.captures(trimmed) {
+                    let file = caps.get(1).map(|m| m.as_str().to_string());
+                    let line_num = caps.get(2).and_then(|m| m.as_str().parse::<usize>().ok());
+                    let col_num = caps.get(3).and_then(|m| m.as_str().parse::<usize>().ok());
+                    let category = caps
+                        .get(4)
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_else(|| "error".to_string());
+                    let code = caps.get(5).map(|m| m.as_str().to_string());
+                    let message = caps
+                        .get(6)
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default();
+                    diagnostics.push(DiagnosticEntry {
+                        category,
+                        code,
+                        file,
+                        line: line_num,
+                        col: col_num,
+                        message,
+                        context: trimmed.to_string(),
+                    });
+                }
+            }
+        }
+        "pytest" => {
+            let re_file = regex::Regex::new(r#"^\s*File\s+"([^"]+)",\s*line\s*(\d+)"#).unwrap();
+            let re_err = regex::Regex::new(r"^([a-zA-Z_]\w*Error):\s*(.*)$").unwrap();
+            for i in 0..lines.len() {
+                let line = lines[i];
+                if let Some(caps) = re_file.captures(line) {
+                    let file = caps.get(1).map(|m| m.as_str().to_string());
+                    let line_num = caps.get(2).and_then(|m| m.as_str().parse::<usize>().ok());
+
+                    let mut message = String::new();
+                    let mut category = "error".to_string();
+                    let mut context_lines = vec![line.to_string()];
+                    for j in (i + 1)..std::cmp::min(i + 10, lines.len()) {
+                        let next_line = lines[j];
+                        context_lines.push(next_line.to_string());
+                        if let Some(err_caps) = re_err.captures(next_line) {
+                            category = err_caps
+                                .get(1)
+                                .map(|m| m.as_str().to_string())
+                                .unwrap_or_else(|| "error".to_string());
+                            message = err_caps
+                                .get(2)
+                                .map(|m| m.as_str().to_string())
+                                .unwrap_or_default();
+                            break;
+                        }
+                    }
+                    diagnostics.push(DiagnosticEntry {
+                        category,
+                        code: None,
+                        file,
+                        line: line_num,
+                        col: None,
+                        message,
+                        context: context_lines.join("\n"),
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+
+    diagnostics
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +365,36 @@ FAILED test_app.py::test_sum";
             .iter()
             .any(|line| line.starts_with("@@")));
         assert!(compressed.important_lines.iter().any(|line| line == "+new"));
+    }
+
+    #[test]
+    fn extracts_diagnostics_successfully() {
+        let cargo_err = "error[E0425]: cannot find value `x` in this scope
+   --> src/main.rs:10:55";
+        let diags = extract_diagnostics("cargo", cargo_err);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code.as_deref(), Some("E0425"));
+        assert_eq!(diags[0].file.as_deref(), Some("src/main.rs"));
+        assert_eq!(diags[0].line, Some(10));
+        assert_eq!(diags[0].col, Some(55));
+
+        let tsc_err = "src/app.ts(5,20): error TS2304: Cannot find name 'y'.";
+        let diags_tsc = extract_diagnostics("node-test", tsc_err);
+        assert_eq!(diags_tsc.len(), 1);
+        assert_eq!(diags_tsc[0].code.as_deref(), Some("TS2304"));
+        assert_eq!(diags_tsc[0].file.as_deref(), Some("src/app.ts"));
+        assert_eq!(diags_tsc[0].line, Some(5));
+        assert_eq!(diags_tsc[0].col, Some(20));
+        assert_eq!(diags_tsc[0].message, "Cannot find name 'y'.");
+
+        let pytest_err = "Traceback (most recent call last):
+  File \"app.py\", line 15, in run
+NameError: name 'val' is not defined";
+        let diags_py = extract_diagnostics("pytest", pytest_err);
+        assert_eq!(diags_py.len(), 1);
+        assert_eq!(diags_py[0].file.as_deref(), Some("app.py"));
+        assert_eq!(diags_py[0].line, Some(15));
+        assert_eq!(diags_py[0].category, "NameError");
+        assert_eq!(diags_py[0].message, "name 'val' is not defined");
     }
 }

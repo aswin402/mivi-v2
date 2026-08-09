@@ -5,6 +5,14 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.9] - 2026-08-09
+
+### 🧠 Phase 7: Smarter Routing & Orchestration (COMPLETE)
+
+#### Added
+* ⚡ **Scaffold-Aligned System Prompt Templates**: Refactored speculative decoding prompts to match standard training formats, making them highly robust for local reasoning engines.
+* 📋 **Structured Compiler Diagnostics**: Integrated standard compiler and traceback parser in `tool_output.rs` to extract precise `file`, `line`, `col`, and `message` metadata, producing structured diagnostic feedback for self-correction loops.
+
 ## [v0.0.8] - 2026-08-09
 
 ### 🧠 Phase 7: Smarter Routing & Orchestration (WIP)

@@ -67,9 +67,9 @@
 
 ### Wave 2 — Prompt Engineering (MEDIUM)
 
-- [ ] **7.3** Scaffold-aligned system prompt templates — format tool definitions and error feedback to match how scaffold-aware models are trained
-- [ ] **7.4** Structured compiler diagnostic formatting in `tool_output.rs` (standardized error schemas improve model self-correction rates)
-- [ ] **7.5** Strict JSON schema response format support (full parsing & validation)
+- [x] **7.3** Scaffold-aligned system prompt templates — format tool definitions and error feedback to match how scaffold-aware models are trained
+- [x] **7.4** Structured compiler diagnostic formatting in `tool_output.rs` (standardized error schemas improve model self-correction rates)
+- [x] **7.5** Strict JSON schema response format support (full parsing & validation)
 
 ---
 
