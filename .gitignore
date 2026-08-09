@@ -20,6 +20,7 @@
 .vscode/
 .idea/
 .crush/
+.superpowers/
 memory.db
 memory.db-shm
 memory.db-wal
