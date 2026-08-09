@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -13,6 +14,7 @@ pub struct RagChunk {
 #[derive(Clone)]
 pub struct TurboVecRAG {
     chunks: Arc<Mutex<Vec<RagChunk>>>,
+    usage: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 fn expand_query_words(mut words: Vec<String>) -> Vec<String> {
@@ -107,9 +109,20 @@ fn relevant_lines(text: &str, query_words: &[String], max_lines: usize) -> Strin
 
 impl TurboVecRAG {
     pub fn new() -> Self {
+        let usage = Arc::new(Mutex::new(Self::load_usage()));
         Self {
             chunks: Arc::new(Mutex::new(Vec::new())),
+            usage,
         }
+    }
+
+    fn load_usage() -> HashMap<String, u64> {
+        if let Ok(data) = fs::read_to_string(".mivi_rag_usage") {
+            if let Ok(map) = serde_json::from_str::<HashMap<String, u64>>(&data) {
+                return map;
+            }
+        }
+        HashMap::new()
     }
 
     pub async fn index_directory(&self, path: &str) -> usize {
@@ -180,6 +193,7 @@ impl TurboVecRAG {
             return Vec::new();
         }
 
+        let usage_guard = self.usage.lock().await;
         let mut results = Vec::new();
 
         for chunk in guard.iter() {
@@ -204,13 +218,32 @@ impl TurboVecRAG {
                 score += 2.0;
             }
 
+            // Apply usage boost
+            if let Some(count) = usage_guard.get(&chunk.file_path) {
+                score += (*count as f32).min(10.0) * 0.2;
+            }
+
             if score >= 1.0 {
                 results.push((chunk.clone(), score));
             }
         }
 
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        results.into_iter().take(top_k).collect()
+        let taken: Vec<(RagChunk, f32)> = results.into_iter().take(top_k).collect();
+
+        drop(usage_guard);
+
+        if !taken.is_empty() {
+            let mut usage_guard = self.usage.lock().await;
+            for (chunk, _) in &taken {
+                *usage_guard.entry(chunk.file_path.clone()).or_insert(0) += 1;
+            }
+            if let Ok(json) = serde_json::to_string_pretty(&*usage_guard) {
+                let _ = fs::write(".mivi_rag_usage", json);
+            }
+        }
+
+        taken
     }
 
     pub async fn format_rag_context(&self, query: &str, top_k: usize) -> String {
@@ -335,5 +368,28 @@ mod tests {
         assert!(context.contains("classify_intent"));
         assert!(!context.contains("# irrelevant filler line 1\n"));
         assert!(!context.contains("irrelevant filler line 25"));
+    }
+
+    #[tokio::test]
+    async fn search_tracks_usage_and_persists_to_file() {
+        let _ = fs::remove_file(".mivi_rag_usage");
+
+        let rag = TurboVecRAG::new();
+        {
+            let mut chunks = rag.chunks.lock().await;
+            chunks.push(RagChunk {
+                file_path: "src/test_file.rs".to_string(),
+                line_start: 1,
+                text: "test usage tracking code block".to_string(),
+            });
+        }
+
+        let results = rag.search("test usage", 1).await;
+        assert_eq!(results.len(), 1);
+
+        let usage = TurboVecRAG::load_usage();
+        assert_eq!(usage.get("src/test_file.rs"), Some(&1));
+
+        let _ = fs::remove_file(".mivi_rag_usage");
     }
 }

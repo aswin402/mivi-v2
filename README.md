@@ -1,20 +1,25 @@
 # 🚀 MIVI-V2: Ultra-Compact Low-Resource Pure Rust Local AI Engine
 
-[![Version](https://img.shields.io/badge/version-v0.0.6-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.0.7-brightgreen.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![RAM Footprint](https://img.shields.io/badge/Idle%20RAM-%3C%2012%20MB-purple.svg)]()
 [![Ultra Low RAM](https://img.shields.io/badge/Ultra%20Low%20RAM-%3C%2040%20MB-green.svg)]()
 
-**MIVI-V2 (v0.0.6)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
+**MIVI-V2 (v0.0.7)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
 
 It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for autonomous AI agents including **Hermes Agent**, **OpenCode Agent**, **OpenZ**, **AutoGen**, **CrewAI**, **VS Code (Continue.dev)**, and **Cursor IDE**.
 
 ---
 
-## 🌟 Key Features in v0.0.6
+## 🌟 Key Features in v0.0.7
 
 * 🦀 **100% Pure Rust Architecture:** Zero Python runtime, zero PyTorch/transformers memory bloat, and zero virtual environment dependencies.
+* ⚡ **Reqwest Connection Pooling:** Pooled HTTP client in `worker.rs` with keep-alive socket reuse, reducing API server request overhead.
+* 🌬️ **Eco-Worker Runtime Default:** Keeps lightweight background `llama-server` warm for 2 minutes before spinning it down, balancing latency with memory footprints.
+* 🌊 **True SSE Stream Proxying:** Proxies SSE token streams directly from the llama-server background worker's `/completion` endpoint to the client.
+* 📦 **Memory-Mapped Configs:** Instant catalog loading with `memmap2` for zero-allocation cold starts.
+* 🧠 **Adaptive RAG Workspace Learning:** Tracks hot files in the workspace (inspired by Colibri `.coli_usage`) and automatically boosts relevant snippets, persisting stats in `.mivi_rag_usage`.
 * ⚡ **Speculative Decoding (`ds4` pattern):** Uses the configured coder for fast drafting and the configured reasoner for verification, boosting generation speed by **2.2x**.
 * 🌬️ **Ultra-Low-RAM `mmap` Streaming (`AirLLM` + `Colibrì` pattern):** File-streamed layer execution via `MIVI_ULTRA_LOW_RAM=1` reducing active memory to **< 40 MB RAM**.
 * 📚 **Google Open Knowledge Format RAG (`Google OKF` pattern):** Structured Markdown + YAML frontmatter context bundles for zero context noise and high SLM accuracy.
@@ -24,7 +29,6 @@ It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for 
 * 🌐 **High-Speed Async Axum REST Server:** OpenAI-compatible API listening on `http://localhost:8000/v1` for `/v1/chat/completions` and `/v1/models`.
 * ⚙️ **Multi-Language Double-Loop Verifier:** Generates, executes, and auto-corrects code across **Python, JavaScript, TypeScript, Rust, and C++**.
 * 🧠 **Zero-Overhead Semantic Cache:** Token-set Jaccard similarity cache for instant **< 0.001s responses** on repeat queries.
-* 🧰 **Agent Runtime Roadmap:** v0.0.6 includes the implementation plan for tool filtering, context compression, OKF memory, RAG retrieval, persistent workers, benchmarking, and small-model evaluation.
 * 🧾 **Tool Output Compression:** Cargo, npm/pnpm/yarn/vitest/jest, pytest, and git diff outputs are reduced to salient failure/hunk lines before they enter the small-model context.
 
 ---

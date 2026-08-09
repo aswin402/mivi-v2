@@ -2874,29 +2874,104 @@ pub async fn handle_streaming(
     let seed = req.seed;
     let json_schema = extract_json_schema(req);
 
+    let uses_worker = runtime_config.uses_worker();
+    let text_worker = brain.text_worker.clone();
+    let req_temp = req.temperature;
+    let req_top_p = req.top_p;
+    let req_max_tokens = req.max_tokens;
+    let req_stop = req.stop.clone();
+    let req_seed = req.seed;
+    let req_fp = req.frequency_penalty;
+    let req_pp = req.presence_penalty;
+
     let fallback_user_prompt = user_prompt.clone();
     tokio::spawn(async move {
-        let mut rx = spawn_streaming(
-            &cli_path,
-            &model_path,
-            &formatted,
-            if brain.ultra_low_ram { "0" } else { "999" },
-            &streaming_context,
-            &temp_str,
-            top_p,
-            max_tokens,
-            stop,
-            seed,
-            json_schema,
-        );
-
         let mut emitted = false;
-        while let Some(token) = rx.recv().await {
-            if !token.trim().is_empty() {
-                emitted = true;
+        if uses_worker {
+            match text_worker
+                .query_completion_stream(
+                    &formatted,
+                    req_temp,
+                    req_top_p,
+                    req_max_tokens,
+                    req_stop,
+                    req_seed,
+                    req_fp,
+                    req_pp,
+                )
+                .await
+            {
+                Ok(bytes_stream) => {
+                    use futures::stream::StreamExt;
+                    let mut stream = Box::pin(bytes_stream);
+                    let mut buffer = Vec::new();
+                    while let Some(chunk_res) = stream.next().await {
+                        let chunk: bytes::Bytes = match chunk_res {
+                            Ok(c) => c,
+                            Err(err) => {
+                                error!("Error reading stream chunk from worker: {}", err);
+                                break;
+                            }
+                        };
+                        buffer.extend_from_slice(&chunk);
+                        while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+                            let line_bytes: Vec<u8> = buffer.drain(..pos + 1).collect();
+                            if let Ok(mut line) = String::from_utf8(line_bytes) {
+                                if line.ends_with('\n') {
+                                    line.pop();
+                                }
+                                if line.ends_with('\r') {
+                                    line.pop();
+                                }
+                                if line.starts_with("data: ") {
+                                    let data = &line["data: ".len()..];
+                                    if data == "[DONE]" {
+                                        break;
+                                    }
+                                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(data)
+                                    {
+                                        if let Some(token) =
+                                            val.get("content").and_then(|c| c.as_str())
+                                        {
+                                            if !token.is_empty() {
+                                                emitted = true;
+                                                if tx.send(token.to_string()).await.is_err() {
+                                                    return; // Client disconnected
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    error!("Failed to query completion stream from worker: {}", err);
+                }
             }
-            if tx.send(token).await.is_err() {
-                return; // Receiver dropped (client disconnected).
+        } else {
+            let mut rx = spawn_streaming(
+                &cli_path,
+                &model_path,
+                &formatted,
+                if brain.ultra_low_ram { "0" } else { "999" },
+                &streaming_context,
+                &temp_str,
+                top_p,
+                max_tokens,
+                stop,
+                seed,
+                json_schema,
+            );
+
+            while let Some(token) = rx.recv().await {
+                if !token.trim().is_empty() {
+                    emitted = true;
+                }
+                if tx.send(token).await.is_err() {
+                    return; // Receiver dropped (client disconnected).
+                }
             }
         }
 

@@ -38,21 +38,21 @@
 
 ---
 
-## Phase 6: Performance & Serving Improvements 🚀
+## Phase 6: Performance & Serving Improvements 🚀 ✅ COMPLETE
 
 > Inspired by: Colibri (.coli_usage warm cache), Candle (mmap loading), Fugu (true streaming)
 
 ### Wave 1 — Serving Layer (HIGH)
 
-- [ ] **6.1** Replace raw TCP worker HTTP client in `worker.rs` with `reqwest` or `hyper` for connection pooling & keep-alive
-- [ ] **6.2** Default runtime to `worker-eco` mode (warm llama-server for 2 min, then spin down)
-- [ ] **6.3** True SSE stream proxying from llama-server → Axum client (eliminate buffered fake-streaming)
+- [x] **6.1** Replace raw TCP worker HTTP client in `worker.rs` with `reqwest` or `hyper` for connection pooling & keep-alive
+- [x] **6.2** Default runtime to `worker-eco` mode (warm llama-server for 2 min, then spin down)
+- [x] **6.3** True SSE stream proxying from llama-server → Axum client (eliminate buffered fake-streaming)
 
 ### Wave 2 — Memory & Caching (MEDIUM)
 
-- [ ] **6.4** Memory-mapped model catalog loading (`memmap2`) for instant cold starts
-- [ ] **6.5** Adaptive RAG workspace learning — track hot files, pin frequently accessed chunks in memory (inspired by Colibri `.coli_usage`)
-- [ ] **6.6** Session warmup profiles — persist hot-path data across server restarts
+- [x] **6.4** Memory-mapped model catalog loading (`memmap2`) for instant cold starts
+- [x] **6.5** Adaptive RAG workspace learning — track hot files, pin frequently accessed chunks in memory (inspired by Colibri `.coli_usage`)
+- [x] **6.6** Session warmup profiles — persist hot-path data across server restarts
 
 ---
 

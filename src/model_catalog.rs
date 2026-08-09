@@ -87,12 +87,17 @@ impl ModelCatalog {
     }
 
     pub fn load_path(path: impl AsRef<Path>) -> Result<Self, ModelCatalogError> {
-        let text = fs::read_to_string(path)?;
-        Self::from_json(&text)
+        let file = fs::File::open(path)?;
+        let mmap = unsafe { memmap2::Mmap::map(&file)? };
+        Self::from_slice(&mmap)
     }
 
     pub fn from_json(text: &str) -> Result<Self, ModelCatalogError> {
-        let catalog: Self = serde_json::from_str(text)?;
+        Self::from_slice(text.as_bytes())
+    }
+
+    pub fn from_slice(slice: &[u8]) -> Result<Self, ModelCatalogError> {
+        let catalog: Self = serde_json::from_slice(slice)?;
         catalog.validate()?;
         Ok(catalog)
     }

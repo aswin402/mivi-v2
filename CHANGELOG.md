@@ -5,6 +5,17 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.7] - 2026-08-09
+
+### 🚀 Phase 6: Performance & Serving Improvements (COMPLETE)
+
+#### Added
+* ⚡ **Reqwest Connection Pooling**: Replaced raw TCP custom HTTP client in `worker.rs` with `reqwest` connection pooling and keep-alive socket reuse, greatly reducing overhead.
+* 🌬️ **Eco-Worker Defaults**: Configured `worker-eco` mode as the default runtime option, dynamically launching and winding down worker nodes to conserve RAM.
+* 🌊 **True SSE Stream Proxying**: Implemented zero-buffering proxy pipeline for llama-server `/completion` token streams, resolving the latency bottlenecks of fake buffering.
+* 📦 **Memory-Mapped Loading**: Integrated memory-mapped loading for configurations using the `memmap2` crate.
+* 🧠 **Adaptive RAG Workspace Learning**: Added `.mivi_rag_usage` tracking to dynamically boost search relevance for frequently referenced files, bringing in-memory caching improvements to codebase indexing.
+
 ## [v0.0.6] - 2026-08-09
 
 ### 🛡️ Phase 5: Production Stability & Code Quality (COMPLETE)

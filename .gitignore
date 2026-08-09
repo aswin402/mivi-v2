@@ -23,6 +23,7 @@ memory.db
 memory.db-shm
 memory.db-wal
 .fastembed_cache/
+.mivi_rag_usage
 __pycache__/
 *.pyc
 *.bak

@@ -1,6 +1,6 @@
 [package]
 name = "mivi"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2021"
 description = "MIVI-V2: Ultra-Compact Low-Resource Pure Rust Local AI Engine"
 
@@ -21,4 +21,8 @@ colored = "2.1"
 inquire = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+bytes = "1.0"
+memmap2 = "0.9"
+
 

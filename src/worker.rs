@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::time::timeout as tokio_timeout;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerEndpoint {
@@ -81,6 +80,7 @@ struct WorkerSlot {
 pub struct WorkerManager {
     config: WorkerConfig,
     slot: Arc<Mutex<WorkerSlot>>,
+    client: reqwest::Client,
 }
 
 impl WorkerManager {
@@ -93,6 +93,7 @@ impl WorkerManager {
                 endpoint: None,
                 last_error: None,
             })),
+            client: reqwest::Client::new(),
         }
     }
 
@@ -161,7 +162,8 @@ impl WorkerManager {
             "temperature": temp.parse::<f32>().unwrap_or(0.2),
             "stream": false
         });
-        let response = http_request(
+        let response_body = http_request(
+            &self.client,
             &endpoint,
             "POST",
             "/v1/chat/completions",
@@ -169,7 +171,7 @@ impl WorkerManager {
             Duration::from_secs(300),
         )
         .await?;
-        parse_chat_response(&response)
+        parse_chat_response(&response_body)
     }
 
     pub async fn query_chat_full(
@@ -222,7 +224,8 @@ impl WorkerManager {
         if let Some(rf) = response_format {
             body["response_format"] = rf;
         }
-        let response = http_request(
+        let body_str = http_request(
+            &self.client,
             &endpoint,
             "POST",
             "/v1/chat/completions",
@@ -230,12 +233,66 @@ impl WorkerManager {
             Duration::from_secs(300),
         )
         .await?;
-        let body_str = response
-            .split_once("\r\n\r\n")
-            .map(|(_, body)| body)
-            .ok_or_else(|| "worker response missing HTTP body".to_string())?;
-        serde_json::from_str(body_str)
+        serde_json::from_str(&body_str)
             .map_err(|err| format!("failed to parse worker JSON response: {err}"))
+    }
+
+    pub async fn query_completion_stream(
+        &self,
+        prompt: &str,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        stop: Option<serde_json::Value>,
+        seed: Option<u64>,
+        frequency_penalty: Option<f32>,
+        presence_penalty: Option<f32>,
+    ) -> Result<impl futures::stream::Stream<Item = Result<bytes::Bytes, reqwest::Error>>, String>
+    {
+        let endpoint = self.ensure_text_worker().await?;
+        let mut body = json!({
+            "prompt": prompt,
+            "stream": true
+        });
+        if let Some(temp) = temperature {
+            body["temperature"] = json!(temp);
+        }
+        if let Some(tp) = top_p {
+            body["top_p"] = json!(tp);
+        }
+        if let Some(mt) = max_tokens {
+            body["n_predict"] = json!(mt);
+        }
+        if let Some(st) = stop {
+            body["stop"] = st;
+        }
+        if let Some(sd) = seed {
+            body["seed"] = json!(sd);
+        }
+        if let Some(fp) = frequency_penalty {
+            body["frequency_penalty"] = json!(fp);
+        }
+        if let Some(pp) = presence_penalty {
+            body["presence_penalty"] = json!(pp);
+        }
+
+        let response = self
+            .client
+            .post(format!("http://{}/completion", endpoint.base_url()))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| format!("failed to send completion stream request: {err}"))?;
+
+        if !response.status().is_success() {
+            let err_body = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "worker completion stream request failed: {}",
+                err_body
+            ));
+        }
+
+        Ok(response.bytes_stream())
     }
 
     pub fn stop_idle_workers(&self) -> Result<(), String> {
@@ -330,12 +387,26 @@ impl WorkerManager {
     }
 
     async fn health_check(&self, endpoint: &WorkerEndpoint) -> bool {
-        http_request(endpoint, "GET", "/health", None, Duration::from_secs(2))
+        http_request(
+            &self.client,
+            endpoint,
+            "GET",
+            "/health",
+            None,
+            Duration::from_secs(2),
+        )
+        .await
+        .is_ok()
+            || http_request(
+                &self.client,
+                endpoint,
+                "GET",
+                "/v1/models",
+                None,
+                Duration::from_secs(2),
+            )
             .await
             .is_ok()
-            || http_request(endpoint, "GET", "/v1/models", None, Duration::from_secs(2))
-                .await
-                .is_ok()
     }
 
     fn mark_failed(&self, error: String) {
@@ -369,57 +440,49 @@ impl Drop for WorkerManager {
 }
 
 async fn http_request(
+    client: &reqwest::Client,
     endpoint: &WorkerEndpoint,
     method: &str,
     path: &str,
     body: Option<&str>,
     timeout: Duration,
 ) -> Result<String, String> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpStream;
+    let url = format!("http://{}{}", endpoint.base_url(), path);
+    let mut builder = match method {
+        "GET" => client.get(&url),
+        "POST" => client.post(&url),
+        _ => return Err(format!("Unsupported HTTP method: {method}")),
+    };
 
-    let connect_fut = TcpStream::connect(endpoint.base_url());
-    let mut stream = tokio_timeout(timeout, connect_fut)
+    if let Some(body_data) = body {
+        builder = builder
+            .header("Content-Type", "application/json")
+            .body(body_data.to_string());
+    }
+
+    let response = builder
+        .timeout(timeout)
+        .send()
         .await
-        .map_err(|_| "worker connection timeout".to_string())?
-        .map_err(|err| format!("failed to connect to worker: {err}"))?;
+        .map_err(|err| format!("failed to send HTTP request to worker: {err}"))?;
 
-    let body = body.unwrap_or("");
-    let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        endpoint.base_url(),
-        body.len(),
-        body
-    );
-
-    let write_fut = stream.write_all(request.as_bytes());
-    tokio_timeout(timeout, write_fut)
+    let status = response.status();
+    let text = response
+        .text()
         .await
-        .map_err(|_| "worker write timeout".to_string())?
-        .map_err(|err| format!("failed to write worker request: {err}"))?;
+        .map_err(|err| format!("failed to read response body: {err}"))?;
 
-    let mut response = String::new();
-    let read_fut = stream.read_to_string(&mut response);
-    tokio_timeout(timeout, read_fut)
-        .await
-        .map_err(|_| "worker read timeout".to_string())?
-        .map_err(|err| format!("failed to read worker response: {err}"))?;
-
-    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
+    if !status.is_success() {
         return Err(format!(
-            "worker returned non-200 response: {}",
-            response.lines().next().unwrap_or("empty response")
+            "worker returned non-200 response ({}): {}",
+            status, text
         ));
     }
 
-    Ok(response)
+    Ok(text)
 }
 
-fn parse_chat_response(response: &str) -> Result<String, String> {
-    let body = response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .ok_or_else(|| "worker response missing HTTP body".to_string())?;
+fn parse_chat_response(body: &str) -> Result<String, String> {
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|err| format!("failed to parse worker JSON response: {err}"))?;
 

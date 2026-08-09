@@ -18,7 +18,7 @@ impl RuntimeMode {
             "worker-eco" | "worker_eco" | "eco" => Self::WorkerEco,
             "worker-hot" | "worker_hot" | "hot" => Self::WorkerHot,
             "spawn" => Self::Spawn,
-            _ => Self::Spawn,
+            _ => Self::WorkerEco,
         }
     }
 }
@@ -66,7 +66,7 @@ impl RuntimeConfig {
     pub fn from_env() -> Self {
         let mode = env::var("MIVI_RUNTIME_MODE")
             .map(|value| RuntimeMode::from_env_value(&value))
-            .unwrap_or(RuntimeMode::Spawn);
+            .unwrap_or(RuntimeMode::WorkerEco);
 
         let max_input_tokens = env::var("MIVI_CONTEXT_BUDGET")
             .ok()
@@ -106,13 +106,13 @@ mod tests {
     }
 
     #[test]
-    fn default_config_uses_spawn_mode_and_low_resource_budget() {
+    fn default_config_uses_worker_eco_mode_and_low_resource_budget() {
         let _guard = env_lock();
         clear_runtime_env();
 
         let config = RuntimeConfig::from_env();
 
-        assert_eq!(config.mode, RuntimeMode::Spawn);
+        assert_eq!(config.mode, RuntimeMode::WorkerEco);
         assert_eq!(config.worker_idle_secs, 120);
         assert_eq!(config.ram_target_mb, 1000);
         assert_eq!(config.context.max_input_tokens, 3072);
@@ -153,7 +153,7 @@ mod tests {
 
         let config = RuntimeConfig::from_env();
 
-        assert_eq!(config.mode, RuntimeMode::Spawn);
+        assert_eq!(config.mode, RuntimeMode::WorkerEco);
         assert_eq!(config.worker_idle_secs, 120);
         assert_eq!(config.context.max_input_tokens, 3072);
 
