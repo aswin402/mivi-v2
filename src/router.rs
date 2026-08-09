@@ -192,9 +192,8 @@ impl NeedleRouter {
         }
     }
 
-    /// Classify prompt intent and return (class, confidence).
-    /// Confidence is the normalized probability (0.0-1.0) of the predicted class.
-    pub fn classify_intent(&self, prompt: &str) -> (&'static str, f64) {
+    /// Classify prompt intent using the Naive Bayes classifier.
+    pub fn classify_intent_nb(&self, prompt: &str) -> (&'static str, f64) {
         if prompt.is_empty() {
             return ("CHAT", 1.0);
         }
@@ -243,6 +242,51 @@ impl NeedleRouter {
         let confidence = (best_score - max_score).exp() / sum_exp;
 
         (best_class, confidence)
+    }
+
+    /// Classify prompt intent with a hybrid approach: Naive Bayes first, and
+    /// falls back to querying the coder model if confidence is low.
+    pub async fn classify_intent(
+        &self,
+        brain: &crate::brain::EdgeBrain,
+        prompt: &str,
+    ) -> (&'static str, f64) {
+        let (best_class, confidence) = self.classify_intent_nb(prompt);
+
+        if confidence < 0.85 {
+            tracing::info!(
+                "[NeedleRouter] Low confidence ({:.2}) for class {}. Falling back to Coder model router...",
+                confidence, best_class
+            );
+            if let Ok(model_intent) = self.classify_intent_model(brain, prompt).await {
+                tracing::info!(
+                    "[NeedleRouter] Coder model classified intent as: {}",
+                    model_intent
+                );
+                return (model_intent, 1.0);
+            }
+        }
+
+        (best_class, confidence)
+    }
+
+    async fn classify_intent_model(
+        &self,
+        brain: &crate::brain::EdgeBrain,
+        prompt: &str,
+    ) -> Result<&'static str, String> {
+        let system_prompt = "You are an intent router. Classify the user prompt into exactly one category: CHAT, VISION, CODE, MULTI_STEP. Output only the category name.";
+        let response = brain.query_coder(prompt, system_prompt).await?;
+        let cleaned = response.trim().to_uppercase();
+        if cleaned.contains("VISION") {
+            Ok("VISION")
+        } else if cleaned.contains("CODE") {
+            Ok("CODE")
+        } else if cleaned.contains("MULTI_STEP") || cleaned.contains("MULTI") {
+            Ok("MULTI_STEP")
+        } else {
+            Ok("CHAT")
+        }
     }
 }
 
@@ -319,19 +363,21 @@ mod tests {
     #[test]
     fn test_chat_classification() {
         let router = NeedleRouter::new();
-        assert_eq!(router.classify_intent("hello how are you").0, "CHAT");
-        assert_eq!(router.classify_intent("tell me a joke").0, "CHAT");
-        assert_eq!(router.classify_intent("what is the weather").0, "CHAT");
-        assert_eq!(router.classify_intent("").0, "CHAT");
+        assert_eq!(router.classify_intent_nb("hello how are you").0, "CHAT");
+        assert_eq!(router.classify_intent_nb("tell me a joke").0, "CHAT");
+        assert_eq!(router.classify_intent_nb("what is the weather").0, "CHAT");
+        assert_eq!(router.classify_intent_nb("").0, "CHAT");
     }
 
     #[test]
     fn test_vision_classification() {
         let router = NeedleRouter::new();
-        assert_eq!(router.classify_intent("look at this image").0, "VISION");
-        assert_eq!(router.classify_intent("describe this photo").0, "VISION");
+        assert_eq!(router.classify_intent_nb("look at this image").0, "VISION");
+        assert_eq!(router.classify_intent_nb("describe this photo").0, "VISION");
         assert_eq!(
-            router.classify_intent("what do you see in this picture").0,
+            router
+                .classify_intent_nb("what do you see in this picture")
+                .0,
             "VISION"
         );
     }
@@ -339,13 +385,13 @@ mod tests {
     #[test]
     fn test_code_classification() {
         let router = NeedleRouter::new();
-        assert_eq!(router.classify_intent("write a python script").0, "CODE");
+        assert_eq!(router.classify_intent_nb("write a python script").0, "CODE");
         assert_eq!(
-            router.classify_intent("implement a sorting algorithm").0,
+            router.classify_intent_nb("implement a sorting algorithm").0,
             "CODE"
         );
         assert_eq!(
-            router.classify_intent("create a function that sorts").0,
+            router.classify_intent_nb("create a function that sorts").0,
             "CODE"
         );
     }
@@ -354,40 +400,46 @@ mod tests {
     fn test_multi_step_classification() {
         let router = NeedleRouter::new();
         assert_eq!(
-            router.classify_intent("first do this then that").0,
+            router.classify_intent_nb("first do this then that").0,
             "MULTI_STEP"
         );
-        assert_eq!(router.classify_intent("follow these steps").0, "MULTI_STEP");
-        assert_eq!(router.classify_intent("process all files").0, "MULTI_STEP");
+        assert_eq!(
+            router.classify_intent_nb("follow these steps").0,
+            "MULTI_STEP"
+        );
+        assert_eq!(
+            router.classify_intent_nb("process all files").0,
+            "MULTI_STEP"
+        );
     }
 
     #[test]
     fn test_short_prompt_keyword_fallback() {
         let router = NeedleRouter::new();
-        assert_eq!(router.classify_intent("write code").0, "CODE");
-        assert_eq!(router.classify_intent("debug").0, "CODE");
-        assert_eq!(router.classify_intent("look at this").0, "VISION");
-        assert_eq!(router.classify_intent("step by step").0, "MULTI_STEP");
+        assert_eq!(router.classify_intent_nb("write code").0, "CODE");
+        assert_eq!(router.classify_intent_nb("debug").0, "CODE");
+        assert_eq!(router.classify_intent_nb("look at this").0, "VISION");
+        assert_eq!(router.classify_intent_nb("step by step").0, "MULTI_STEP");
     }
 
     #[test]
     fn test_confidence_values() {
         let router = NeedleRouter::new();
-        let (_, conf) = router.classify_intent("hello how are you");
+        let (_, conf) = router.classify_intent_nb("hello how are you");
         assert!(
             conf > 0.5 && conf <= 1.0,
             "confidence should be >0.5 and <=1.0, got {}",
             conf
         );
 
-        let (_, conf) = router.classify_intent("write a python script");
+        let (_, conf) = router.classify_intent_nb("write a python script");
         assert!(
             conf > 0.5 && conf <= 1.0,
             "confidence should be >0.5 and <=1.0, got {}",
             conf
         );
 
-        let (_, conf) = router.classify_intent("look at this image");
+        let (_, conf) = router.classify_intent_nb("look at this image");
         assert!(
             conf > 0.5 && conf <= 1.0,
             "confidence should be >0.5 and <=1.0, got {}",
@@ -398,7 +450,7 @@ mod tests {
     #[test]
     fn test_confidence_normalized() {
         let router = NeedleRouter::new();
-        let (class, conf) = router.classify_intent("what is the weather today");
+        let (class, conf) = router.classify_intent_nb("what is the weather today");
         assert_eq!(class, "CHAT");
         // Confidence should be a valid probability
         assert!(
@@ -414,13 +466,13 @@ mod tests {
 
         assert_eq!(
             router
-                .classify_intent("In this codebase, what module handles intent routing?")
+                .classify_intent_nb("In this codebase, what module handles intent routing?")
                 .0,
             "CHAT"
         );
         assert_eq!(
             router
-                .classify_intent("A tool failed because Cargo cache is corrupted. Explain the safest fix in two steps.")
+                .classify_intent_nb("A tool failed because Cargo cache is corrupted. Explain the safest fix in two steps.")
                 .0,
             "CHAT"
         );
@@ -429,7 +481,7 @@ mod tests {
     #[test]
     fn test_mixed_known_tokens_keep_confidence_finite() {
         let router = NeedleRouter::new();
-        let (_, conf) = router.classify_intent("write hello image");
+        let (_, conf) = router.classify_intent_nb("write hello image");
         assert!(
             conf.is_finite(),
             "confidence should be finite, got {}",

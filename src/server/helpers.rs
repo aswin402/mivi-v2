@@ -1908,7 +1908,10 @@ pub async fn complete_chat_non_stream(
 
     let (user_prompt, image_path) = extract_content(&req);
     let model_user_prompt = model_prompt_from_request(&req, &user_prompt, &state).await;
-    let (intent, _confidence) = state.router.classify_intent(&user_prompt);
+    let (intent, _confidence) = state
+        .router
+        .classify_intent(&state.brain, &user_prompt)
+        .await;
     let (response_text, chosen_model, route) = if image_path.is_some() {
         let path = image_path.unwrap_or_default();
         (
@@ -2484,7 +2487,10 @@ pub async fn handle_chat_completions(
     }
 
     // Non-streaming path.
-    let (intent, confidence) = state.router.classify_intent(&user_prompt);
+    let (intent, confidence) = state
+        .router
+        .classify_intent(&state.brain, &user_prompt)
+        .await;
     info!(
         "[MIVI-V2 Server] Intent: {} (conf: {:.2}) | Model: '{}' | Prompt: '{}'",
         intent, confidence, target_model, user_prompt
@@ -2883,6 +2889,7 @@ pub async fn handle_streaming(
     let req_seed = req.seed;
     let req_fp = req.frequency_penalty;
     let req_pp = req.presence_penalty;
+    let req_json_schema = json_schema.clone();
 
     let fallback_user_prompt = user_prompt.clone();
     tokio::spawn(async move {
@@ -2898,6 +2905,7 @@ pub async fn handle_streaming(
                     req_seed,
                     req_fp,
                     req_pp,
+                    req_json_schema,
                 )
                 .await
             {

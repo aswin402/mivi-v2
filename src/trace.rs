@@ -54,6 +54,23 @@ pub fn trace_event(config: &TraceConfig, mut event: Value) -> Result<(), String>
     writeln!(file, "{}", event).map_err(|err| err.to_string())
 }
 
+pub fn trace_state_transition(from: &str, to: &str) {
+    tracing::info!(
+        "[Orchestrator State Machine] Transition: {} -> {}",
+        from,
+        to
+    );
+    let trace = TraceConfig::from_env();
+    let _ = trace_event(
+        &trace,
+        serde_json::json!({
+            "kind": "state_transition",
+            "from_state": from,
+            "to_state": to
+        }),
+    );
+}
+
 pub fn preview(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }

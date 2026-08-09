@@ -43,7 +43,7 @@ pub async fn run_chat_interactive(brain: EdgeBrain, router: NeedleRouter) {
         let history_context = build_history_context(&history);
 
         // Classify intent
-        let (intent, confidence) = router.classify_intent(&prompt);
+        let (intent, confidence) = router.classify_intent(&brain, &prompt).await;
         println!(
             "{} {}",
             "[MIVI]".dimmed(),

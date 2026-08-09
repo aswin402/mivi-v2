@@ -5,6 +5,15 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.8] - 2026-08-09
+
+### 🧠 Phase 7: Smarter Routing & Orchestration (WIP)
+
+#### Added
+* ⚡ **Model-Driven Intent Routing**: Upgraded `NeedleRouter` intent classification to hybrid routing, querying the coder model when Naive Bayes confidence is under 0.85.
+* 🤖 **State Machine Orchestrator**: Added formal Thinker→Worker→Verifier state machine tracing to `AgentOrchestrator` for visual tracking of execution cycles.
+* ⚙️ **Strict JSON Schema Support**: Completed end-to-end integration of strict `json_schema` in the `query_completion_stream` and `handle_streaming` worker pipelines.
+
 ## [v0.0.7] - 2026-08-09
 
 ### 🚀 Phase 6: Performance & Serving Improvements (COMPLETE)

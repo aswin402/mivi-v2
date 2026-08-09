@@ -253,6 +253,12 @@ impl CompilerVerifier {
         let sys_prompt = "You are a world-class coding expert. Write clean, standalone code.";
 
         for attempt in 1..=max_retries {
+            if attempt > 1 {
+                crate::trace::trace_state_transition("verifying", "correcting");
+                crate::trace::trace_state_transition("correcting", "verifying");
+            } else {
+                crate::trace::trace_state_transition("executing", "verifying");
+            }
             println!(
                 "[CompilerVerifier] Attempt {}/{} generating code...",
                 attempt, max_retries
@@ -268,6 +274,7 @@ impl CompilerVerifier {
                         "[CompilerVerifier] Verified code successfully on attempt {}!",
                         attempt
                     );
+                    crate::trace::trace_state_transition("verifying", "executing");
                     return (Some(code), output);
                 }
                 println!(
@@ -286,6 +293,7 @@ impl CompilerVerifier {
                                 "[CompilerVerifier] Verified repaired code after attempt {}!",
                                 attempt
                             );
+                            crate::trace::trace_state_transition("verifying", "executing");
                             return (Some(repaired_code), repair_output);
                         }
                     }

@@ -62,8 +62,8 @@
 
 ### Wave 1 — Intent Routing (HIGH)
 
-- [ ] **7.1** Upgrade `NeedleRouter` to model-driven intent classification (use coder model for routing instead of keyword heuristics)
-- [ ] **7.2** Formalize Thinker→Worker→Verifier state machine in `AgentOrchestrator` with explicit phase transitions
+- [x] **7.1** Upgrade `NeedleRouter` to model-driven intent classification (use coder model for routing instead of keyword heuristics)
+- [x] **7.2** Formalize Thinker→Worker→Verifier state machine in `AgentOrchestrator` with explicit phase transitions
 
 ### Wave 2 — Prompt Engineering (MEDIUM)
 

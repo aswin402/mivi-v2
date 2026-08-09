@@ -286,8 +286,15 @@ impl TurboVecRAG {
 mod tests {
     use super::*;
 
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     #[tokio::test]
     async fn intent_routing_query_prefers_router_over_eval_docs() {
+        let _lock = env_lock().lock().unwrap();
+        let _ = fs::remove_file(".mivi_rag_usage");
         let rag = TurboVecRAG::new();
         {
             let mut chunks = rag.chunks.lock().await;
@@ -308,10 +315,13 @@ mod tests {
         let results = rag.search("what module handles intent routing", 2).await;
 
         assert_eq!(results[0].0.file_path, "src/router.rs");
+        let _ = fs::remove_file(".mivi_rag_usage");
     }
 
     #[tokio::test]
     async fn intent_routing_query_prefers_router_file() {
+        let _lock = env_lock().lock().unwrap();
+        let _ = fs::remove_file(".mivi_rag_usage");
         let rag = TurboVecRAG::new();
         {
             let mut chunks = rag.chunks.lock().await;
@@ -330,6 +340,7 @@ mod tests {
         let results = rag.search("what module handles intent routing", 2).await;
 
         assert_eq!(results[0].0.file_path, "src/router.rs");
+        let _ = fs::remove_file(".mivi_rag_usage");
     }
 
     #[test]
@@ -340,8 +351,11 @@ mod tests {
         assert!(should_skip_path("./.fastembed_cache/cache.bin"));
         assert!(!should_skip_path("./src/router.rs"));
     }
+
     #[tokio::test]
     async fn formatted_rag_context_keeps_only_relevant_lines() {
+        let _lock = env_lock().lock().unwrap();
+        let _ = fs::remove_file(".mivi_rag_usage");
         let rag = TurboVecRAG::new();
         {
             let mut chunks = rag.chunks.lock().await;
@@ -368,10 +382,12 @@ mod tests {
         assert!(context.contains("classify_intent"));
         assert!(!context.contains("# irrelevant filler line 1\n"));
         assert!(!context.contains("irrelevant filler line 25"));
+        let _ = fs::remove_file(".mivi_rag_usage");
     }
 
     #[tokio::test]
     async fn search_tracks_usage_and_persists_to_file() {
+        let _lock = env_lock().lock().unwrap();
         let _ = fs::remove_file(".mivi_rag_usage");
 
         let rag = TurboVecRAG::new();

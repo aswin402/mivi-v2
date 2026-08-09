@@ -247,6 +247,7 @@ impl WorkerManager {
         seed: Option<u64>,
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
+        json_schema: Option<String>,
     ) -> Result<impl futures::stream::Stream<Item = Result<bytes::Bytes, reqwest::Error>>, String>
     {
         let endpoint = self.ensure_text_worker().await?;
@@ -274,6 +275,11 @@ impl WorkerManager {
         }
         if let Some(pp) = presence_penalty {
             body["presence_penalty"] = json!(pp);
+        }
+        if let Some(ref schema_str) = json_schema {
+            if let Ok(schema_val) = serde_json::from_str::<serde_json::Value>(schema_str) {
+                body["json_schema"] = schema_val;
+            }
         }
 
         let response = self

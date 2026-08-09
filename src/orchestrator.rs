@@ -83,11 +83,8 @@ impl AgentOrchestrator {
         }
     }
 
-    /// Check if prompt is conversational (not a coding task).
-    /// Returns true if the intent is CHAT — meaning route to the configured reasoner directly,
-    /// not through the code-generation pipeline.
-    fn is_conversational(&self, request: &str) -> bool {
-        self.router.classify_intent(request).0 == "CHAT"
+    async fn is_conversational(&self, request: &str) -> bool {
+        self.router.classify_intent(&self.brain, request).await.0 == "CHAT"
     }
 
     fn extract_json_plan(&self, text: &str) -> Option<Vec<PlanStep>> {
@@ -126,10 +123,13 @@ impl AgentOrchestrator {
     }
 
     pub async fn execute_plan(&self, request: &str) -> (bool, String) {
+        crate::trace::trace_state_transition("idle", "planning");
+
         // --- Conversational fast-path ---
         // If the prompt is a chat/QA intent, route directly to the configured reasoner
         // instead of trying to generate + execute code.
-        if self.is_conversational(request) {
+        if self.is_conversational(request).await {
+            crate::trace::trace_state_transition("planning", "complete");
             println!(
                 "[Orchestrator] Conversational prompt detected -> routing to configured reasoner directly"
             );
@@ -146,10 +146,12 @@ impl AgentOrchestrator {
 
         // --- Code execution path (existing logic) ---
         if let Some(cached) = self.cache.get(request).await {
+            crate::trace::trace_state_transition("planning", "complete");
             println!("[Orchestrator] Exact cache hit (< 0.001s)!");
             return (true, cached);
         }
 
+        crate::trace::trace_state_transition("planning", "executing");
         println!("[MIVI-V2 Orchestrator] Executing request: '{}'", request);
 
         let req_lower = request.to_lowercase();
@@ -248,7 +250,10 @@ impl AgentOrchestrator {
         );
 
         if overall_success {
+            crate::trace::trace_state_transition("executing", "complete");
             self.cache.put(request, &final_response).await;
+        } else {
+            crate::trace::trace_state_transition("executing", "failed");
         }
 
         (overall_success, final_response)
