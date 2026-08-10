@@ -539,23 +539,12 @@ pub fn select_tools_for_request(req: &ChatCompletionRequest) -> ToolSelection {
         // No inventory tool found — fall through to general fallback
     }
 
-    // Score-based filtering for relevance
-    let filtered = filter_tools(&latest_user_prompt, tools, MAX_PROMPT_TOOLS);
-    if !filtered.is_empty() {
-        return ToolSelection {
-            intent,
-            selected: filtered,
-            blocked: Vec::new(),
-        };
-    }
-
-    // Fallback: if filter returned nothing but tools were provided,
-    // include up to MAX_PROMPT_TOOLS tools so the model can decide.
-    // This ensures agent-provided tools are always visible to the model.
-    let fallback: Vec<ToolDef> = tools.iter().take(MAX_PROMPT_TOOLS).cloned().collect();
+    // Score-based filtering for relevance.
+    // If no tools match the user prompt, return empty — the caller
+    // will skip tool generation and fall through to regular chat.
     ToolSelection {
         intent,
-        selected: fallback,
+        selected: filter_tools(&latest_user_prompt, tools, MAX_PROMPT_TOOLS),
         blocked: Vec::new(),
     }
 }
@@ -1827,6 +1816,13 @@ pub async fn generate_tool_calls(
     let trace = TraceConfig::from_env();
     let selection = select_tools_for_request(req);
     let selected_tools = selection.selected;
+
+    // If no tools matched the prompt, skip model call entirely.
+    // The caller will fall through to the regular chat path.
+    if selected_tools.is_empty() {
+        return Ok((Vec::new(), String::new()));
+    }
+
     let selected_tool_names = tool_names(&selected_tools);
     let selected_tool_roles = selected_tool_roles(&selected_tools);
     let blocked_tools = blocked_tool_names(&selection.blocked);
@@ -1997,7 +1993,8 @@ pub async fn complete_chat_non_stream(
                 }],
                 system_fingerprint: Some("fp_mivi".to_string()),
             });
-        } else {
+        } else if !response_text.is_empty() {
+            // Model generated text instead of tool calls — return it.
             let final_text = response_text;
             return Ok(ChatCompletionResponse {
                 id: format!("chatcmpl-v2-{now}"),
@@ -2026,6 +2023,7 @@ pub async fn complete_chat_non_stream(
                 system_fingerprint: Some("fp_mivi".to_string()),
             });
         }
+        // Both empty — no tools matched the prompt. Fall through to regular chat.
     }
 
     let (user_prompt, image_path) = extract_content(&req);
@@ -4156,7 +4154,9 @@ Hello!"
             ToolRole::Action
         );
         assert!(has_tool_involvement(&req));
-        assert!(!prompt_tools_for_request(&req).is_empty());
+        // No inventory tool matches this MCP query, so prompt_tools is empty.
+        // generate_tool_calls will early-return and fall through to regular chat.
+        assert!(prompt_tools_for_request(&req).is_empty());
     }
 
     #[test]
