@@ -116,7 +116,7 @@ pub fn spawn_streaming(
     let t = temp.to_string();
 
     tokio::spawn(async move {
-        let prompt_file = match write_prompt_file(&prompt) {
+        let prompt_file = match write_prompt_file(&prompt).await {
             Ok(path) => path,
             Err(e) => {
                 let _ = tx.send(format!("[prompt file error: {}]", e)).await;
@@ -167,7 +167,14 @@ pub fn spawn_streaming(
         };
 
         // Read stderr in background so the pipe doesn't block.
-        let stderr = child.stderr.take().unwrap();
+        let stderr = match child.stderr.take() {
+            Some(s) => s,
+            None => {
+                let _ = std::fs::remove_file(&prompt_file);
+                let _ = tx.send("[spawn error: stderr not piped]".to_string()).await;
+                return;
+            }
+        };
         tokio::spawn(async move {
             let mut err_lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = err_lines.next_line().await {
@@ -175,10 +182,14 @@ pub fn spawn_streaming(
             }
         });
 
-        let stdout = child
-            .stdout
-            .take()
-            .expect("[spawn_streaming] stdout not piped");
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                let _ = std::fs::remove_file(&prompt_file);
+                let _ = tx.send("[spawn error: stdout not piped]".to_string()).await;
+                return;
+            }
+        };
         let mut lines = BufReader::new(stdout).lines();
 
         enum State {

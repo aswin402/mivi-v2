@@ -372,7 +372,7 @@ impl EdgeBrain {
 
         let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
 
-        let prompt_file = write_prompt_file(&formatted_prompt)?;
+        let prompt_file = write_prompt_file(&formatted_prompt).await?;
         let mut cmd = tokio::process::Command::new(&self.llama_cli);
         cmd.arg("-m")
             .arg(model_path)
@@ -530,7 +530,7 @@ impl EdgeBrain {
             };
         let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
 
-        let prompt_file = write_prompt_file(prompt)?;
+        let prompt_file = write_prompt_file(prompt).await?;
         let mut cmd = tokio::process::Command::new(&self.llama_cli);
         cmd.arg("-m")
             .arg(&self.llama_path)
