@@ -311,6 +311,8 @@ impl EdgeBrain {
         system_prompt: &str,
         temp: &str,
         _context_size: &str,
+        _top_p: Option<f32>,
+        _seed: Option<u64>,
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
@@ -335,6 +337,8 @@ impl EdgeBrain {
         system_prompt: &str,
         temp: &str,
         context_size: &str,
+        top_p: Option<f32>,
+        seed: Option<u64>,
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
@@ -393,6 +397,12 @@ impl EdgeBrain {
         if self.ultra_low_ram {
             cmd.arg("--mmap");
         }
+        if let Some(tp) = top_p {
+            cmd.arg("--top-p").arg(tp.to_string());
+        }
+        if let Some(sd) = seed {
+            cmd.arg("--seed").arg(sd.to_string());
+        }
 
         let output = match command_output_with_timeout(cmd, cli_timeout()).await {
             Ok(output) => output,
@@ -412,30 +422,64 @@ impl EdgeBrain {
         prompt: &str,
         system_prompt: &str,
     ) -> Result<String, String> {
+        self.query_reasoner_with_params(prompt, system_prompt, None, None, None).await
+    }
+
+    pub async fn query_reasoner_with_params(
+        &self,
+        prompt: &str,
+        system_prompt: &str,
+        temp: Option<f32>,
+        top_p: Option<f32>,
+        seed: Option<u64>,
+    ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         let context_size = cli_context_size(
             "MIVI_REASONER_CONTEXT_SIZE",
             runtime_config.context.max_input_tokens,
         );
         let effective_prompt = apply_reasoning_directive(prompt);
+        let temp_str = temp.unwrap_or(0.2).to_string();
         self.run_cli(
             &self.llama_path,
             &effective_prompt,
             system_prompt,
-            "0.2",
+            &temp_str,
             &context_size,
+            top_p,
+            seed,
         )
         .await
     }
 
     pub async fn query_coder(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
+        self.query_coder_with_params(prompt, system_prompt, None, None, None).await
+    }
+
+    pub async fn query_coder_with_params(
+        &self,
+        prompt: &str,
+        system_prompt: &str,
+        temp: Option<f32>,
+        top_p: Option<f32>,
+        seed: Option<u64>,
+    ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         let context_size = cli_context_size(
             "MIVI_CODER_CONTEXT_SIZE",
             runtime_config.context.max_input_tokens,
         );
-        self.run_cli(&self.qwen_path, prompt, system_prompt, "0.1", &context_size)
-            .await
+        let temp_str = temp.unwrap_or(0.1).to_string();
+        self.run_cli(
+            &self.qwen_path,
+            prompt,
+            system_prompt,
+            &temp_str,
+            &context_size,
+            top_p,
+            seed,
+        )
+        .await
     }
 
     /// Speculative Decoding (ds4 DwarfStar pattern):

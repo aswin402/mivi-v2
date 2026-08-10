@@ -1658,10 +1658,36 @@ pub async fn reasoner_chat(
     Ok((res, MODEL_NAME.to_string()))
 }
 
+pub async fn reasoner_chat_with_params(
+    brain: &EdgeBrain,
+    user_prompt: &str,
+    temp: Option<f32>,
+    top_p: Option<f32>,
+    seed: Option<u64>,
+) -> Result<(String, String), String> {
+    let res = brain
+        .query_reasoner_with_params(user_prompt, MIVI_CHAT_SYSTEM_PROMPT, temp, top_p, seed)
+        .await?;
+    Ok((res, MODEL_NAME.to_string()))
+}
+
 /// One-shot coder call (spawns llama-cli per request).
 pub async fn code_chat(brain: &EdgeBrain, user_prompt: &str) -> Result<(String, String), String> {
     let res = brain
         .query_coder(user_prompt, "You are a coding expert.")
+        .await?;
+    Ok((res, MODEL_NAME.to_string()))
+}
+
+pub async fn code_chat_with_params(
+    brain: &EdgeBrain,
+    user_prompt: &str,
+    temp: Option<f32>,
+    top_p: Option<f32>,
+    seed: Option<u64>,
+) -> Result<(String, String), String> {
+    let res = brain
+        .query_coder_with_params(user_prompt, "You are a coding expert.", temp, top_p, seed)
         .await?;
     Ok((res, MODEL_NAME.to_string()))
 }
@@ -1922,15 +1948,36 @@ pub async fn complete_chat_non_stream(
     } else {
         match target_model.to_lowercase().as_str() {
             "coder" => {
-                let (text, model) = code_chat(&state.brain, &model_user_prompt).await?;
+                let (text, model) = code_chat_with_params(
+                    &state.brain,
+                    &model_user_prompt,
+                    req.temperature,
+                    req.top_p,
+                    req.seed,
+                )
+                .await?;
                 (text, model, "coder")
             }
             "reasoner" => {
-                let (text, model) = reasoner_chat(&state.brain, &model_user_prompt).await?;
+                let (text, model) = reasoner_chat_with_params(
+                    &state.brain,
+                    &model_user_prompt,
+                    req.temperature,
+                    req.top_p,
+                    req.seed,
+                )
+                .await?;
                 (text, model, "reasoner")
             }
             _ if is_direct_reasoner_intent(&intent) => {
-                let (text, model) = reasoner_chat(&state.brain, &model_user_prompt).await?;
+                let (text, model) = reasoner_chat_with_params(
+                    &state.brain,
+                    &model_user_prompt,
+                    req.temperature,
+                    req.top_p,
+                    req.seed,
+                )
+                .await?;
                 (text, model, "direct_reasoner")
             }
             _ => {
@@ -2539,7 +2586,15 @@ pub async fn handle_chat_completions(
         }
     } else {
         match target_model.to_lowercase().as_str() {
-            "coder" => match code_chat(&state.brain, &model_user_prompt).await {
+            "coder" => match code_chat_with_params(
+                &state.brain,
+                &model_user_prompt,
+                req.temperature,
+                req.top_p,
+                req.seed,
+            )
+            .await
+            {
                 Ok((text, model)) => (text, model, "coder"),
                 Err(err) => {
                     return (
@@ -2554,7 +2609,15 @@ pub async fn handle_chat_completions(
                         .into_response();
                 }
             },
-            "reasoner" => match reasoner_chat(&state.brain, &model_user_prompt).await {
+            "reasoner" => match reasoner_chat_with_params(
+                &state.brain,
+                &model_user_prompt,
+                req.temperature,
+                req.top_p,
+                req.seed,
+            )
+            .await
+            {
                 Ok((text, model)) => (text, model, "reasoner"),
                 Err(err) => {
                     return (
@@ -2570,7 +2633,15 @@ pub async fn handle_chat_completions(
                 }
             },
             _ if is_direct_reasoner_intent(&intent) => {
-                match reasoner_chat(&state.brain, &model_user_prompt).await {
+                match reasoner_chat_with_params(
+                    &state.brain,
+                    &model_user_prompt,
+                    req.temperature,
+                    req.top_p,
+                    req.seed,
+                )
+                .await
+                {
                     Ok((text, model)) => (text, model, "direct_reasoner"),
                     Err(err) => {
                         return (
