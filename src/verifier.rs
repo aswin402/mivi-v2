@@ -1,8 +1,6 @@
 use crate::brain::EdgeBrain;
 use regex::Regex;
-use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -70,9 +68,11 @@ impl CompilerVerifier {
         }
     }
 
-    pub fn run_local_code(&self, code: &str, language: &str) -> (bool, String) {
+    pub async fn run_local_code(&self, code: &str, language: &str) -> (bool, String) {
         let temp_dir = PathBuf::from("temp_run");
-        let _ = fs::create_dir_all(&temp_dir);
+        if let Err(e) = tokio::fs::create_dir_all(&temp_dir).await {
+            return (false, format!("Failed to create temp directory: {}", e));
+        }
 
         let lang_lower = language.to_lowercase();
         let (ext, cmd_name) = match lang_lower.as_str() {
@@ -85,22 +85,23 @@ impl CompilerVerifier {
 
         let unique = unique_temp_stem();
         let temp_file = temp_dir.join(format!("{}{}", unique, ext));
-        if let Err(e) = fs::write(&temp_file, code) {
+        if let Err(e) = tokio::fs::write(&temp_file, code).await {
             return (false, format!("Failed to write temp code: {}", e));
         }
 
         let result = if lang_lower == "rust" || lang_lower == "rs" {
             let out_bin = temp_dir.join(format!("{}_rust_bin", unique));
-            let compile_res = Command::new("rustc")
+            let compile_res = tokio::process::Command::new("rustc")
                 .arg(&temp_file)
                 .arg("-o")
                 .arg(&out_bin)
-                .output();
-            let _ = fs::remove_file(&temp_file);
+                .output()
+                .await;
+            let _ = tokio::fs::remove_file(&temp_file).await;
             match compile_res {
                 Ok(comp) if comp.status.success() => {
-                    let exec_res = Command::new(&out_bin).output();
-                    let _ = fs::remove_file(&out_bin);
+                    let exec_res = tokio::process::Command::new(&out_bin).output().await;
+                    let _ = tokio::fs::remove_file(&out_bin).await;
                     match exec_res {
                         Ok(out) => (
                             out.status.success(),
@@ -124,16 +125,17 @@ impl CompilerVerifier {
             }
         } else if lang_lower == "cpp" || lang_lower == "c++" || lang_lower == "c" {
             let out_bin = temp_dir.join(format!("{}_cpp_bin", unique));
-            let compile_res = Command::new("g++")
+            let compile_res = tokio::process::Command::new("g++")
                 .arg(&temp_file)
                 .arg("-o")
                 .arg(&out_bin)
-                .output();
-            let _ = fs::remove_file(&temp_file);
+                .output()
+                .await;
+            let _ = tokio::fs::remove_file(&temp_file).await;
             match compile_res {
                 Ok(comp) if comp.status.success() => {
-                    let exec_res = Command::new(&out_bin).output();
-                    let _ = fs::remove_file(&out_bin);
+                    let exec_res = tokio::process::Command::new(&out_bin).output().await;
+                    let _ = tokio::fs::remove_file(&out_bin).await;
                     match exec_res {
                         Ok(out) => (
                             out.status.success(),
@@ -156,18 +158,18 @@ impl CompilerVerifier {
                 Err(e) => (false, format!("g++ not found: {}", e)),
             }
         } else {
-            let output = Command::new(cmd_name).arg(&temp_file).output();
+            let output = tokio::process::Command::new(cmd_name).arg(&temp_file).output().await;
             match output {
                 Ok(out) => {
-                    let _ = fs::remove_file(&temp_file);
+                    let _ = tokio::fs::remove_file(&temp_file).await;
                     let stdout = String::from_utf8_lossy(&out.stdout);
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     (out.status.success(), format!("{}{}", stdout, stderr))
                 }
                 Err(_) if cmd_name == "bun" => {
                     // Fallback to node for TypeScript/JavaScript if bun is not installed.
-                    let output = Command::new("node").arg(&temp_file).output();
-                    let _ = fs::remove_file(&temp_file);
+                    let output = tokio::process::Command::new("node").arg(&temp_file).output().await;
+                    let _ = tokio::fs::remove_file(&temp_file).await;
                     match output {
                         Ok(out) => (
                             out.status.success(),
@@ -181,7 +183,7 @@ impl CompilerVerifier {
                     }
                 }
                 Err(e) => {
-                    let _ = fs::remove_file(&temp_file);
+                    let _ = tokio::fs::remove_file(&temp_file).await;
                     (false, format!("Failed to run command {}: {}", cmd_name, e))
                 }
             }
@@ -263,45 +265,57 @@ impl CompilerVerifier {
                 "[CompilerVerifier] Attempt {}/{} generating code...",
                 attempt, max_retries
             );
-            if let Ok(raw_res) = self.brain.query_coder(&prompt, sys_prompt).await {
-                let code = self.extract_code_block(&raw_res);
-                let (success, output) = self.run_local_code(&code, language);
-                let output_satisfies_task = !(language.eq_ignore_ascii_case("python")
-                    && compressed_task.to_lowercase().contains("print")
-                    && output.trim().is_empty());
-                if success && output_satisfies_task {
+            match self.brain.query_coder(&prompt, sys_prompt).await {
+                Ok(raw_res) => {
+                    let code = self.extract_code_block(&raw_res);
+                    let (success, output) = self.run_local_code(&code, language).await;
+                    let output_satisfies_task = !(language.eq_ignore_ascii_case("python")
+                        && compressed_task.to_lowercase().contains("print")
+                        && output.trim().is_empty());
+                    if success && output_satisfies_task {
+                        println!(
+                            "[CompilerVerifier] Verified code successfully on attempt {}!",
+                            attempt
+                        );
+                        crate::trace::trace_state_transition("verifying", "executing");
+                        return (Some(code), output);
+                    }
                     println!(
-                        "[CompilerVerifier] Verified code successfully on attempt {}!",
-                        attempt
+                        "[CompilerVerifier] Attempt {} failed: {}",
+                        attempt,
+                        output.trim()
                     );
-                    crate::trace::trace_state_transition("verifying", "executing");
-                    return (Some(code), output);
-                }
-                println!(
-                    "[CompilerVerifier] Attempt {} failed: {}",
-                    attempt,
-                    output.trim()
-                );
-                if language.eq_ignore_ascii_case("python") {
-                    if let Some(repaired_code) =
-                        Self::repair_python_code(&compressed_task, &code, output.trim())
-                    {
-                        let (repair_success, repair_output) =
-                            self.run_local_code(&repaired_code, language);
-                        if repair_success {
-                            println!(
-                                "[CompilerVerifier] Verified repaired code after attempt {}!",
-                                attempt
-                            );
-                            crate::trace::trace_state_transition("verifying", "executing");
-                            return (Some(repaired_code), repair_output);
+                    if language.eq_ignore_ascii_case("python") {
+                        if let Some(repaired_code) =
+                            Self::repair_python_code(&compressed_task, &code, output.trim())
+                        {
+                            let (repair_success, repair_output) =
+                                self.run_local_code(&repaired_code, language).await;
+                            if repair_success {
+                                println!(
+                                    "[CompilerVerifier] Verified repaired code after attempt {}!",
+                                    attempt
+                                );
+                                crate::trace::trace_state_transition("verifying", "executing");
+                                return (Some(repaired_code), repair_output);
+                            }
                         }
                     }
+                    prompt = format!(
+                        "The following {} code failed during execution:\n```\n{}\n```\nError output:\n```\n{}\n```\nDo not repeat the same code. Explain nothing. Output different corrected code inside one ``` block.",
+                        language, code, output.trim()
+                    );
                 }
-                prompt = format!(
-                    "The following {} code failed during execution:\n```\n{}\n```\nError output:\n```\n{}\n```\nDo not repeat the same code. Explain nothing. Output different corrected code inside one ``` block.",
-                    language, code, output.trim()
-                );
+                Err(e) => {
+                    println!(
+                        "[CompilerVerifier] Attempt {} query_coder failed: {}",
+                        attempt, e
+                    );
+                    if attempt == max_retries {
+                        return (None, format!("Query coder failed: {}", e));
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                }
             }
         }
         (None, "Max retries exceeded".to_string())
@@ -317,15 +331,15 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    #[test]
-    fn typescript_falls_back_to_node_when_bun_is_missing() {
+    #[tokio::test]
+    async fn typescript_falls_back_to_node_when_bun_is_missing() {
         let _guard = ENV_LOCK.lock().unwrap();
         let old_path = env::var_os("PATH");
         env::set_var("PATH", "/usr/bin:/bin");
 
         let verifier = CompilerVerifier::new(EdgeBrain::new());
         let (success, output) =
-            verifier.run_local_code("console.log('ts fallback ok');", "typescript");
+            verifier.run_local_code("console.log('ts fallback ok');", "typescript").await;
 
         if let Some(path) = old_path {
             env::set_var("PATH", path);
