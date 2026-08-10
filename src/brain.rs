@@ -210,12 +210,10 @@ async fn command_output_with_timeout(
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(err)) => Err(format!("llama-cli execution error: {}", err)),
-        Err(_) => {
-            Err(format!(
-                "llama-cli timed out after {} seconds",
-                timeout.as_secs()
-            ))
-        }
+        Err(_) => Err(format!(
+            "llama-cli timed out after {} seconds",
+            timeout.as_secs()
+        )),
     }
 }
 
@@ -422,7 +420,8 @@ impl EdgeBrain {
         prompt: &str,
         system_prompt: &str,
     ) -> Result<String, String> {
-        self.query_reasoner_with_params(prompt, system_prompt, None, None, None).await
+        self.query_reasoner_with_params(prompt, system_prompt, None, None, None)
+            .await
     }
 
     pub async fn query_reasoner_with_params(
@@ -453,7 +452,8 @@ impl EdgeBrain {
     }
 
     pub async fn query_coder(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
-        self.query_coder_with_params(prompt, system_prompt, None, None, None).await
+        self.query_coder_with_params(prompt, system_prompt, None, None, None)
+            .await
     }
 
     pub async fn query_coder_with_params(

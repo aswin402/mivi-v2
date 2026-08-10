@@ -4354,14 +4354,8 @@ Hello!"
             None,
         );
 
-        assert_eq!(
-            chunks[0]["choices"][0]["delta"]["role"],
-            "assistant"
-        );
-        assert_eq!(
-            chunks[0]["choices"][0]["delta"]["content"],
-            ""
-        );
+        assert_eq!(chunks[0]["choices"][0]["delta"]["role"], "assistant");
+        assert_eq!(chunks[0]["choices"][0]["delta"]["content"], "");
         assert_eq!(
             chunks[1]["choices"][0]["delta"]["reasoning_content"],
             "selected shell tool"
@@ -4402,15 +4396,17 @@ Hello!"
             minicpm_path: PathBuf::new(),
             minicpm_proj: PathBuf::new(),
             ultra_low_ram: false,
-            text_worker: Arc::new(crate::worker::WorkerManager::new(crate::worker::WorkerConfig {
-                server_path: PathBuf::new(),
-                model_path: PathBuf::new(),
-                host: "127.0.0.1".to_string(),
-                port: 18080,
-                context_tokens: 1024,
-                gpu_layers: "0".to_string(),
-                idle_secs: 10,
-            })),
+            text_worker: Arc::new(crate::worker::WorkerManager::new(
+                crate::worker::WorkerConfig {
+                    server_path: PathBuf::new(),
+                    model_path: PathBuf::new(),
+                    host: "127.0.0.1".to_string(),
+                    port: 18080,
+                    context_tokens: 1024,
+                    gpu_layers: "0".to_string(),
+                    idle_secs: 10,
+                },
+            )),
             native: crate::native_brain::NativeBrain,
         };
         let state = Arc::new(AppState {

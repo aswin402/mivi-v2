@@ -158,7 +158,10 @@ impl CompilerVerifier {
                 Err(e) => (false, format!("g++ not found: {}", e)),
             }
         } else {
-            let output = tokio::process::Command::new(cmd_name).arg(&temp_file).output().await;
+            let output = tokio::process::Command::new(cmd_name)
+                .arg(&temp_file)
+                .output()
+                .await;
             match output {
                 Ok(out) => {
                     let _ = tokio::fs::remove_file(&temp_file).await;
@@ -168,7 +171,10 @@ impl CompilerVerifier {
                 }
                 Err(_) if cmd_name == "bun" => {
                     // Fallback to node for TypeScript/JavaScript if bun is not installed.
-                    let output = tokio::process::Command::new("node").arg(&temp_file).output().await;
+                    let output = tokio::process::Command::new("node")
+                        .arg(&temp_file)
+                        .output()
+                        .await;
                     let _ = tokio::fs::remove_file(&temp_file).await;
                     match output {
                         Ok(out) => (
@@ -314,7 +320,8 @@ impl CompilerVerifier {
                     if attempt == max_retries {
                         return (None, format!("Query coder failed: {}", e));
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64))
+                        .await;
                 }
             }
         }
@@ -338,8 +345,9 @@ mod tests {
         env::set_var("PATH", "/usr/bin:/bin");
 
         let verifier = CompilerVerifier::new(EdgeBrain::new());
-        let (success, output) =
-            verifier.run_local_code("console.log('ts fallback ok');", "typescript").await;
+        let (success, output) = verifier
+            .run_local_code("console.log('ts fallback ok');", "typescript")
+            .await;
 
         if let Some(path) = old_path {
             env::set_var("PATH", path);

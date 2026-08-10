@@ -16,7 +16,9 @@ pub async fn write_prompt_file(prompt: &str) -> Result<PathBuf, String> {
         now,
         count
     ));
-    tokio::fs::write(&path, prompt).await.map_err(|e| format!("Failed to write prompt file: {}", e))?;
+    tokio::fs::write(&path, prompt)
+        .await
+        .map_err(|e| format!("Failed to write prompt file: {}", e))?;
     Ok(path)
 }
 
@@ -27,9 +29,13 @@ mod tests {
     #[tokio::test]
     async fn write_prompt_file_preserves_large_agent_prompt() {
         let prompt = "tool ".repeat(80_000);
-        let path = write_prompt_file(&prompt).await.expect("prompt file should be written");
+        let path = write_prompt_file(&prompt)
+            .await
+            .expect("prompt file should be written");
 
-        let saved = tokio::fs::read_to_string(&path).await.expect("prompt file should be readable");
+        let saved = tokio::fs::read_to_string(&path)
+            .await
+            .expect("prompt file should be readable");
         let _ = tokio::fs::remove_file(&path).await;
 
         assert_eq!(saved, prompt);

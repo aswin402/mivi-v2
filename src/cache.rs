@@ -114,7 +114,10 @@ mod tests {
         cache.put("what is the weather today", "cloudy").await;
 
         // Exact hit
-        assert_eq!(cache.get("what is the weather today").await, Some("cloudy".to_string()));
+        assert_eq!(
+            cache.get("what is the weather today").await,
+            Some("cloudy".to_string())
+        );
 
         // Semantic hit (Jaccard similarity >= 0.85)
         // Let's use similar phrases: "what is the weather today" vs "what is weather today"
@@ -125,7 +128,10 @@ mod tests {
         // set1 = 5 words. set2 = 6 words.
         // intersection = 5, union = 6. 5 / 6 = 0.833
         // Let's try: "what is the weather today" vs "what is the weather today" with extra space.
-        assert_eq!(cache.get("  what is the weather today  ").await, Some("cloudy".to_string()));
+        assert_eq!(
+            cache.get("  what is the weather today  ").await,
+            Some("cloudy".to_string())
+        );
     }
 
     #[tokio::test]
@@ -133,7 +139,9 @@ mod tests {
         let cache = SemanticCache::new();
         // Insert 512 entries
         for i in 0..512 {
-            cache.put(&format!("query {}", i), &format!("value {}", i)).await;
+            cache
+                .put(&format!("query {}", i), &format!("value {}", i))
+                .await;
         }
         // Cache size is 512
         assert_eq!(cache.cache.lock().await.len(), 512);
