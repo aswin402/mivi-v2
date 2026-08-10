@@ -1374,7 +1374,9 @@ pub fn parse_tool_calls(text: &str) -> Vec<ToolCallOut> {
                             let json_str = &candidate[..=i];
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 if let Some(obj) = val.as_object() {
-                                    if let Some(tool_calls_arr) = obj.get("tool_calls").and_then(|v| v.as_array()) {
+                                    if let Some(tool_calls_arr) =
+                                        obj.get("tool_calls").and_then(|v| v.as_array())
+                                    {
                                         for item in tool_calls_arr {
                                             if let Some(call) = parse_single_tool_call_value(item) {
                                                 calls.push(call);
@@ -4418,7 +4420,10 @@ Hello!"
     #[test]
     pub fn parses_openai_format_tool_calls() {
         let raw = r#"{"tool_calls":[{"id":"call_read_file","type":"function","function":{"name":"read_file","arguments":{"path":"src/main.rs"}}}]}"#;
-        let calls = parse_tool_calls_for_tools(raw, &[server_tool("read_file", "Read a file from workspace")]);
+        let calls = parse_tool_calls_for_tools(
+            raw,
+            &[server_tool("read_file", "Read a file from workspace")],
+        );
 
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.name, "read_file");
