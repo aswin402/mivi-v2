@@ -1,0 +1,18 @@
+# GBNF Grammar for OpenAI Tool Call JSON format (minified JSON, no whitespace)
+# Enforces standard tool call schemas
+
+root ::= jsontoolcall
+
+jsontoolcall ::= "{" "\"tool_calls\"" ":" "[" jsonobject ("," jsonobject)* "]" "}"
+
+jsonobject ::= "{" "\"id\"" ":" string "," "\"type\"" ":" "\"function\"" "," "\"function\"" ":" functionobject "}"
+
+functionobject ::= "{" "\"name\"" ":" string "," "\"arguments\"" ":" (string | jsonvalueobject) "}"
+
+jsonvalueobject ::= "{" (pair ("," pair)*)? "}"
+pair ::= string ":" jsonvalue
+jsonvalue ::= jsonvalueobject | jsonarray | string | number | "true" | "false" | "null"
+jsonarray ::= "[" (jsonvalue ("," jsonvalue)*)? "]"
+
+string ::= "\"" [^"\\]* "\""
+number ::= "-"? [0-9]+ ("." [0-9]+)?
