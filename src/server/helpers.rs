@@ -326,6 +326,11 @@ pub fn responses_request_to_chat_request(req: ResponsesRequest) -> ChatCompletio
         frequency_penalty: req.frequency_penalty,
         presence_penalty: req.presence_penalty,
         user: req.user,
+        logit_bias: None,
+        logprobs: None,
+        top_logprobs: None,
+        n: None,
+        service_tier: None,
     }
 }
 
@@ -3347,6 +3352,11 @@ mod tests {
             frequency_penalty: None,
             presence_penalty: None,
             user: None,
+            logit_bias: None,
+            logprobs: None,
+            top_logprobs: None,
+            n: None,
+            service_tier: None,
         }
     }
 

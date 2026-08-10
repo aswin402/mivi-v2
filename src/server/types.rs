@@ -85,6 +85,16 @@ pub struct ChatCompletionRequest {
     pub presence_penalty: Option<f32>,
     #[serde(default)]
     pub user: Option<String>,
+    #[serde(default)]
+    pub logit_bias: Option<serde_json::Value>,
+    #[serde(default)]
+    pub logprobs: Option<bool>,
+    #[serde(default)]
+    pub top_logprobs: Option<u32>,
+    #[serde(default)]
+    pub n: Option<u32>,
+    #[serde(default)]
+    pub service_tier: Option<String>,
 }
 
 #[derive(Deserialize)]
