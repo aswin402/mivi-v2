@@ -4500,7 +4500,7 @@ Hello!"
                     idle_secs: 10,
                 },
             )),
-            native: crate::native_brain::NativeBrain,
+            native: crate::native_brain::NativeBrain::new(),
         };
         let state = Arc::new(AppState {
             brain: brain.clone(),
