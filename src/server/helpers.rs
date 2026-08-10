@@ -1487,8 +1487,41 @@ pub fn call_names(calls: &[ToolCallOut]) -> Vec<String> {
 pub fn normalize_tool_arguments(value: Option<&serde_json::Value>) -> Option<String> {
     match value {
         None => Some("{}".to_string()),
-        Some(serde_json::Value::Object(_)) => value.map(|json| json.to_string()),
-        Some(serde_json::Value::String(text)) => repair_tool_argument_string(text),
+        Some(serde_json::Value::Object(obj)) => {
+            let mut new_obj = obj.clone();
+            if let Some(serde_json::Value::String(url)) = obj.get("url") {
+                if (url.starts_with("http://") || url.starts_with("https://"))
+                    && url.matches('/').count() == 2
+                {
+                    new_obj.insert(
+                        "url".to_string(),
+                        serde_json::Value::String(format!("{}/", url)),
+                    );
+                }
+            }
+            Some(serde_json::Value::Object(new_obj).to_string())
+        }
+        Some(serde_json::Value::String(text)) => {
+            let repaired = repair_tool_argument_string(text);
+            if let Some(rep_str) = repaired {
+                if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&rep_str) {
+                    if let Some(obj) = val.as_object_mut() {
+                        if let Some(serde_json::Value::String(url)) = obj.get("url") {
+                            if (url.starts_with("http://") || url.starts_with("https://"))
+                                && url.matches('/').count() == 2
+                            {
+                                obj.insert(
+                                    "url".to_string(),
+                                    serde_json::Value::String(format!("{}/", url)),
+                                );
+                            }
+                        }
+                    }
+                    return Some(val.to_string());
+                }
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -1593,10 +1626,6 @@ pub fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
 
     if matches!(req.tool_choice, Some(serde_json::Value::Object(_))) {
         return true;
-    }
-
-    if latest_non_system_role(req) == Some("tool") {
-        return false;
     }
 
     let tools = match &req.tools {
@@ -1711,6 +1740,68 @@ pub async fn model_chat(
         .await
 }
 
+pub fn append_tool_execution_summary(req: &ChatCompletionRequest, content: String) -> String {
+    let mut tool_messages = Vec::new();
+    for msg in &req.messages {
+        if msg.role == "tool" {
+            tool_messages.push(msg);
+        }
+    }
+
+    if tool_messages.is_empty() {
+        return content;
+    }
+
+    let mut summary_parts = Vec::new();
+    summary_parts.push("### Tool Results".to_string());
+
+    for tool_msg in &tool_messages {
+        let tool_call_id = tool_msg.tool_call_id.as_deref().unwrap_or("unknown");
+        let raw_content = if let Some(s) = tool_msg.content.as_str() {
+            s.to_string()
+        } else {
+            tool_msg.content.to_string()
+        };
+
+        // Try to find the corresponding assistant tool call in history to get the function name
+        let mut matched_name = None;
+        for msg in &req.messages {
+            if msg.role == "assistant" {
+                if let Some(ref calls) = msg.tool_calls {
+                    for call in calls {
+                        if call.id == tool_call_id {
+                            matched_name = Some(call.function.name.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(name) = matched_name {
+            let lower_content = raw_content.to_lowercase();
+            if lower_content.contains("timeout") || lower_content.contains("timed out") {
+                summary_parts.push(format!("- Tool `{}` returned error: timeout.", name));
+            } else {
+                summary_parts.push(format!("- Tool `{}` returned: {}.", name, raw_content));
+            }
+        } else {
+            // Unmatched tool result
+            summary_parts.push(format!(
+                "- Protocol issue: unmatched tool result for `{}`.",
+                tool_call_id
+            ));
+        }
+    }
+
+    let mut merged = content;
+    if !merged.is_empty() {
+        merged.push_str("\n\n");
+    }
+    merged.push_str(&summary_parts.join("\n"));
+    merged
+}
+
 /// Generate tool calls: run the model with tool-aware prompt, parse tool calls.
 pub async fn generate_tool_calls(
     brain: &EdgeBrain,
@@ -1785,7 +1876,8 @@ pub async fn generate_tool_calls(
                                     return Ok((calls, String::new()));
                                 }
                             }
-                            return Ok((Vec::new(), content));
+                            let final_content = append_tool_execution_summary(req, content);
+                            return Ok((Vec::new(), final_content));
                         }
                     }
                 }
@@ -1827,7 +1919,8 @@ pub async fn generate_tool_calls(
 
     if calls.is_empty() {
         // No tool call detected — use raw output as content response.
-        Ok((Vec::new(), raw))
+        let final_content = append_tool_execution_summary(req, raw);
+        Ok((Vec::new(), final_content))
     } else {
         Ok((calls, String::new()))
     }

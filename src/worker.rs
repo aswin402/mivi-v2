@@ -216,9 +216,26 @@ impl WorkerManager {
         presence_penalty: Option<f32>,
     ) -> Result<serde_json::Value, String> {
         let endpoint = self.ensure_text_worker().await?;
+        let norm_messages = if let Some(arr) = messages.as_array() {
+            let normalized: Vec<serde_json::Value> = arr
+                .iter()
+                .map(|msg| {
+                    let mut new_msg = msg.clone();
+                    if let Some(content) = msg.get("content") {
+                        if content.is_object() {
+                            new_msg["content"] = serde_json::Value::String(content.to_string());
+                        }
+                    }
+                    new_msg
+                })
+                .collect();
+            serde_json::Value::Array(normalized)
+        } else {
+            messages.clone()
+        };
         let mut body = json!({
             "model": "mivi-worker",
-            "messages": messages,
+            "messages": norm_messages,
             "stream": false
         });
         if let Some(temp) = temperature {
