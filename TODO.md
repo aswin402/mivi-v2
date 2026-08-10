@@ -73,26 +73,26 @@
 
 ---
 
-## Phase 8: Pure Rust Native Inference 🦀
+## Phase 8: Pure Rust Native Inference 🦀 ✅ COMPLETE
 
 > Inspired by: Candle (pure Rust GGUF runtime), kimi-k3-in-c (direct quantized GEMM)
 > This is the transformative evolution — replace llama-cli subprocess with native Rust inference.
 
 ### Wave 1 — Candle Integration (HIGH)
 
-- [ ] **8.1** Add `candle-core` and `candle-transformers` as optional Cargo dependencies behind a `native` feature flag
-- [ ] **8.2** Implement `NativeBrain` — pure Rust GGUF model loader using Candle's quantized runtime
-- [ ] **8.3** Native KV-cache management with Rust ownership semantics (automatic cleanup, no process boundaries)
+- [x] **8.1** Add `candle-core` and `candle-transformers` as optional Cargo dependencies behind a `native` feature flag
+- [x] **8.2** Implement `NativeBrain` — pure Rust GGUF model loader using Candle's quantized runtime
+- [x] **8.3** Native KV-cache management with Rust ownership semantics (automatic cleanup, no process boundaries)
 
 ### Wave 2 — Native Execution (MEDIUM)
 
-- [ ] **8.4** In-process true token streaming (yield tokens as generated, no subprocess stdout parsing)
-- [ ] **8.5** CPU SIMD vectorized inference (leverage Rust `std::arch` intrinsics for quantized GEMM)
-- [ ] **8.6** Optional Metal/CUDA backend support via Candle's backend abstraction
+- [x] **8.4** In-process true token streaming (yield tokens as generated, no subprocess stdout parsing)
+- [x] **8.5** CPU SIMD vectorized inference (leverage Rust `std::arch` intrinsics for quantized GEMM)
+- [x] **8.6** Optional Metal/CUDA backend support via Candle's backend abstraction
 
 ### Wave 3 — Zero Dependency (LOW)
 
-- [ ] **8.7** Remove `bin/llama-cli` and `bin/llama-server` dependencies — single `cargo build --release` produces everything
+- [x] **8.7** Remove `bin/llama-cli` and `bin/llama-server` dependencies — single `cargo build --release` produces everything
 
 ---
 
