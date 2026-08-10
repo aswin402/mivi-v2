@@ -2699,6 +2699,25 @@ pub async fn handle_chat_completions(
     .into_response()
 }
 
+fn base_stream_chunk(
+    id: &str,
+    created: u64,
+    delta: serde_json::Value,
+    finish_reason: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": MODEL_NAME,
+        "choices": [{
+            "index": 0,
+            "delta": delta,
+            "finish_reason": finish_reason
+        }]
+    })
+}
+
 pub fn tool_call_stream_chunks(
     id: String,
     created: u64,
@@ -2709,30 +2728,20 @@ pub fn tool_call_stream_chunks(
     let mut chunks = Vec::new();
 
     // Preamble chunk for OpenAI compatibility
-    chunks.push(serde_json::json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": MODEL_NAME,
-        "choices": [{
-            "index": 0,
-            "delta": { "role": "assistant", "content": "" },
-            "finish_reason": null
-        }]
-    }));
+    chunks.push(base_stream_chunk(
+        &id,
+        created,
+        serde_json::json!({ "role": "assistant", "content": "" }),
+        None,
+    ));
 
     if let Some(reasoning) = reasoning_content {
-        chunks.push(serde_json::json!({
-            "id": id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": MODEL_NAME,
-            "choices": [{
-                "index": 0,
-                "delta": { "reasoning_content": reasoning },
-                "finish_reason": null
-            }]
-        }));
+        chunks.push(base_stream_chunk(
+            &id,
+            created,
+            serde_json::json!({ "reasoning_content": reasoning }),
+            None,
+        ));
     }
 
     if !tool_calls.is_empty() {
@@ -2752,17 +2761,12 @@ pub fn tool_call_stream_chunks(
                 })
             })
             .collect();
-        chunks.push(serde_json::json!({
-            "id": id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": MODEL_NAME,
-            "choices": [{
-                "index": 0,
-                "delta": { "tool_calls": initial_calls },
-                "finish_reason": null
-            }]
-        }));
+        chunks.push(base_stream_chunk(
+            &id,
+            created,
+            serde_json::json!({ "tool_calls": initial_calls }),
+            None,
+        ));
 
         // Emit the arguments chunks in fragments
         let mut max_len = 0;
@@ -2788,33 +2792,23 @@ pub fn tool_call_stream_chunks(
                 }
             }
             if !arg_deltas.is_empty() {
-                chunks.push(serde_json::json!({
-                    "id": id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": MODEL_NAME,
-                    "choices": [{
-                        "index": 0,
-                        "delta": { "tool_calls": arg_deltas },
-                        "finish_reason": null
-                    }]
-                }));
+                chunks.push(base_stream_chunk(
+                    &id,
+                    created,
+                    serde_json::json!({ "tool_calls": arg_deltas }),
+                    None,
+                ));
             }
             offset += chunk_size;
         }
     }
 
-    chunks.push(serde_json::json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": MODEL_NAME,
-        "choices": [{
-            "index": 0,
-            "delta": {},
-            "finish_reason": "tool_calls"
-        }]
-    }));
+    chunks.push(base_stream_chunk(
+        &id,
+        created,
+        serde_json::json!({}),
+        Some("tool_calls"),
+    ));
 
     if let Some(usage) = usage {
         chunks.push(serde_json::json!({
@@ -2863,55 +2857,35 @@ pub fn text_stream_chunks(
     let mut chunks = Vec::new();
 
     // Preamble chunk for OpenAI compatibility
-    chunks.push(serde_json::json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": MODEL_NAME,
-        "choices": [{
-            "index": 0,
-            "delta": { "role": "assistant", "content": "" },
-            "finish_reason": null
-        }]
-    }));
+    chunks.push(base_stream_chunk(
+        &id,
+        created,
+        serde_json::json!({ "role": "assistant", "content": "" }),
+        None,
+    ));
 
     if let Some(reasoning) = reasoning_content {
-        chunks.push(serde_json::json!({
-            "id": id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": MODEL_NAME,
-            "choices": [{
-                "index": 0,
-                "delta": { "reasoning_content": reasoning },
-                "finish_reason": null
-            }]
-        }));
+        chunks.push(base_stream_chunk(
+            &id,
+            created,
+            serde_json::json!({ "reasoning_content": reasoning }),
+            None,
+        ));
     }
 
-    chunks.push(serde_json::json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": MODEL_NAME,
-        "choices": [{
-            "index": 0,
-            "delta": { "content": content },
-            "finish_reason": null
-        }]
-    }));
+    chunks.push(base_stream_chunk(
+        &id,
+        created,
+        serde_json::json!({ "content": content }),
+        None,
+    ));
 
-    chunks.push(serde_json::json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": MODEL_NAME,
-        "choices": [{
-            "index": 0,
-            "delta": {},
-            "finish_reason": "stop"
-        }]
-    }));
+    chunks.push(base_stream_chunk(
+        &id,
+        created,
+        serde_json::json!({}),
+        Some("stop"),
+    ));
 
     if let Some(usage) = usage {
         chunks.push(serde_json::json!({
