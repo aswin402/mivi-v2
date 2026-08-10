@@ -253,7 +253,7 @@ impl NeedleRouter {
     ) -> (&'static str, f64) {
         let (best_class, confidence) = self.classify_intent_nb(prompt);
 
-        if confidence < 0.85 {
+        if confidence < 0.70 {
             tracing::info!(
                 "[NeedleRouter] Low confidence ({:.2}) for class {}. Falling back to Coder model router...",
                 confidence, best_class

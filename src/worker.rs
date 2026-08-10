@@ -112,9 +112,9 @@ impl WorkerManager {
             "-fa".to_string(),
             "on".to_string(),
             "-ctk".to_string(),
-            "q8_0".to_string(),
+            RuntimeConfig::from_env().kv_cache_type,
             "-ctv".to_string(),
-            "q8_0".to_string(),
+            RuntimeConfig::from_env().kv_cache_type,
             "-np".to_string(),
             "1".to_string(),
             "--sleep-idle-seconds".to_string(),
@@ -214,6 +214,7 @@ impl WorkerManager {
         seed: Option<u64>,
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
+        grammar: Option<String>,
     ) -> Result<serde_json::Value, String> {
         let endpoint = self.ensure_text_worker().await?;
         let norm_messages = if let Some(arr) = messages.as_array() {
@@ -259,8 +260,8 @@ impl WorkerManager {
         if let Some(pp) = presence_penalty {
             body["presence_penalty"] = json!(pp);
         }
-        if let Some(t) = tools {
-            body["tools"] = t;
+        if let Some(ref t) = tools {
+            body["tools"] = t.clone();
         }
         if let Some(tc) = tool_choice {
             body["tool_choice"] = tc;
@@ -268,11 +269,81 @@ impl WorkerManager {
         if let Some(rf) = response_format {
             body["response_format"] = rf;
         }
+        let has_tools_val = tools
+            .as_ref()
+            .map(|t| !t.is_null() && (!t.is_array() || !t.as_array().unwrap().is_empty()))
+            .unwrap_or(false);
+        if !has_tools_val {
+            if let Some(g) = grammar {
+                body["grammar"] = serde_json::Value::String(g);
+            }
+        }
         let body_str = http_request(
             &self.client,
             &endpoint,
             "POST",
             "/v1/chat/completions",
+            Some(&body.to_string()),
+            Duration::from_secs(300),
+        )
+        .await?;
+        serde_json::from_str(&body_str)
+            .map_err(|err| format!("failed to parse worker JSON response: {err}"))
+    }
+
+    pub async fn query_completion(
+        &self,
+        prompt: &str,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        stop: Option<serde_json::Value>,
+        seed: Option<u64>,
+        frequency_penalty: Option<f32>,
+        presence_penalty: Option<f32>,
+        json_schema: Option<String>,
+        grammar: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        let endpoint = self.ensure_text_worker().await?;
+        let mut body = json!({
+            "prompt": prompt,
+            "stream": false
+        });
+        if let Some(temp) = temperature {
+            body["temperature"] = json!(temp);
+        }
+        if let Some(tp) = top_p {
+            body["top_p"] = json!(tp);
+        }
+        if let Some(mt) = max_tokens {
+            body["n_predict"] = json!(mt);
+        }
+        if let Some(st) = stop {
+            body["stop"] = st;
+        }
+        if let Some(sd) = seed {
+            body["seed"] = json!(sd);
+        }
+        if let Some(fp) = frequency_penalty {
+            body["frequency_penalty"] = json!(fp);
+        }
+        if let Some(pp) = presence_penalty {
+            body["presence_penalty"] = json!(pp);
+        }
+        if let Some(ref schema_str) = json_schema {
+            if let Ok(schema_val) = serde_json::from_str::<serde_json::Value>(schema_str) {
+                body["json_schema"] = schema_val;
+            }
+        }
+        if let Some(g) = grammar {
+            body["grammar"] = serde_json::Value::String(g);
+        }
+
+        let body_str = http_request(
+            &self.client,
+            &endpoint,
+            "POST",
+            "/completion",
             Some(&body.to_string()),
             Duration::from_secs(300),
         )
@@ -292,6 +363,7 @@ impl WorkerManager {
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
         json_schema: Option<String>,
+        grammar: Option<String>,
     ) -> Result<impl futures::stream::Stream<Item = Result<bytes::Bytes, reqwest::Error>>, String>
     {
         let endpoint = self.ensure_text_worker().await?;
@@ -325,6 +397,9 @@ impl WorkerManager {
                 body["json_schema"] = schema_val;
             }
         }
+        if let Some(g) = grammar {
+            body["grammar"] = serde_json::Value::String(g);
+        }
 
         let response = self
             .client
@@ -352,8 +427,23 @@ impl WorkerManager {
             .map_err(|_| "worker lock poisoned".to_string())?;
         if let Some(mut child) = slot.child.take() {
             let _ = child.kill();
+            let model_path = self.config.model_path.clone();
             std::thread::spawn(move || {
                 let _ = child.wait();
+
+                #[cfg(target_os = "linux")]
+                {
+                    let is_ultra_low = std::env::var("MIVI_ULTRA_LOW_RAM").is_ok();
+                    if is_ultra_low {
+                        if let Ok(file) = std::fs::File::open(model_path) {
+                            use std::os::unix::io::AsRawFd;
+                            let fd = file.as_raw_fd();
+                            unsafe {
+                                libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
+                            }
+                        }
+                    }
+                }
             });
         }
         slot.endpoint = None;
@@ -562,6 +652,7 @@ mod tests {
             context: ContextBudget::from_max_input_tokens(4096),
             worker_idle_secs: 30,
             ram_target_mb: 1000,
+            kv_cache_type: "q4_0".to_string(),
         }
     }
 

@@ -166,6 +166,16 @@ impl NativeBrain {
 
         let model = QuantizedModel::from_gguf(&arch, content, &mut file, &device)?;
 
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = file.as_raw_fd();
+            unsafe {
+                libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
+            }
+            info!("[NativeBrain] Advised kernel to drop page cache for GGUF model file (POSIX_FADV_DONTNEED)");
+        }
+
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| format!("failed to load tokenizer: {}", e))?;
 
@@ -471,7 +481,6 @@ impl NativeBrain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn test_native_brain_new() {
@@ -481,7 +490,7 @@ mod tests {
     #[cfg(feature = "native")]
     #[test]
     fn test_native_brain_inference_if_present() {
-        let model_path = Path::new("models/qwen2.5-0.5b-instruct-q4_k_m.gguf");
+        let model_path = std::path::Path::new("models/qwen2.5-0.5b-instruct-q4_k_m.gguf");
         if !model_path.exists() {
             println!("Skipping native brain test as model weights are missing");
             return;

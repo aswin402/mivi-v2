@@ -2,26 +2,26 @@
   "external_model": "mivi",
   "models": [
     {
-      "id": "qwen3-06b-reasoner",
+      "id": "llama32-1b-reasoner",
       "role": "reasoner",
       "backend": "llama-cli",
-      "path": "models/qwen3-0.6b-q4_k_m.gguf",
+      "path": "models/Llama-3.2-1B-Instruct-IQ3_M.gguf",
       "context_tokens": 32768,
-      "ram_mb_estimate": 540,
+      "ram_mb_estimate": 650,
       "enabled": true,
-      "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
-      "notes": "Default low-resource chat and reasoning worker candidate. Agents should still call only external model mivi."
+      "tokenizer_path": "models/tokenizer.json",
+      "notes": "Configured primary reasoning and chat model (Llama-3.2 1B IQ3_M)"
     },
     {
-      "id": "qwen25-05b-coder",
+      "id": "llama32-1b-coder",
       "role": "coder",
       "backend": "llama-cli",
-      "path": "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "path": "models/Llama-3.2-1B-Instruct-IQ3_M.gguf",
       "context_tokens": 32768,
-      "ram_mb_estimate": 430,
+      "ram_mb_estimate": 650,
       "enabled": true,
-      "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
-      "notes": "Default coding and tool-call worker candidate. Agents should still call only external model mivi."
+      "tokenizer_path": "models/tokenizer.json",
+      "notes": "Configured primary coding and tool-call model (Llama-3.2 1B IQ3_M)"
     },
     {
       "id": "minicpm-vision",

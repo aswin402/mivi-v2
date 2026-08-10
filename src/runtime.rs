@@ -49,12 +49,13 @@ impl ContextBudget {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeConfig {
     pub mode: RuntimeMode,
     pub context: ContextBudget,
     pub worker_idle_secs: u64,
     pub ram_target_mb: usize,
+    pub kv_cache_type: String,
 }
 
 impl RuntimeConfig {
@@ -79,11 +80,14 @@ impl RuntimeConfig {
             .filter(|secs| *secs > 0)
             .unwrap_or(DEFAULT_WORKER_IDLE_SECS);
 
+        let kv_cache_type = env::var("MIVI_KV_CACHE_TYPE").unwrap_or_else(|_| "q4_0".to_string());
+
         Self {
             mode,
             context: ContextBudget::from_max_input_tokens(max_input_tokens),
             worker_idle_secs,
             ram_target_mb: DEFAULT_RAM_TARGET_MB,
+            kv_cache_type,
         }
     }
 }
@@ -114,11 +118,11 @@ mod tests {
         assert_eq!(config.mode, RuntimeMode::WorkerEco);
         assert_eq!(config.worker_idle_secs, 120);
         assert_eq!(config.ram_target_mb, 1000);
-        assert_eq!(config.context.max_input_tokens, 3072);
-        assert_eq!(config.context.recent_turn_tokens, 1152);
-        assert_eq!(config.context.retrieved_tokens, 1152);
-        assert_eq!(config.context.memory_tokens, 576);
-        assert_eq!(config.context.tool_tokens, 192);
+        assert_eq!(config.context.max_input_tokens, 8192);
+        assert_eq!(config.context.recent_turn_tokens, 3072);
+        assert_eq!(config.context.retrieved_tokens, 3072);
+        assert_eq!(config.context.memory_tokens, 1536);
+        assert_eq!(config.context.tool_tokens, 512);
     }
 
     #[test]
@@ -154,7 +158,7 @@ mod tests {
 
         assert_eq!(config.mode, RuntimeMode::WorkerEco);
         assert_eq!(config.worker_idle_secs, 120);
-        assert_eq!(config.context.max_input_tokens, 3072);
+        assert_eq!(config.context.max_input_tokens, 8192);
 
         clear_runtime_env();
     }

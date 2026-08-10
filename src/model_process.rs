@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 
 /// Common args shared by all llama-cli invocations.
 fn base_args(cmd: &mut Command, model_path: &str, ngl: &str, ctx: &str, temp: &str) {
+    let runtime_config = crate::runtime::RuntimeConfig::from_env();
     cmd.arg("-m")
         .arg(model_path)
         .arg("-ngl")
@@ -23,9 +24,9 @@ fn base_args(cmd: &mut Command, model_path: &str, ngl: &str, ctx: &str, temp: &s
         .arg("-fa")
         .arg("on")
         .arg("-ctk")
-        .arg("q8_0")
+        .arg(&runtime_config.kv_cache_type)
         .arg("-ctv")
-        .arg("q8_0")
+        .arg(&runtime_config.kv_cache_type)
         .arg("--temp")
         .arg(temp)
         .arg("--simple-io")
@@ -48,11 +49,7 @@ pub(crate) fn strip_thinking_from_stream_line(
     const END_MARKERS: &[&str] = &["</think>", "[end thinking]", "end thinking"];
 
     let t = crate::server::active_chat_template();
-    let mut clean = line.to_string();
-    for stop in &t.stop_words {
-        clean = clean.replace(stop, "");
-    }
-    let clean = clean.trim().to_string();
+    let clean = line.to_string();
     let mut rest = clean.as_str();
     let mut out = String::new();
 
@@ -81,6 +78,10 @@ pub(crate) fn strip_thinking_from_stream_line(
         break;
     }
 
+    for stop in &t.stop_words {
+        out = out.replace(stop, "");
+    }
+
     let trimmed = out.trim();
     if trimmed.is_empty() {
         None
@@ -105,6 +106,7 @@ pub fn spawn_streaming(
     stop: Option<serde_json::Value>,
     seed: Option<u64>,
     json_schema: Option<String>,
+    grammar_path: Option<String>,
 ) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel::<String>(64);
 
@@ -137,6 +139,11 @@ pub fn spawn_streaming(
         }
         if let Some(ref schema) = json_schema {
             cmd.arg("--json-schema").arg(schema);
+        }
+        if let Some(ref path) = grammar_path {
+            if std::path::Path::new(path).exists() {
+                cmd.arg("--grammar-file").arg(path);
+            }
         }
         if let Some(stop_val) = stop {
             if let Some(s) = stop_val.as_str() {
@@ -229,6 +236,20 @@ pub fn spawn_streaming(
 
         let _ = child.wait().await;
         let _ = std::fs::remove_file(&prompt_file);
+
+        #[cfg(target_os = "linux")]
+        {
+            let is_ultra_low = std::env::var("MIVI_ULTRA_LOW_RAM").is_ok();
+            if is_ultra_low {
+                if let Ok(file) = std::fs::File::open(&mp) {
+                    use std::os::unix::io::AsRawFd;
+                    let fd = file.as_raw_fd();
+                    unsafe {
+                        libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
+                    }
+                }
+            }
+        }
     });
 
     rx

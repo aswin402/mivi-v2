@@ -255,11 +255,11 @@ impl EdgeBrain {
         let models_dir = base_dir.join("models");
         let llama_path = model_path_from_env(
             "MIVI_REASONER_MODEL",
-            models_dir.join("qwen3-0.6b-q4_k_m.gguf"),
+            models_dir.join("Llama-3.2-1B-Instruct-IQ3_M.gguf"),
         );
         let qwen_path = model_path_from_env(
             "MIVI_CODER_MODEL",
-            models_dir.join("qwen2.5-0.5b-instruct-q4_k_m.gguf"),
+            models_dir.join("Llama-3.2-1B-Instruct-IQ3_M.gguf"),
         );
         let minicpm_path = model_path_from_env(
             "MIVI_VISION_MODEL",
@@ -311,6 +311,7 @@ impl EdgeBrain {
         _context_size: &str,
         _top_p: Option<f32>,
         _seed: Option<u64>,
+        _grammar_path: Option<String>,
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
@@ -337,6 +338,7 @@ impl EdgeBrain {
         context_size: &str,
         top_p: Option<f32>,
         seed: Option<u64>,
+        grammar_path: Option<String>,
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
@@ -381,9 +383,9 @@ impl EdgeBrain {
             .arg("-fa")
             .arg("on")
             .arg("-ctk")
-            .arg("q8_0")
+            .arg(&runtime_config.kv_cache_type)
             .arg("-ctv")
-            .arg("q8_0")
+            .arg(&runtime_config.kv_cache_type)
             .arg("-f")
             .arg(&prompt_file)
             .arg("--temp")
@@ -401,6 +403,11 @@ impl EdgeBrain {
         if let Some(sd) = seed {
             cmd.arg("--seed").arg(sd.to_string());
         }
+        if let Some(ref path) = grammar_path {
+            if std::path::Path::new(path).exists() {
+                cmd.arg("--grammar-file").arg(path);
+            }
+        }
 
         let output = match command_output_with_timeout(cmd, cli_timeout()).await {
             Ok(output) => output,
@@ -410,6 +417,17 @@ impl EdgeBrain {
             }
         };
         let _ = std::fs::remove_file(&prompt_file);
+
+        #[cfg(target_os = "linux")]
+        if self.ultra_low_ram {
+            if let Ok(file) = std::fs::File::open(model_path) {
+                use std::os::unix::io::AsRawFd;
+                let fd = file.as_raw_fd();
+                unsafe {
+                    libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
+                }
+            }
+        }
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         Ok(clean_llama_cli_response(&stdout))
@@ -447,6 +465,7 @@ impl EdgeBrain {
             &context_size,
             top_p,
             seed,
+            None,
         )
         .await
     }
@@ -478,6 +497,7 @@ impl EdgeBrain {
             &context_size,
             top_p,
             seed,
+            None,
         )
         .await
     }
@@ -516,6 +536,7 @@ impl EdgeBrain {
         stop: Option<serde_json::Value>,
         seed: Option<u64>,
         json_schema: Option<String>,
+        grammar_path: Option<String>,
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         let raw_context = cli_context_size(
@@ -541,9 +562,9 @@ impl EdgeBrain {
             .arg("-fa")
             .arg("on")
             .arg("-ctk")
-            .arg("q8_0")
+            .arg(&runtime_config.kv_cache_type)
             .arg("-ctv")
-            .arg("q8_0")
+            .arg(&runtime_config.kv_cache_type)
             .arg("-f")
             .arg(&prompt_file);
 
@@ -561,6 +582,11 @@ impl EdgeBrain {
         }
         if let Some(ref schema) = json_schema {
             cmd.arg("--json-schema").arg(schema);
+        }
+        if let Some(ref path) = grammar_path {
+            if std::path::Path::new(path).exists() {
+                cmd.arg("--grammar-file").arg(path);
+            }
         }
         if let Some(stop_val) = stop {
             if let Some(s) = stop_val.as_str() {
@@ -588,6 +614,18 @@ impl EdgeBrain {
             }
         };
         let _ = std::fs::remove_file(&prompt_file);
+
+        #[cfg(target_os = "linux")]
+        if self.ultra_low_ram {
+            if let Ok(file) = std::fs::File::open(&self.llama_path) {
+                use std::os::unix::io::AsRawFd;
+                let fd = file.as_raw_fd();
+                unsafe {
+                    libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
+                }
+            }
+        }
+
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
         // Try extracting from after last <|im_start|>assistant tag (prompt echo).

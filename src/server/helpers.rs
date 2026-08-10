@@ -7,10 +7,13 @@ use axum::{
     Router,
 };
 use futures::stream::{Stream, StreamExt};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+#[cfg(test)]
+use std::path::PathBuf;
+
 use std::process::Command;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
@@ -24,7 +27,6 @@ use tracing::{debug, error, info, warn};
 
 use crate::brain::EdgeBrain;
 use crate::context_compressor::{compress_context, render_context_prompt};
-use crate::model_catalog::{ModelCatalog, ModelRole};
 use crate::model_process::spawn_streaming;
 use crate::okf_memory::load_memory_dir;
 use crate::orchestrator::AgentOrchestrator;
@@ -1721,12 +1723,35 @@ pub async fn code_chat_with_params(
     Ok((res, MODEL_NAME.to_string()))
 }
 
+pub fn get_grammar_path(req: &ChatCompletionRequest) -> Option<String> {
+    if let Some(ref tools) = req.tools {
+        if !tools.is_empty() {
+            let format = std::env::var("MIVI_TOOL_FORMAT").unwrap_or_else(|_| "hermes".to_string());
+            let path = match format.trim().to_ascii_lowercase().as_str() {
+                "openai" => "configs/grammars/openai_tool_call.gbnf",
+                "hermes" => "configs/grammars/hermes_tool_call.gbnf",
+                _ => "configs/grammars/hermes_tool_call.gbnf",
+            };
+            return Some(path.to_string());
+        }
+    }
+    if let Some(ref fmt) = req.response_format {
+        if fmt.get("type").and_then(|t| t.as_str()) == Some("json_object") {
+            if extract_json_schema(req).is_none() {
+                return Some("configs/grammars/json_object.gbnf".to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Run the model with a full multi-turn prompt (already formatted with <|im_start|> tags).
 pub async fn model_chat(
     brain: &EdgeBrain,
     prompt: &str,
     req: &ChatCompletionRequest,
 ) -> Result<String, String> {
+    let grammar_path = get_grammar_path(req);
     brain
         .query_raw(
             prompt,
@@ -1736,6 +1761,7 @@ pub async fn model_chat(
             req.stop.clone(),
             req.seed,
             extract_json_schema(req),
+            grammar_path,
         )
         .await
 }
@@ -1807,6 +1833,8 @@ pub async fn generate_tool_calls(
     brain: &EdgeBrain,
     req: &ChatCompletionRequest,
 ) -> Result<(Vec<ToolCallOut>, String), String> {
+    crate::stability::check_history_for_loops(&req.messages)?;
+
     let trace = TraceConfig::from_env();
     let selection = select_tools_for_request(req);
     let selected_tools = selection.selected;
@@ -1816,73 +1844,59 @@ pub async fn generate_tool_calls(
 
     let runtime_config = RuntimeConfig::from_env();
     if runtime_config.uses_worker() {
-        if let Ok(messages_val) = serde_json::to_value(&req.messages) {
-            let tools_val = req
-                .tools
-                .as_ref()
-                .map(|t| serde_json::to_value(t).unwrap_or(serde_json::Value::Null));
-            let choice_val = req.tool_choice.as_ref().cloned();
-            let fmt_val = req.response_format.as_ref().cloned();
+        let prompt = build_chat_prompt(req);
+        let grammar_path = get_grammar_path(req);
+        let grammar_content = grammar_path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok());
 
-            match brain
-                .text_worker
-                .query_chat_full(
-                    messages_val,
-                    tools_val,
-                    choice_val,
-                    fmt_val,
-                    req.temperature,
-                    req.top_p,
-                    req.max_tokens,
-                    req.stop.clone(),
-                    req.seed,
-                    req.frequency_penalty,
-                    req.presence_penalty,
-                )
-                .await
-            {
-                Ok(resp) => {
-                    if let Some(choice) = resp
-                        .get("choices")
-                        .and_then(|c| c.as_array())
-                        .and_then(|c| c.first())
-                    {
-                        if let Some(msg) = choice.get("message") {
-                            let content = msg
-                                .get("content")
-                                .and_then(|c| c.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let tool_calls: Option<Vec<ToolCallOut>> = msg
-                                .get("tool_calls")
-                                .and_then(|tc| serde_json::from_value(tc.clone()).ok());
+        match brain
+            .text_worker
+            .query_completion(
+                &prompt,
+                req.temperature,
+                req.top_p,
+                req.max_tokens,
+                req.stop.clone(),
+                req.seed,
+                req.frequency_penalty,
+                req.presence_penalty,
+                None,
+                grammar_content,
+            )
+            .await
+        {
+            Ok(resp) => {
+                if let Some(content) = resp.get("content").and_then(|c| c.as_str()) {
+                    let content_str = content.to_string();
+                    let parsed_calls = parse_tool_calls(&content_str);
+                    let parsed_count = parsed_calls.len();
+                    let (calls, rejected_tool_calls) =
+                        validate_tool_calls_for_tools(parsed_calls, &selected_tools);
 
-                            let _ = trace_event(
-                                &trace,
-                                serde_json::json!({
-                                    "kind": "tool_generation",
-                                    "route": "worker_tool",
-                                    "agent_intent": selection.intent.as_str(),
-                                    "selected_tools": selected_tool_names,
-                                    "selected_tool_roles": selected_tool_roles,
-                                    "blocked_tools": blocked_tools,
-                                    "accepted_tool_calls": tool_calls.as_ref().map(|calls| call_names(calls)).unwrap_or_default(),
-                                    "rejected_tool_calls": 0
-                                }),
-                            );
+                    let _ = trace_event(
+                        &trace,
+                        serde_json::json!({
+                            "kind": "tool_generation",
+                            "route": "worker_tool_raw",
+                            "agent_intent": selection.intent.as_str(),
+                            "selected_tools": selected_tool_names,
+                            "selected_tool_roles": selected_tool_roles,
+                            "blocked_tools": blocked_tools,
+                            "parsed_tool_calls": parsed_count,
+                            "accepted_tool_calls": call_names(&calls),
+                            "rejected_tool_calls": rejected_tool_calls
+                        }),
+                    );
 
-                            if let Some(calls) = tool_calls {
-                                if !calls.is_empty() {
-                                    return Ok((calls, String::new()));
-                                }
-                            }
-                            let final_content = append_tool_execution_summary(req, content);
-                            return Ok((Vec::new(), final_content));
-                        }
+                    if !calls.is_empty() {
+                        return Ok((calls, String::new()));
                     }
+                    let final_content = append_tool_execution_summary(req, content_str);
+                    return Ok((Vec::new(), final_content));
                 }
-                Err(err) => warn!("[MIVI-V2 Worker] ToolGen worker error: {}", err),
             }
+            Err(err) => warn!("[MIVI-V2 Worker] ToolGen worker completion error: {}", err),
         }
     }
 
@@ -2228,6 +2242,7 @@ pub async fn handle_responses_streaming(
         }
         #[cfg(not(feature = "native"))]
         {
+            let grammar_path = get_grammar_path(&chat_req);
             let mut spawn_rx = spawn_streaming(
                 &cli_path,
                 &model_path,
@@ -2240,6 +2255,7 @@ pub async fn handle_responses_streaming(
                 stop,
                 seed,
                 json_schema,
+                grammar_path,
             );
             while let Some(token) = spawn_rx.recv().await {
                 if tx.send(token).await.is_err() {
@@ -3079,7 +3095,14 @@ pub async fn handle_streaming(
     let req_pp = req.presence_penalty;
     let req_json_schema = json_schema.clone();
 
+    let grammar_path = get_grammar_path(&req);
+    let grammar_content = grammar_path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok());
+
     let fallback_user_prompt = user_prompt.clone();
+    let grammar_content_for_worker = grammar_content.clone();
+    let grammar_path_for_spawn = grammar_path.clone();
     tokio::spawn(async move {
         let mut emitted = false;
         if uses_worker {
@@ -3094,6 +3117,7 @@ pub async fn handle_streaming(
                     req_fp,
                     req_pp,
                     req_json_schema,
+                    grammar_content_for_worker,
                 )
                 .await
             {
@@ -3185,6 +3209,7 @@ pub async fn handle_streaming(
                     stop,
                     seed,
                     json_schema,
+                    grammar_path_for_spawn,
                 );
 
                 while let Some(token) = rx.recv().await {
@@ -3391,7 +3416,7 @@ pub async fn start_api_server(
         .nest("/v1", api_routes)
         .layer(CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)) // limit payload to 16MB
-        .with_state(state);
+        .with_state(state.clone());
 
     let addr = format!("0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
@@ -3405,6 +3430,38 @@ pub async fn start_api_server(
         "🚀 MIVI-V2 High-Speed Server listening on http://{} ...",
         addr
     );
+
+    // Spawn warmup task in the background
+    let warmup_brain = state.brain.clone();
+    tokio::spawn(async move {
+        info!("[MIVI-V2 Warmup] Initializing model cache and pre-compiling kernels...");
+        let start = std::time::Instant::now();
+        let messages = serde_json::json!([
+            {"role": "user", "content": "warmup"}
+        ]);
+        let _ = warmup_brain
+            .text_worker
+            .query_chat_full(
+                messages,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(1),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await;
+        info!(
+            "[MIVI-V2 Warmup] Warmup completed in {:.2}s. Engine is hot and ready.",
+            start.elapsed().as_secs_f32()
+        );
+    });
+
     axum::serve(listener, app).await?;
     Ok(())
 }

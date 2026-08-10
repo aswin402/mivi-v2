@@ -1319,6 +1319,7 @@ dependencies = [
  "colored",
  "futures",
  "inquire",
+ "libc",
  "memmap2",
  "regex",
  "reqwest",

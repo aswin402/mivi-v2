@@ -1,39 +1,8 @@
-use super::*;
-use axum::{
-    extract::{Json, State},
-    response::sse::{Event, Sse},
-    response::IntoResponse,
-    routing::{get, post},
-    Router,
-};
-use futures::stream::{Stream, StreamExt};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::collections::BTreeMap;
-use std::convert::Infallible;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc, OnceLock,
-};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tower_http::cors::CorsLayer;
-use tracing::{debug, error, info, warn};
+use axum::extract::{Json, State};
+use std::sync::Arc;
 
-use crate::brain::EdgeBrain;
-use crate::context_compressor::{compress_context, render_context_prompt};
-use crate::model_catalog::{ModelCatalog, ModelRole};
-use crate::model_process::spawn_streaming;
-use crate::okf_memory::load_memory_dir;
-use crate::orchestrator::AgentOrchestrator;
-use crate::retrieval::{build_retrieval_pack_with_sources, should_include_workspace_rag};
-use crate::router::NeedleRouter;
-use crate::runtime::RuntimeConfig;
-use crate::tool_filter::filter_tools;
-use crate::trace::{preview as trace_preview, trace_event, TraceConfig};
+#[cfg(test)]
+use serde_json::json;
 
 use crate::server::helpers::*;
 use crate::server::types::*;
@@ -77,6 +46,7 @@ pub async fn handle_models() -> Json<ModelListResponse> {
             object: "model".to_string(),
             created: now,
             owned_by: MODEL_NAME.to_string(),
+            context_length: Some(131072),
         }],
     })
 }

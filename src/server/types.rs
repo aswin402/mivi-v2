@@ -1,9 +1,6 @@
-use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU32;
-use std::sync::Arc;
 
 use super::helpers::{count_with_llama_cpp_tokenizer, default_tool_type, TokenCounter};
 use crate::brain::EdgeBrain;
@@ -338,6 +335,8 @@ pub struct ModelObject {
     pub object: String,
     pub created: u64,
     pub owned_by: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<usize>,
 }
 
 #[derive(Serialize)]

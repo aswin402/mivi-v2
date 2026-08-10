@@ -8,6 +8,7 @@ pub struct CompressedContext {
     pub protected_recent: Vec<String>,
     pub tool_observations: Vec<String>,
     pub summary: String,
+    pub original_user_request: Option<String>,
 }
 
 pub fn compress_context(messages: &[ChatMessage], budget: ContextBudget) -> CompressedContext {
@@ -15,6 +16,16 @@ pub fn compress_context(messages: &[ChatMessage], budget: ContextBudget) -> Comp
     let mut protected_recent = Vec::new();
     let mut tool_observations = Vec::new();
     let mut dropped = 0usize;
+
+    // Pin original user request/goal for long runs (aged-out context)
+    let original_user_request = if messages.len() > 6 {
+        messages
+            .iter()
+            .find(|m| m.role == "user")
+            .map(|m| message_text(m))
+    } else {
+        None
+    };
 
     for msg in messages {
         let text = message_text(msg);
@@ -64,6 +75,7 @@ pub fn compress_context(messages: &[ChatMessage], budget: ContextBudget) -> Comp
         protected_recent,
         tool_observations,
         summary,
+        original_user_request,
     }
 }
 
@@ -72,6 +84,10 @@ pub fn render_context_prompt(compressed: &CompressedContext, latest_user_prompt:
 
     if !compressed.system.is_empty() {
         parts.push(format!("System instructions:\n{}", compressed.system));
+    }
+
+    if let Some(ref goal) = compressed.original_user_request {
+        parts.push(format!("Original User Request (Goal):\n{}", goal.trim()));
     }
 
     if !compressed.tool_observations.is_empty() {
@@ -393,5 +409,25 @@ Your agent has tools.",
         assert!(joined.contains("error[E0425]"));
         assert!(joined.contains("panicked"));
         assert!(!joined.contains("final filler line"));
+    }
+
+    #[test]
+    fn pins_original_user_request_as_goal_on_long_conversations() {
+        let messages = vec![
+            msg("user", "Write a pure Rust compiler engine"),
+            msg("assistant", "Sure, I can help with that."),
+            msg("user", "Step 1: define lexer"),
+            msg("assistant", "Here is the lexer code..."),
+            msg("user", "Step 2: define parser"),
+            msg("assistant", "Here is the parser code..."),
+            msg("user", "Step 3: define codegen"),
+            msg("assistant", "Here is the codegen..."),
+        ];
+
+        let compressed = compress_context(&messages, ContextBudget::from_max_input_tokens(1024));
+        let prompt = render_context_prompt(&compressed, "Now compile the tests");
+
+        assert!(prompt.contains("Original User Request (Goal):"));
+        assert!(prompt.contains("Write a pure Rust compiler engine"));
     }
 }

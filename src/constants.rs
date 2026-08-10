@@ -3,7 +3,7 @@
 pub const MODEL_NAME: &str = "mivi";
 
 /// Default context size in tokens.
-pub const DEFAULT_CONTEXT_TOKENS: usize = 3072;
+pub const DEFAULT_CONTEXT_TOKENS: usize = 8192;
 
 /// Minimum context size allowed in tokens.
 pub const MIN_CONTEXT_TOKENS: usize = 1024;

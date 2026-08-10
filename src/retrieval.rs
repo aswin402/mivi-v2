@@ -188,6 +188,7 @@ mod tests {
             protected_recent: vec!["user: inspect router".to_string()],
             tool_observations: vec!["tool: cargo test passed".to_string()],
             summary: "Dropped noisy context.".to_string(),
+            original_user_request: None,
         }
     }
 
