@@ -1359,7 +1359,7 @@ pub fn parse_tool_calls(text: &str) -> Vec<ToolCallOut> {
         }
     }
 
-    // Fallback: find first top-level JSON object with "name"/"arguments".
+    // Fallback: find first top-level JSON object.
     if calls.is_empty() {
         if let Some(start) = text.find('{') {
             let candidate = &text[start..];
@@ -1372,8 +1372,18 @@ pub fn parse_tool_calls(text: &str) -> Vec<ToolCallOut> {
                         depth -= 1;
                         if depth == 0 {
                             let json_str = &candidate[..=i];
-                            if let Some(call) = parse_single_tool_call(json_str) {
-                                calls.push(call);
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                if let Some(obj) = val.as_object() {
+                                    if let Some(tool_calls_arr) = obj.get("tool_calls").and_then(|v| v.as_array()) {
+                                        for item in tool_calls_arr {
+                                            if let Some(call) = parse_single_tool_call_value(item) {
+                                                calls.push(call);
+                                            }
+                                        }
+                                    } else if let Some(call) = parse_single_tool_call_value(&val) {
+                                        calls.push(call);
+                                    }
+                                }
                             }
                             break;
                         }
@@ -1387,8 +1397,7 @@ pub fn parse_tool_calls(text: &str) -> Vec<ToolCallOut> {
     calls
 }
 
-pub fn parse_single_tool_call(json_str: &str) -> Option<ToolCallOut> {
-    let val: serde_json::Value = serde_json::from_str(json_str).ok()?;
+pub fn parse_single_tool_call_value(val: &serde_json::Value) -> Option<ToolCallOut> {
     let obj = val.as_object()?;
 
     let function_obj = obj.get("function").and_then(|value| value.as_object());
@@ -1415,6 +1424,11 @@ pub fn parse_single_tool_call(json_str: &str) -> Option<ToolCallOut> {
             arguments,
         },
     })
+}
+
+pub fn parse_single_tool_call(json_str: &str) -> Option<ToolCallOut> {
+    let val: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    parse_single_tool_call_value(&val)
 }
 
 #[cfg(test)]
@@ -1704,11 +1718,11 @@ pub async fn code_chat_with_params(
 pub fn get_grammar_path(req: &ChatCompletionRequest) -> Option<String> {
     if let Some(ref tools) = req.tools {
         if !tools.is_empty() {
-            let format = std::env::var("MIVI_TOOL_FORMAT").unwrap_or_else(|_| "hermes".to_string());
+            let format = std::env::var("MIVI_TOOL_FORMAT").unwrap_or_else(|_| "openai".to_string());
             let path = match format.trim().to_ascii_lowercase().as_str() {
                 "openai" => "configs/grammars/openai_tool_call.gbnf",
                 "hermes" => "configs/grammars/hermes_tool_call.gbnf",
-                _ => "configs/grammars/hermes_tool_call.gbnf",
+                _ => "configs/grammars/openai_tool_call.gbnf",
             };
             return Some(path.to_string());
         }
@@ -4398,6 +4412,21 @@ Hello!"
         assert_eq!(
             args.get("cmd").and_then(|value| value.as_str()),
             Some("npm test")
+        );
+    }
+
+    #[test]
+    pub fn parses_openai_format_tool_calls() {
+        let raw = r#"{"tool_calls":[{"id":"call_read_file","type":"function","function":{"name":"read_file","arguments":{"path":"src/main.rs"}}}]}"#;
+        let calls = parse_tool_calls_for_tools(raw, &[server_tool("read_file", "Read a file from workspace")]);
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "read_file");
+        let args: serde_json::Value = serde_json::from_str(&calls[0].function.arguments)
+            .expect("arguments must be valid JSON");
+        assert_eq!(
+            args.get("path").and_then(|value| value.as_str()),
+            Some("src/main.rs")
         );
     }
 
