@@ -202,6 +202,7 @@ async fn command_output_with_timeout(
     timeout: Duration,
 ) -> Result<Output, String> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
     let child = cmd
         .spawn()
         .map_err(|err| format!("Failed to execute llama-cli: {}", err))?;
@@ -209,10 +210,12 @@ async fn command_output_with_timeout(
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(err)) => Err(format!("llama-cli execution error: {}", err)),
-        Err(_) => Err(format!(
-            "llama-cli timed out after {} seconds",
-            timeout.as_secs()
-        )),
+        Err(_) => {
+            Err(format!(
+                "llama-cli timed out after {} seconds",
+                timeout.as_secs()
+            ))
+        }
     }
 }
 
@@ -609,7 +612,8 @@ impl EdgeBrain {
             .arg("--image")
             .arg(image_path)
             .arg("-p")
-            .arg(prompt);
+            .arg(prompt)
+            .kill_on_drop(true);
 
         let output = cmd
             .output()

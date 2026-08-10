@@ -154,7 +154,8 @@ pub fn spawn_streaming(
             .arg(&prompt_file)
             .arg("-st") // single-turn: exit after generation
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
@@ -208,6 +209,7 @@ pub fn spawn_streaming(
                         continue;
                     };
                     if tx.send(clean).await.is_err() {
+                        let _ = child.kill().await;
                         break; // receiver dropped (client disconnected)
                     }
                 }

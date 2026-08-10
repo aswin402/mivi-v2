@@ -308,7 +308,9 @@ impl WorkerManager {
             .map_err(|_| "worker lock poisoned".to_string())?;
         if let Some(mut child) = slot.child.take() {
             let _ = child.kill();
-            let _ = child.wait();
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
         }
         slot.endpoint = None;
         slot.state = WorkerState::IdleStopped;
