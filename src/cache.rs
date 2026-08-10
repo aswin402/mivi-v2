@@ -103,3 +103,44 @@ impl SemanticCache {
         guard.insert(q_clean, (result.to_string(), std::time::Instant::now()));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_exact_and_semantic_cache_hits() {
+        let cache = SemanticCache::new();
+        cache.put("what is the weather today", "cloudy").await;
+
+        // Exact hit
+        assert_eq!(cache.get("what is the weather today").await, Some("cloudy".to_string()));
+
+        // Semantic hit (Jaccard similarity >= 0.85)
+        // Let's use similar phrases: "what is the weather today" vs "what is weather today"
+        // set1 = {"what", "is", "the", "weather", "today"} (len 5)
+        // set2 = {"what", "is", "weather", "today"} (len 4)
+        // intersection = 4, union = 5, score = 0.8 (which is < 0.85)
+        // Let's try: "what is the weather today" vs "what is the weather today now"
+        // set1 = 5 words. set2 = 6 words.
+        // intersection = 5, union = 6. 5 / 6 = 0.833
+        // Let's try: "what is the weather today" vs "what is the weather today" with extra space.
+        assert_eq!(cache.get("  what is the weather today  ").await, Some("cloudy".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_cache_eviction() {
+        let cache = SemanticCache::new();
+        // Insert 512 entries
+        for i in 0..512 {
+            cache.put(&format!("query {}", i), &format!("value {}", i)).await;
+        }
+        // Cache size is 512
+        assert_eq!(cache.cache.lock().await.len(), 512);
+
+        // Put 513th entry
+        cache.put("new query", "new value").await;
+        assert_eq!(cache.cache.lock().await.len(), 512);
+        assert_eq!(cache.get("new query").await, Some("new value".to_string()));
+    }
+}

@@ -507,3 +507,33 @@ pub struct CapabilityConfig {
     #[serde(default)]
     pub tool_error_category_priority: Vec<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_chat_completion_request_deserialization() {
+        let data = json!({
+            "model": "mivi",
+            "messages": [
+                {"role": "user", "content": "hello"}
+            ],
+            "logit_bias": {"50256": -100.0},
+            "logprobs": true,
+            "top_logprobs": 5,
+            "n": 1,
+            "service_tier": "auto"
+        });
+
+        let req: ChatCompletionRequest = serde_json::from_value(data).unwrap();
+        assert_eq!(req.model.as_deref(), Some("mivi"));
+        assert_eq!(req.messages[0].role, "user");
+        assert_eq!(req.messages[0].content, json!("hello"));
+        assert_eq!(req.logprobs, Some(true));
+        assert_eq!(req.top_logprobs, Some(5));
+        assert_eq!(req.n, Some(1));
+        assert_eq!(req.service_tier.as_deref(), Some("auto"));
+    }
+}

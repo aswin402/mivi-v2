@@ -57,3 +57,13 @@ pub async fn run_system_audit() {
     );
     println!("=========================================================");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_system_audit_does_not_panic() {
+        run_system_audit().await;
+    }
+}
