@@ -2708,6 +2708,19 @@ pub fn tool_call_stream_chunks(
 ) -> Vec<serde_json::Value> {
     let mut chunks = Vec::new();
 
+    // Preamble chunk for OpenAI compatibility
+    chunks.push(serde_json::json!({
+        "id": id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": MODEL_NAME,
+        "choices": [{
+            "index": 0,
+            "delta": { "role": "assistant", "content": "" },
+            "finish_reason": null
+        }]
+    }));
+
     if let Some(reasoning) = reasoning_content {
         chunks.push(serde_json::json!({
             "id": id,
@@ -2848,6 +2861,19 @@ pub fn text_stream_chunks(
     usage: Option<UsageInfo>,
 ) -> Vec<serde_json::Value> {
     let mut chunks = Vec::new();
+
+    // Preamble chunk for OpenAI compatibility
+    chunks.push(serde_json::json!({
+        "id": id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": MODEL_NAME,
+        "choices": [{
+            "index": 0,
+            "delta": { "role": "assistant", "content": "" },
+            "finish_reason": null
+        }]
+    }));
 
     if let Some(reasoning) = reasoning_content {
         chunks.push(serde_json::json!({
@@ -3208,7 +3234,27 @@ pub async fn handle_streaming(
     let done_marker =
         futures::stream::once(async { Ok::<_, Infallible>(Event::default().data("[DONE]")) });
 
-    let stream = reasoning_chunk
+    let include_preamble = !uses_worker;
+    let preamble_stream = futures::stream::iter(include_preamble.then({
+        let id = id.clone();
+        move || {
+            let chunk = serde_json::json!({
+                "id": id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": MODEL_NAME,
+                "choices": [{
+                    "index": 0,
+                    "delta": { "role": "assistant", "content": "" },
+                    "finish_reason": null
+                }]
+            });
+            Ok::<_, Infallible>(Event::default().data(chunk.to_string()))
+        }
+    }));
+
+    let stream = preamble_stream
+        .chain(reasoning_chunk)
         .chain(token_stream)
         .chain(final_chunk)
         .chain(usage_chunk)
@@ -4296,21 +4342,29 @@ Hello!"
         );
 
         assert_eq!(
-            chunks[0]["choices"][0]["delta"]["reasoning_content"],
+            chunks[0]["choices"][0]["delta"]["role"],
+            "assistant"
+        );
+        assert_eq!(
+            chunks[0]["choices"][0]["delta"]["content"],
+            ""
+        );
+        assert_eq!(
+            chunks[1]["choices"][0]["delta"]["reasoning_content"],
             "selected shell tool"
         );
         assert_eq!(
-            chunks[1]["choices"][0]["delta"]["tool_calls"][0]["function"]["name"],
+            chunks[2]["choices"][0]["delta"]["tool_calls"][0]["function"]["name"],
             "bash"
         );
         assert_eq!(
-            chunks[1]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+            chunks[2]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
             ""
         );
 
         // Assemble the arguments from all middle chunks
         let mut assembled_args = String::new();
-        for chunk in &chunks[2..chunks.len() - 1] {
+        for chunk in &chunks[3..chunks.len() - 1] {
             if let Some(tool_calls) = chunk["choices"][0]["delta"].get("tool_calls") {
                 if let Some(args) = tool_calls[0]["function"].get("arguments") {
                     assembled_args.push_str(args.as_str().unwrap());
