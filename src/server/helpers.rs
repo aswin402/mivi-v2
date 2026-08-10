@@ -3271,6 +3271,36 @@ pub async fn handle_streaming(
     Sse::new(stream)
 }
 
+async fn auth_middleware(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, axum::http::StatusCode> {
+    if let Ok(expected_key) = std::env::var("MIVI_API_KEY") {
+        if !expected_key.is_empty() {
+            if let Some(auth_header) = req.headers().get("authorization") {
+                if let Ok(auth_str) = auth_header.to_str() {
+                    if auth_str.starts_with("Bearer ") {
+                        let token = &auth_str["Bearer ".len()..];
+                        if token == expected_key {
+                            return Ok(next.run(req).await);
+                        }
+                    }
+                }
+            }
+            let error_json = serde_json::json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Invalid API key or Authorization header missing"
+                }
+            });
+            let mut res = axum::response::Json(error_json).into_response();
+            *res.status_mut() = axum::http::StatusCode::UNAUTHORIZED;
+            return Ok(res);
+        }
+    }
+    Ok(next.run(req).await)
+}
+
 pub async fn start_api_server(
     brain: EdgeBrain,
     orchestrator: AgentOrchestrator,
@@ -3287,12 +3317,16 @@ pub async fn start_api_server(
         semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent)),
     });
 
+    let api_routes = Router::new()
+        .route("/models", get(handle_models))
+        .route("/chat/completions", post(handle_chat_completions))
+        .route("/responses", post(handle_responses))
+        .layer(axum::middleware::from_fn(auth_middleware));
+
     let app = Router::new()
         .route("/", get(handle_root))
-        .route("/v1/models", get(handle_models))
         .route("/v1/health", get(handle_health))
-        .route("/v1/chat/completions", post(handle_chat_completions))
-        .route("/v1/responses", post(handle_responses))
+        .nest("/v1", api_routes)
         .layer(CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)) // limit payload to 16MB
         .with_state(state);
