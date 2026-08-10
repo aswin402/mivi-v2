@@ -97,7 +97,10 @@ There is a parallel `/v1/responses` endpoint (`handle_responses`) that maps Resp
 | `MIVI_TRACE` / `MIVI_TRACE_PATH` | enable JSONL request traces |
 | `MIVI_TOKENIZER_CMD` / `MIVI_TOKENIZER_MODEL` | tokenizer-backed usage counts (falls back to estimator) |
 | `MIVI_AGENT_REASONING_SUMMARY` | set to `0`/`false`/`off`/`no` to disable the `reasoning_content` summary (on by default) |
+| `MIVI_API_KEY` | Bearer Authorization key for API auth (disabled/public if unset) |
+| `MIVI_MAX_CONCURRENT_REQUESTS` | Max concurrent requests allowed to be handled by the server (default 2) |
 | `MIVI_SMOKE_BASE_URL`, `MIVI_EVAL_SERVER_URL`, `MIVI_EVAL_TIMEOUT` | script-side URLs/timeouts |
+
 
 ## Conventions
 
