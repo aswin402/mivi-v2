@@ -532,12 +532,30 @@ pub fn select_tools_for_request(req: &ChatCompletionRequest) -> ToolSelection {
     }
 
     if intent.is_inventory() {
-        return select_inventory_tools(intent, tools, &latest_user_prompt);
+        let inv = select_inventory_tools(intent, tools, &latest_user_prompt);
+        if !inv.selected.is_empty() {
+            return inv;
+        }
+        // No inventory tool found — fall through to general fallback
     }
 
+    // Score-based filtering for relevance
+    let filtered = filter_tools(&latest_user_prompt, tools, MAX_PROMPT_TOOLS);
+    if !filtered.is_empty() {
+        return ToolSelection {
+            intent,
+            selected: filtered,
+            blocked: Vec::new(),
+        };
+    }
+
+    // Fallback: if filter returned nothing but tools were provided,
+    // include up to MAX_PROMPT_TOOLS tools so the model can decide.
+    // This ensures agent-provided tools are always visible to the model.
+    let fallback: Vec<ToolDef> = tools.iter().take(MAX_PROMPT_TOOLS).cloned().collect();
     ToolSelection {
         intent,
-        selected: filter_tools(&latest_user_prompt, tools, MAX_PROMPT_TOOLS),
+        selected: fallback,
         blocked: Vec::new(),
     }
 }
@@ -657,6 +675,7 @@ Available functions:
 
          When appropriate, respond with ONLY:
          {{\"name\": \"{name}\", \"arguments\": {{{ex_args}}}}}
+         If no tool is needed for this request, respond normally with text.
 
 ",
         tools.len(),
@@ -1617,6 +1636,7 @@ pub fn explicitly_mentions_tool_name(user_text: &str, tool_name: &str) -> bool {
 
 /// Check if the current request asks MIVI to emit a tool call.
 pub fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
+    // Explicit tool_choice overrides
     if let Some(serde_json::Value::String(choice)) = &req.tool_choice {
         if choice == "none" {
             return false;
@@ -1625,46 +1645,15 @@ pub fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
             return true;
         }
     }
-
     if matches!(req.tool_choice, Some(serde_json::Value::Object(_))) {
         return true;
     }
-
-    let tools = match &req.tools {
-        Some(tools) if !tools.is_empty() => tools,
-        _ => return false,
-    };
-
-    let decision = agent_decision_from_request(req);
-    if decision.needs_tool() {
-        let selected = select_web_research_tools(tools, 1);
-        return !selected.is_empty();
+    // Per OpenAI spec: when tools are present and tool_choice is "auto" or absent,
+    // the model decides whether to call tools. Always route through tool-call path.
+    match &req.tools {
+        Some(tools) if !tools.is_empty() => true,
+        _ => false,
     }
-
-    let user_text = latest_user_prompt_text(req).to_lowercase();
-
-    if user_text.contains("use the")
-        && (user_text.contains(" tool") || user_text.contains(" function"))
-    {
-        return true;
-    }
-
-    if user_text.contains("call the")
-        && (user_text.contains(" tool") || user_text.contains(" function"))
-    {
-        return true;
-    }
-
-    if asks_agent_inventory(&user_text) {
-        return tools
-            .iter()
-            .any(|tool| tool_is_inventory_for_query(tool, &user_text));
-    }
-
-    tools
-        .iter()
-        .any(|tool| explicitly_mentions_tool_name(&user_text, &tool.function.name))
-        || !filter_tools(&user_text, tools, MAX_PROMPT_TOOLS).is_empty()
 }
 
 // ──────────────────────────────────────────────
@@ -3947,7 +3936,7 @@ mod tests {
     #[test]
     pub fn tools_available_does_not_force_tool_generation_for_plain_chat() {
         let req = tool_request("hi", None);
-        assert!(!has_tool_involvement(&req));
+        assert!(has_tool_involvement(&req));
     }
 
     #[test]
@@ -3955,7 +3944,7 @@ mod tests {
         let mut req = tool_request("so is u can write codes", None);
         req.tools = Some(vec![server_tool("write", "Write a file to the workspace")]);
 
-        assert!(!has_tool_involvement(&req));
+        assert!(has_tool_involvement(&req));
     }
 
     pub fn server_tool_with_params(
@@ -4166,8 +4155,8 @@ Hello!"
             )),
             ToolRole::Action
         );
-        assert!(!has_tool_involvement(&req));
-        assert!(prompt_tools_for_request(&req).is_empty());
+        assert!(has_tool_involvement(&req));
+        assert!(!prompt_tools_for_request(&req).is_empty());
     }
 
     #[test]
@@ -4237,7 +4226,7 @@ Hello!"
             },
         ];
 
-        assert!(!has_tool_involvement(&req));
+        assert!(has_tool_involvement(&req));
     }
 
     #[test]
@@ -4262,7 +4251,7 @@ Hello!"
         ];
 
         assert_eq!(latest_user_prompt_text(&req), "so hey");
-        assert!(!has_tool_involvement(&req));
+        assert!(has_tool_involvement(&req));
     }
 
     #[test]
@@ -4481,7 +4470,7 @@ Hello!"
             },
         ];
 
-        assert!(!has_tool_involvement(&req));
+        assert!(has_tool_involvement(&req));
     }
 
     #[test]
