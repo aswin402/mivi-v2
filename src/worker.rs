@@ -146,6 +146,33 @@ impl WorkerManager {
         self.start_worker().await
     }
 
+    pub async fn check_liveness(&self) -> Result<&'static str, String> {
+        let (state, endpoint) = {
+            let slot = self
+                .slot
+                .lock()
+                .map_err(|_| "worker lock poisoned".to_string())?;
+            (slot.state, slot.endpoint.clone())
+        };
+        match state {
+            WorkerState::Stopped => Ok("stopped"),
+            WorkerState::Starting => Ok("starting"),
+            WorkerState::Failed => Ok("failed"),
+            WorkerState::IdleStopped => Ok("idle_stopped"),
+            WorkerState::Ready => {
+                if let Some(ep) = endpoint {
+                    if self.health_check(&ep).await {
+                        Ok("ready")
+                    } else {
+                        Err("worker ready in slot but failed health check".to_string())
+                    }
+                } else {
+                    Err("worker state ready but endpoint is None".to_string())
+                }
+            }
+        }
+    }
+
     pub async fn query_chat(
         &self,
         prompt: &str,

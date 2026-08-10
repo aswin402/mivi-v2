@@ -4425,11 +4425,37 @@ Hello!"
 
     #[test]
     pub fn test_health_endpoint_response() {
+        let brain = EdgeBrain {
+            llama_cli: PathBuf::new(),
+            minicpm_cli: PathBuf::new(),
+            llama_path: PathBuf::new(),
+            qwen_path: PathBuf::new(),
+            minicpm_path: PathBuf::new(),
+            minicpm_proj: PathBuf::new(),
+            ultra_low_ram: false,
+            text_worker: Arc::new(crate::worker::WorkerManager::new(crate::worker::WorkerConfig {
+                server_path: PathBuf::new(),
+                model_path: PathBuf::new(),
+                host: "127.0.0.1".to_string(),
+                port: 18080,
+                context_tokens: 1024,
+                gpu_layers: "0".to_string(),
+                idle_secs: 10,
+            })),
+            native: crate::native_brain::NativeBrain,
+        };
+        let state = Arc::new(AppState {
+            brain: brain.clone(),
+            orchestrator: AgentOrchestrator::new(brain),
+            router: NeedleRouter::new(),
+            semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+        });
+
         let resp = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
-            .block_on(async { handle_health().await });
+            .block_on(async { handle_health(State(state)).await });
         assert_eq!(resp.0["status"], "healthy");
     }
 

@@ -48,9 +48,23 @@ pub async fn handle_root() -> Json<serde_json::Value> {
     }))
 }
 
-pub async fn handle_health() -> Json<serde_json::Value> {
+pub async fn handle_health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let mode = crate::runtime::RuntimeConfig::from_env();
+    let worker_status = if mode.uses_worker() {
+        match state.brain.text_worker.check_liveness().await {
+            Ok(status) => status.to_string(),
+            Err(e) => format!("unhealthy: {}", e),
+        }
+    } else {
+        "disabled".to_string()
+    };
+
+    let is_healthy = !worker_status.starts_with("unhealthy");
+
     Json(serde_json::json!({
-        "status": "healthy"
+        "status": if is_healthy { "healthy" } else { "unhealthy" },
+        "mode": format!("{:?}", mode.mode).to_ascii_lowercase(),
+        "worker_liveness": worker_status,
     }))
 }
 
