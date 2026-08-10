@@ -2,26 +2,26 @@
   "external_model": "mivi",
   "models": [
     {
-      "id": "llama32-1b-reasoner",
+      "id": "qwen3-1.7b-reasoner",
       "role": "reasoner",
       "backend": "llama-cli",
-      "path": "models/Llama-3.2-1B-Instruct-IQ3_M.gguf",
+      "path": "models/Qwen3-1.7B-Q2_K.gguf",
       "context_tokens": 32768,
-      "ram_mb_estimate": 650,
+      "ram_mb_estimate": 750,
       "enabled": true,
       "tokenizer_path": "models/tokenizer.json",
-      "notes": "Configured primary reasoning and chat model (Llama-3.2 1B IQ3_M)"
+      "notes": "Configured primary reasoning and chat model (Qwen3 1.7B Q2_K)"
     },
     {
-      "id": "llama32-1b-coder",
+      "id": "qwen3-1.7b-coder",
       "role": "coder",
       "backend": "llama-cli",
-      "path": "models/Llama-3.2-1B-Instruct-IQ3_M.gguf",
+      "path": "models/Qwen3-1.7B-Q2_K.gguf",
       "context_tokens": 32768,
-      "ram_mb_estimate": 650,
+      "ram_mb_estimate": 750,
       "enabled": true,
       "tokenizer_path": "models/tokenizer.json",
-      "notes": "Configured primary coding and tool-call model (Llama-3.2 1B IQ3_M)"
+      "notes": "Configured primary coding and tool-call model (Qwen3 1.7B Q2_K)"
     },
     {
       "id": "minicpm-vision",
