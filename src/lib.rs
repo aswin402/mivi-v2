@@ -21,3 +21,4 @@ pub mod tool_output;
 pub mod trace;
 pub mod verifier;
 pub mod worker;
+pub mod constants;

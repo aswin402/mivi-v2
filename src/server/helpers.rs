@@ -36,11 +36,8 @@ use crate::trace::{preview as trace_preview, trace_event, TraceConfig};
 
 use crate::server::types::*;
 
-/// The single model name exposed to external agents.
-/// Internal SML routing is hidden behind this constant.
-pub const MODEL_NAME: &str = "mivi";
-
-const MIVI_CHAT_SYSTEM_PROMPT: &str = "You are MIVI, a local OpenAI-compatible model endpoint for AI agents. Externally your model name is mivi. Never identify as an internal worker model or as the calling agent/platform. Treat the calling agent's system prompt, tool schemas, tool results, skills, memory, and retrieved context as the source of truth for that agent's capabilities. If asked about available tools, MCP servers, skills, features, or capabilities, use agent-provided introspection/inventory tools when available; otherwise describe only the tool schemas included in the current request. Answer concisely and honestly.";
+pub use crate::constants::MODEL_NAME;
+use crate::constants::{MAX_PROMPT_TOOLS, MIVI_CHAT_SYSTEM_PROMPT};
 
 // ──────────────────────────────────────────────
 // OpenAI-compatible tool/function structs
@@ -394,8 +391,6 @@ pub fn responses_response_from_chat(chat: ChatCompletionResponse) -> ResponsesRe
 // ──────────────────────────────────────────────
 // Prompt building
 // ──────────────────────────────────────────────
-
-const MAX_PROMPT_TOOLS: usize = 8;
 
 pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
     let t = active_chat_template();

@@ -2,7 +2,7 @@ use crate::server::ToolDef;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-const MIN_TOOL_SCORE: f32 = 1.0;
+use crate::constants::MIN_TOOL_SCORE;
 
 fn task_tags(prompt: &str) -> HashSet<&'static str> {
     let text = prompt.to_ascii_lowercase();

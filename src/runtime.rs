@@ -1,9 +1,8 @@
 use std::env;
 
-const DEFAULT_CONTEXT_TOKENS: usize = 3072;
-const MIN_CONTEXT_TOKENS: usize = 1024;
-const DEFAULT_WORKER_IDLE_SECS: u64 = 120;
-const DEFAULT_RAM_TARGET_MB: usize = 1000;
+use crate::constants::{
+    DEFAULT_CONTEXT_TOKENS, DEFAULT_RAM_TARGET_MB, DEFAULT_WORKER_IDLE_SECS, MIN_CONTEXT_TOKENS,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeMode {
