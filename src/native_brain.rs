@@ -210,7 +210,12 @@ impl NativeBrain {
         let final_user = if extracted_user.is_empty() {
             prompt.to_string()
         } else {
-            extracted_user
+            let trimmed = extracted_user.trim();
+            if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
+                stripped.trim().to_string()
+            } else {
+                trimmed.to_string()
+            }
         };
 
         let formatted_prompt = format!(
@@ -342,7 +347,12 @@ impl NativeBrain {
                 let final_user = if extracted_user.is_empty() {
                     prompt.to_string()
                 } else {
-                    extracted_user
+                    let trimmed = extracted_user.trim();
+                    if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
+                        stripped.trim().to_string()
+                    } else {
+                        trimmed.to_string()
+                    }
                 };
 
                 let formatted_prompt = format!(

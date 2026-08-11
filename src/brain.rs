@@ -380,16 +380,17 @@ impl EdgeBrain {
         let final_system = if extracted_system.is_empty() {
             system_prompt.to_string()
         } else {
-            if system_prompt.trim().is_empty() {
-                extracted_system
-            } else {
-                format!("{}\n\n{}", system_prompt.trim(), extracted_system)
-            }
+            extracted_system
         };
         let final_user = if extracted_user.is_empty() {
             prompt.to_string()
         } else {
-            extracted_user
+            let trimmed = extracted_user.trim();
+            if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
+                stripped.trim().to_string()
+            } else {
+                trimmed.to_string()
+            }
         };
 
         let formatted_prompt = format!(
