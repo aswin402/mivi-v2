@@ -1986,35 +1986,7 @@ pub async fn complete_chat_non_stream(
     let target_model = req.model.clone().unwrap_or_else(|| MODEL_NAME.to_string());
     let latest_user_prompt = latest_user_prompt_text(&req);
 
-    // Greeting fast-path to respond instantly to checks without model loading or role confusion
-    let normalized_greeting = latest_user_prompt.trim().trim_end_matches('.').to_ascii_lowercase();
-    if matches!(normalized_greeting.as_str(), "hi" | "hii" | "hello" | "hey" | "test") {
-        let greeting_response = "Hello! I am MIVI, your local AI assistant. How can I help you today?";
-        return Ok(ChatCompletionResponse {
-            id: format!("chatcmpl-v2-{now}"),
-            object: "chat.completion".to_string(),
-            created: now,
-            model: target_model,
-            usage: Some(estimated_usage_for_text(&req, greeting_response)),
-            choices: vec![ChoiceOut {
-                index: 0,
-                message: ChatMessageOut {
-                    role: "assistant".to_string(),
-                    content: greeting_response.to_string(),
-                    refusal: None,
-                    reasoning_content: agent_reasoning_summary(
-                        &req,
-                        &latest_user_prompt,
-                        "greeting_fast_path",
-                    ),
-                    tool_calls: None,
-                },
-                logprobs: None,
-                finish_reason: "stop".to_string(),
-            }],
-            system_fingerprint: Some("fp_mivi".to_string()),
-        });
-    }
+
 
     if has_tool_involvement(&req) {
         let (tool_calls, response_text) = generate_tool_calls(&state.brain, &req).await?;
@@ -2512,55 +2484,7 @@ pub async fn handle_chat_completions(
     let include_usage = include_stream_usage(&req);
     let target_model = req.model.clone().unwrap_or_else(|| MODEL_NAME.to_string());
 
-    // Greeting fast-path to respond instantly to checks without model loading or role confusion
-    let normalized_greeting = latest_user_prompt.trim().trim_end_matches('.').to_ascii_lowercase();
-    if matches!(normalized_greeting.as_str(), "hi" | "hii" | "hello" | "hey" | "test") {
-        let greeting_response = "Hello! I am MIVI, your local AI assistant. How can I help you today?";
-        let _ = trace_event(
-            &trace,
-            serde_json::json!({
-                "kind": "final_response",
-                "route": "greeting_fast_path",
-                "finish_reason": if req.stream.unwrap_or(false) { "stream" } else { "stop" },
-                "response_chars": greeting_response.chars().count()
-            }),
-        );
-        if req.stream.unwrap_or(false) {
-            return stream_text_response(
-                greeting_response.to_string(),
-                now,
-                agent_reasoning_summary(&req, &latest_user_prompt, "greeting_fast_path"),
-                include_usage.then(|| estimated_usage_for_text(&req, greeting_response)),
-                permit,
-            )
-            .into_response();
-        }
-        return Json(ChatCompletionResponse {
-            id: format!("chatcmpl-v2-{}", now),
-            object: "chat.completion".to_string(),
-            created: now,
-            model: target_model,
-            usage: Some(estimated_usage_for_text(&req, greeting_response)),
-            choices: vec![ChoiceOut {
-                index: 0,
-                message: ChatMessageOut {
-                    role: "assistant".to_string(),
-                    content: greeting_response.to_string(),
-                    refusal: None,
-                    reasoning_content: agent_reasoning_summary(
-                        &req,
-                        &latest_user_prompt,
-                        "greeting_fast_path",
-                    ),
-                    tool_calls: None,
-                },
-                logprobs: None,
-                finish_reason: "stop".to_string(),
-            }],
-            system_fingerprint: Some("fp_mivi".to_string()),
-        })
-        .into_response();
-    }
+
 
     let tool_selection = select_tools_for_request(&req);
     let selected_tool_names = tool_names(&tool_selection.selected);

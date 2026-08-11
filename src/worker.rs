@@ -180,11 +180,23 @@ impl WorkerManager {
         temp: &str,
     ) -> Result<String, String> {
         let endpoint = self.ensure_text_worker().await?;
+        let (extracted_system, extracted_user) = crate::brain::split_prompt_system_user(prompt);
+        let final_system = if extracted_system.is_empty() {
+            system_prompt.to_string()
+        } else {
+            extracted_system
+        };
+        let final_user = if extracted_user.is_empty() {
+            prompt.to_string()
+        } else {
+            extracted_user
+        };
+
         let body = json!({
             "model": "mivi-worker",
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": final_system},
+                {"role": "user", "content": final_user}
             ],
             "temperature": temp.parse::<f32>().unwrap_or(0.2),
             "stream": false

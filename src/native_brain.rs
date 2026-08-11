@@ -201,13 +201,25 @@ impl NativeBrain {
         let tokenizer = &loaded.tokenizer;
 
         let t = crate::server::active_chat_template();
+        let (extracted_system, extracted_user) = crate::brain::split_prompt_system_user(prompt);
+        let final_system = if extracted_system.is_empty() {
+            system_prompt.to_string()
+        } else {
+            extracted_system
+        };
+        let final_user = if extracted_user.is_empty() {
+            prompt.to_string()
+        } else {
+            extracted_user
+        };
+
         let formatted_prompt = format!(
             "{}{}{}{}{}{}{}",
             t.system_prefix,
-            system_prompt,
+            final_system,
             t.system_suffix,
             t.user_prefix,
-            prompt,
+            final_user,
             t.user_suffix,
             t.assistant_start
         );
@@ -321,13 +333,25 @@ impl NativeBrain {
                 let tokenizer = &loaded.tokenizer;
 
                 let t = crate::server::active_chat_template();
+                let (extracted_system, extracted_user) = crate::brain::split_prompt_system_user(prompt);
+                let final_system = if extracted_system.is_empty() {
+                    system_prompt.to_string()
+                } else {
+                    extracted_system
+                };
+                let final_user = if extracted_user.is_empty() {
+                    prompt.to_string()
+                } else {
+                    extracted_user
+                };
+
                 let formatted_prompt = format!(
                     "{}{}{}{}{}{}{}",
                     t.system_prefix,
-                    system_prompt,
+                    final_system,
                     t.system_suffix,
                     t.user_prefix,
-                    prompt,
+                    final_user,
                     t.user_suffix,
                     t.assistant_start
                 );
