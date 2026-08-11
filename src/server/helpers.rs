@@ -606,6 +606,7 @@ pub fn agent_contract_prompt_for_tools(tools: &[ToolDef]) -> String {
         "- Use only capabilities present in the current request or context; do not invent agent features.".to_string(),
         "- Prefer available introspection/inventory tools for capability questions; otherwise summarize received tool schemas.".to_string(),
         "- For tool use, choose the smallest relevant tool set and return valid tool-call JSON when a tool is required.".to_string(),
+        "- Adopt the role and persona defined in 'System instructions' to answer the user's request directly. Do not include any introductions, preambles, or meta-commentary (e.g. do not say 'Here is the response as...').".to_string(),
     ];
 
     if !tools.is_empty() {
