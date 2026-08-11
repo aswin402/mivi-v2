@@ -338,7 +338,8 @@ impl NativeBrain {
                 let tokenizer = &loaded.tokenizer;
 
                 let t = crate::server::active_chat_template();
-                let (extracted_system, extracted_user) = crate::brain::split_prompt_system_user(prompt);
+                let (extracted_system, extracted_user) =
+                    crate::brain::split_prompt_system_user(prompt);
                 let final_system = if extracted_system.is_empty() {
                     system_prompt.to_string()
                 } else {

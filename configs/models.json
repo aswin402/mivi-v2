@@ -2,15 +2,96 @@
   "external_model": "mivi",
   "models": [
     {
+      "id": "qwen2.5-0.5b-reasoner",
+      "role": "reasoner",
+      "backend": "llama-cli",
+      "path": "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "context_tokens": 8192,
+      "ram_mb_estimate": 490,
+      "enabled": true,
+      "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
+      "notes": "Configured primary reasoning and chat model (Qwen 2.5 0.5B Instruct)",
+      "chat_template": {
+        "system_prefix": "<|im_start|>system\n",
+        "system_suffix": "<|im_end|>\n",
+        "user_prefix": "<|im_start|>user\n",
+        "user_suffix": "<|im_end|>\n",
+        "assistant_prefix": "<|im_start|>assistant\n",
+        "assistant_suffix": "<|im_end|>\n",
+        "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
+        "tool_suffix": "<|im_end|>\n",
+        "assistant_start": "<|im_start|>assistant\n",
+        "stop_words": ["<|im_end|>","<|im_start|>"]
+      }
+    },
+    {
+      "id": "qwen2.5-0.5b-coder",
+      "role": "coder",
+      "backend": "llama-cli",
+      "path": "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "context_tokens": 8192,
+      "ram_mb_estimate": 490,
+      "enabled": true,
+      "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
+      "notes": "Configured primary coding and tool-call model (Qwen 2.5 0.5B Instruct)",
+      "chat_template": {
+        "system_prefix": "<|im_start|>system\n",
+        "system_suffix": "<|im_end|>\n",
+        "user_prefix": "<|im_start|>user\n",
+        "user_suffix": "<|im_end|>\n",
+        "assistant_prefix": "<|im_start|>assistant\n",
+        "assistant_suffix": "<|im_end|>\n",
+        "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
+        "tool_suffix": "<|im_end|>\n",
+        "assistant_start": "<|im_start|>assistant\n",
+        "stop_words": ["<|im_end|>","<|im_start|>"]
+      }
+    },
+    {
+      "id": "qwen3-1.7b-reasoner",
+      "role": "reasoner",
+      "backend": "llama-cli",
+      "path": "models/Qwen3-1.7B-Q2_K.gguf",
+      "context_tokens": 8192,
+      "ram_mb_estimate": 780,
+      "enabled": false,
+      "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
+      "notes": "Qwen3 1.7B Instruct (disabled)",
+      "chat_template": {
+        "system_prefix": "<|im_start|>system\n",
+        "system_suffix": "<|im_end|>\n",
+        "user_prefix": "<|im_start|>user\n",
+        "user_suffix": "<|im_end|>\n",
+        "assistant_prefix": "<|im_start|>assistant\n",
+        "assistant_suffix": "<|im_end|>\n",
+        "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
+        "tool_suffix": "<|im_end|>\n",
+        "assistant_start": "<|im_start|>assistant\n",
+        "stop_words": ["<|im_end|>","<|im_start|>"]
+      }
+    },
+    {
       "id": "llama-3.2-1b-reasoner",
       "role": "reasoner",
       "backend": "llama-cli",
       "path": "models/Llama-3.2-1B-Instruct-IQ3_M.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 650,
-      "enabled": true,
+      "enabled": false,
       "tokenizer_path": "models/tokenizer.json",
-      "notes": "Configured primary reasoning and chat model (Llama 3.2 1B Instruct)"
+      "notes": "Llama 3.2 1B Instruct (disabled)",
+      "chat_template": {
+        "system_prefix": "<|start_header_id|>system<|end_header_id|>\n\n",
+        "system_suffix": "<|eot_id|>",
+        "user_prefix": "<|start_header_id|>user<|end_header_id|>\n\n",
+        "user_suffix": "<|eot_id|>",
+        "assistant_prefix": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+        "assistant_suffix": "<|eot_id|>",
+        "tool_prefix": "<|start_header_id|>tool<|end_header_id|>\n\n",
+        "tool_suffix": "<|eot_id|>",
+        "assistant_start": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+        "stop_words": ["<|eot_id|>","<|start_header_id|>"]
+      }
     },
     {
       "id": "llama-3.2-1b-coder",
@@ -19,9 +100,21 @@
       "path": "models/Llama-3.2-1B-Instruct-IQ3_M.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 650,
-      "enabled": true,
+      "enabled": false,
       "tokenizer_path": "models/tokenizer.json",
-      "notes": "Configured primary coding and tool-call model (Llama 3.2 1B Instruct)"
+      "notes": "Llama 3.2 1B Instruct (disabled)",
+      "chat_template": {
+        "system_prefix": "<|start_header_id|>system<|end_header_id|>\n\n",
+        "system_suffix": "<|eot_id|>",
+        "user_prefix": "<|start_header_id|>user<|end_header_id|>\n\n",
+        "user_suffix": "<|eot_id|>",
+        "assistant_prefix": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+        "assistant_suffix": "<|eot_id|>",
+        "tool_prefix": "<|start_header_id|>tool<|end_header_id|>\n\n",
+        "tool_suffix": "<|eot_id|>",
+        "assistant_start": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+        "stop_words": ["<|eot_id|>","<|start_header_id|>"]
+      }
     },
     {
       "id": "minicpm-vision",

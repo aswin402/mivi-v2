@@ -5,6 +5,15 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.11] - 2026-08-12
+
+### 🦀 Chat & Context Optimization (COMPLETE)
+
+#### Added
+* 🔄 **Dynamic Structured Message Parsing**: Implemented token-efficient parsing of flattened history strings back into structured ChatML message arrays inside `src/worker.rs`, resolving conversational attention copying and self-repetition loops in `llama-server` multi-turn sessions.
+* 🛡️ **Generic Suffix/Prefix Boilerplate Reduction**: Added generic string prefix/suffix reduction algorithms (`longest_common_prefix` and `longest_common_suffix`) that dynamically detect and strip repeated system prompt wrappers or injected framework templates (e.g. > 60 characters) from user messages. This prevents attention hijacking on tiny 500M models and dramatically reduces context token bloat.
+* 🚦 **Fixed Non-Tool Query Interception**: Replaced history scanner for `last_tool_result_is_error` to stop immediately upon encountering a non-tool message, preventing old history logs containing error terms from erroneously hijacking new user queries.
+
 ## [v0.0.10] - 2026-08-09
 
 ### 🦀 Phase 8: In-Process Native Inference (COMPLETE)

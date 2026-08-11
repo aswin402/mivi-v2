@@ -125,7 +125,7 @@ fn tag_score(prompt_tags: &HashSet<&'static str>, tool_name: &str, description: 
 }
 
 pub fn filter_tools(prompt: &str, tools: &[ToolDef], max_tools: usize) -> Vec<ToolDef> {
-    if tools.is_empty() || max_tools == 0 || !has_tool_intent(prompt) {
+    if tools.is_empty() || max_tools == 0 || !has_tool_intent(prompt, tools) {
         return Vec::new();
     }
 
@@ -207,8 +207,17 @@ fn parameter_score(prompt: &str, parameters: &serde_json::Value) -> f32 {
         .unwrap_or(0.0)
 }
 
-fn has_tool_intent(prompt: &str) -> bool {
+fn has_tool_intent(prompt: &str, tools: &[ToolDef]) -> bool {
     let text = prompt.to_ascii_lowercase();
+
+    // 1. Explicit tool name matching: if the user mentions any of the tool names in their prompt
+    for tool in tools {
+        let name = tool.function.name.to_ascii_lowercase();
+        if !name.is_empty() && text.contains(&name) {
+            return true;
+        }
+    }
+
     let tokens = token_set(prompt);
     let intent_phrases = [
         "use tool",

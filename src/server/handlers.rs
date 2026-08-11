@@ -11,7 +11,7 @@ pub async fn handle_root() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "online",
         "service": "MIVI-V2 Pure Rust High-Speed AI Engine",
-        "version": "0.0.10",
+        "version": "0.0.11",
         "ram_footprint": "< 12 MB RAM",
         "openai_endpoint": "/v1/chat/completions"
     }))

@@ -88,6 +88,14 @@ async fn main() {
             }
         }
         _ => {
+            #[cfg(target_os = "linux")]
+            {
+                tracing::info!("Cleaning up any orphaned llama-server processes...");
+                let _ = std::process::Command::new("pkill")
+                    .arg("-f")
+                    .arg("llama-server")
+                    .status();
+            }
             if let Err(e) = start_api_server(brain, orchestrator, 8000).await {
                 eprintln!("Fatal error: {}", e);
                 std::process::exit(1);

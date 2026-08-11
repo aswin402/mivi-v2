@@ -56,6 +56,7 @@ pub struct RuntimeConfig {
     pub worker_idle_secs: u64,
     pub ram_target_mb: usize,
     pub kv_cache_type: String,
+    pub threads: usize,
 }
 
 impl RuntimeConfig {
@@ -80,7 +81,27 @@ impl RuntimeConfig {
             .filter(|secs| *secs > 0)
             .unwrap_or(DEFAULT_WORKER_IDLE_SECS);
 
-        let kv_cache_type = env::var("MIVI_KV_CACHE_TYPE").unwrap_or_else(|_| "q4_0".to_string());
+        let kv_cache_type = env::var("MIVI_KV_CACHE_TYPE").unwrap_or_else(|_| "f16".to_string());
+
+        let threads = env::var("MIVI_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&t| t > 0)
+            .unwrap_or_else(|| {
+                let logical = std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4);
+                let base = if logical > 1 { logical / 2 } else { 1 };
+                if env::var("MIVI_ULTRA_LOW_RAM").is_ok() {
+                    if base > 2 {
+                        base / 2
+                    } else {
+                        1
+                    }
+                } else {
+                    base
+                }
+            });
 
         Self {
             mode,
@@ -88,6 +109,7 @@ impl RuntimeConfig {
             worker_idle_secs,
             ram_target_mb: DEFAULT_RAM_TARGET_MB,
             kv_cache_type,
+            threads,
         }
     }
 }
@@ -106,6 +128,7 @@ mod tests {
         std::env::remove_var("MIVI_RUNTIME_MODE");
         std::env::remove_var("MIVI_CONTEXT_BUDGET");
         std::env::remove_var("MIVI_WORKER_IDLE_SECS");
+        std::env::remove_var("MIVI_THREADS");
     }
 
     #[test]

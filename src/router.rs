@@ -276,7 +276,7 @@ impl NeedleRouter {
         prompt: &str,
     ) -> Result<&'static str, String> {
         let system_prompt = "You are an intent router. Classify the user prompt into exactly one category: CHAT, VISION, CODE, MULTI_STEP. Output only the category name.";
-        let response = brain.query_coder(prompt, system_prompt).await?;
+        let response = brain.query_reasoner(prompt, system_prompt).await?;
         let cleaned = response.trim().to_uppercase();
         if cleaned.contains("VISION") {
             Ok("VISION")

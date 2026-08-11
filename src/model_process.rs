@@ -30,7 +30,11 @@ fn base_args(cmd: &mut Command, model_path: &str, ngl: &str, ctx: &str, temp: &s
         .arg("--temp")
         .arg(temp)
         .arg("--simple-io")
-        .arg("--no-display-prompt");
+        .arg("--no-display-prompt")
+        .arg("-t")
+        .arg(runtime_config.threads.to_string())
+        .arg("-tb")
+        .arg(runtime_config.threads.to_string());
 }
 
 fn find_marker_case_insensitive(text: &str, markers: &[&str]) -> Option<(usize, usize)> {

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tracing::info;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerEndpoint {
@@ -27,6 +28,7 @@ pub struct WorkerConfig {
     pub context_tokens: usize,
     pub gpu_layers: String,
     pub idle_secs: u64,
+    pub threads: usize,
 }
 
 impl WorkerConfig {
@@ -56,6 +58,7 @@ impl WorkerConfig {
             context_tokens: runtime.context.max_input_tokens,
             gpu_layers,
             idle_secs: runtime.worker_idle_secs,
+            threads: runtime.threads,
         }
     }
 }
@@ -121,6 +124,10 @@ impl WorkerManager {
             self.config.idle_secs.to_string(),
             "--no-webui".to_string(),
             "--mmap".to_string(),
+            "-t".to_string(),
+            self.config.threads.to_string(),
+            "-tb".to_string(),
+            self.config.threads.to_string(),
         ]
     }
 
@@ -189,21 +196,20 @@ impl WorkerManager {
         let final_user = if extracted_user.is_empty() {
             prompt.to_string()
         } else {
-            let trimmed = extracted_user.trim();
-            if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
-                stripped.trim().to_string()
-            } else {
-                trimmed.to_string()
-            }
+            extracted_user
         };
+
+        let messages = parse_prompt_to_messages(&final_system, &final_user);
+        info!(
+            "Worker query_chat: sending {} structured messages to worker endpoint",
+            messages.len()
+        );
 
         let body = json!({
             "model": "mivi-worker",
-            "messages": [
-                {"role": "system", "content": final_system},
-                {"role": "user", "content": final_user}
-            ],
+            "messages": messages,
             "temperature": temp.parse::<f32>().unwrap_or(0.2),
+            "repeat_penalty": 1.1,
             "stream": false
         });
         let response_body = http_request(
@@ -653,8 +659,97 @@ fn parse_chat_response(body: &str) -> Result<String, String> {
         .and_then(|message| message.get("content"))
         .and_then(|content| content.as_str())
         .map(|content| content.trim().to_string())
-        .filter(|content| !content.is_empty())
         .ok_or_else(|| "worker response missing assistant content".to_string())
+}
+
+fn parse_prompt_to_messages(system_prompt: &str, user_prompt: &str) -> Vec<serde_json::Value> {
+    let mut messages = Vec::new();
+
+    if !system_prompt.trim().is_empty() {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": system_prompt.trim()
+        }));
+    }
+
+    let mut current_role = None;
+    let mut current_content = String::new();
+
+    let has_context = user_prompt.contains("Relevant recent context:");
+    let mut lines = user_prompt.lines();
+
+    if has_context {
+        for line in &mut lines {
+            if line.trim().starts_with("Relevant recent context:") {
+                break;
+            }
+        }
+    }
+
+    for line in lines {
+        let trimmed_line = line.trim();
+        if trimmed_line.starts_with("Relevant recent context:") {
+            continue;
+        }
+        if trimmed_line.starts_with("Current user request:") {
+            if let Some(role) = current_role {
+                if !current_content.trim().is_empty() {
+                    messages.push(serde_json::json!({
+                        "role": role,
+                        "content": current_content.trim().to_string()
+                    }));
+                }
+            }
+            current_role = Some("user");
+            current_content = String::new();
+            continue;
+        }
+
+        if trimmed_line.starts_with("user: ") {
+            if let Some(role) = current_role {
+                if !current_content.trim().is_empty() {
+                    messages.push(serde_json::json!({
+                        "role": role,
+                        "content": current_content.trim().to_string()
+                    }));
+                }
+            }
+            current_role = Some("user");
+            current_content = trimmed_line["user: ".len()..].to_string();
+        } else if trimmed_line.starts_with("assistant: ") {
+            if let Some(role) = current_role {
+                if !current_content.trim().is_empty() {
+                    messages.push(serde_json::json!({
+                        "role": role,
+                        "content": current_content.trim().to_string()
+                    }));
+                }
+            }
+            current_role = Some("assistant");
+            current_content = trimmed_line["assistant: ".len()..].to_string();
+        } else {
+            if current_role.is_some() {
+                if !current_content.is_empty() {
+                    current_content.push('\n');
+                }
+                current_content.push_str(line);
+            } else {
+                current_role = Some("user");
+                current_content = line.to_string();
+            }
+        }
+    }
+
+    if let Some(role) = current_role {
+        if !current_content.trim().is_empty() {
+            messages.push(serde_json::json!({
+                "role": role,
+                "content": current_content.trim().to_string()
+            }));
+        }
+    }
+
+    messages
 }
 
 #[cfg(test)]
@@ -670,6 +765,7 @@ mod tests {
             worker_idle_secs: 30,
             ram_target_mb: 1000,
             kv_cache_type: "q4_0".to_string(),
+            threads: 1,
         }
     }
 
@@ -678,6 +774,47 @@ mod tests {
         assert!(!config(RuntimeMode::Spawn).uses_worker());
         assert!(config(RuntimeMode::WorkerEco).uses_worker());
         assert!(config(RuntimeMode::WorkerHot).uses_worker());
+    }
+
+    #[test]
+    fn test_parse_prompt_to_messages_reconstruction() {
+        let system_prompt = "You are openz, a helpful assistant.";
+        let user_prompt = "\
+so what are the tools u have is now its worked good or we have problem
+
+Relevant recent context:
+assistant: I'm glad to see you're using OpenZ...
+user: so whats new
+assistant: **So, what's new?**...
+user: hey i said whats new in u
+
+You are OpenZ, a high-performance framework...
+";
+        let messages = parse_prompt_to_messages(system_prompt, user_prompt);
+        assert_eq!(messages.len(), 5);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(
+            messages[0]["content"],
+            "You are openz, a helpful assistant."
+        );
+
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(
+            messages[1]["content"],
+            "I'm glad to see you're using OpenZ..."
+        );
+
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"], "so whats new");
+
+        assert_eq!(messages[3]["role"], "assistant");
+        assert_eq!(messages[3]["content"], "**So, what's new?**...");
+
+        assert_eq!(messages[4]["role"], "user");
+        assert!(messages[4]["content"]
+            .as_str()
+            .unwrap()
+            .contains("hey i said whats new in u"));
     }
 
     #[test]
@@ -690,6 +827,7 @@ mod tests {
             context_tokens: 4096,
             gpu_layers: "0".to_string(),
             idle_secs: 30,
+            threads: 1,
         });
 
         let args = manager.server_args();

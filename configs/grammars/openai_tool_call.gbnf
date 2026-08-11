@@ -3,7 +3,7 @@
 
 root ::= jsontoolcall
 
-jsontoolcall ::= "{" "\"tool_calls\"" ":" "[" jsonobject ("," jsonobject)* "]" "}"
+jsontoolcall ::= "{" "\"tool_calls\"" ":" "[" jsonobject "]" "}"
 
 jsonobject ::= "{" "\"id\"" ":" string "," "\"type\"" ":" "\"function\"" "," "\"function\"" ":" functionobject "}"
 

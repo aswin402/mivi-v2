@@ -399,6 +399,7 @@ pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
     let mut prompt = String::new();
     let prompt_tools = prompt_tools_for_request(req);
     let agent_contract = agent_contract_prompt_for_tools(&prompt_tools);
+    let func_block = build_function_list_block(&prompt_tools);
 
     let has_user_system = req.messages.iter().any(|m| m.role == "system");
     if has_user_system {
@@ -415,13 +416,6 @@ pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
                 }
             }
         }
-    } else if prompt_tools.is_empty() {
-        let system_text =
-            wrap_agent_prompt(&agent_contract, "You are a helpful, concise AI assistant.");
-        prompt.push_str(&format!(
-            "{}{}{}",
-            t.system_prefix, system_text, t.system_suffix
-        ));
     } else {
         prompt.push_str(&format!(
             "{}{}{}",
@@ -431,15 +425,22 @@ pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
 
     // Conversation turns.
     let has_tools = !prompt_tools.is_empty();
-    let mut last_user_idx: Option<usize> = None;
+    let last_user_pos = req.messages.iter().rposition(|m| m.role == "user");
 
-    for (_, msg) in req.messages.iter().enumerate() {
+    for (idx, msg) in req.messages.iter().enumerate() {
         match msg.role.as_str() {
             "user" => {
                 let text = extract_user_text(msg);
                 if !text.is_empty() {
-                    prompt.push_str(&format!("{}{}{}", t.user_prefix, text, t.user_suffix));
-                    last_user_idx = Some(prompt.len());
+                    if has_tools && Some(idx) == last_user_pos {
+                        let text_with_tools = format!("{}\n{}", text, func_block.trim());
+                        prompt.push_str(&format!(
+                            "{}{}{}",
+                            t.user_prefix, text_with_tools, t.user_suffix
+                        ));
+                    } else {
+                        prompt.push_str(&format!("{}{}{}", t.user_prefix, text, t.user_suffix));
+                    }
                 }
             }
             "assistant" => {
@@ -485,15 +486,6 @@ pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
                 ));
             }
             _ => {}
-        }
-    }
-
-    if has_tools {
-        let func_block = build_function_list_block(&prompt_tools);
-        if let Some(idx) = last_user_idx {
-            prompt.insert_str(idx, &func_block);
-        } else {
-            prompt.push_str(&func_block);
         }
     }
 
@@ -602,14 +594,15 @@ pub fn agent_contract_prompt_for_tools(tools: &[ToolDef]) -> String {
     let mut lines = vec![
         "Agent contract:".to_string(),
         "- External model identity is `mivi`; do not expose internal worker names.".to_string(),
-        "- The calling agent supplies the authoritative instructions, tools, skills, memory, database/context, and retrieved facts.".to_string(),
-        "- Use only capabilities present in the current request or context; do not invent agent features.".to_string(),
-        "- Prefer available introspection/inventory tools for capability questions; otherwise summarize received tool schemas.".to_string(),
-        "- For tool use, choose the smallest relevant tool set and return valid tool-call JSON when a tool is required.".to_string(),
-        "- Adopt the role and persona defined in 'System instructions' to answer the user's request directly. Do not include any introductions, preambles, or meta-commentary (e.g. do not say 'Here is the response as...').".to_string(),
+        "- Adopt the role and persona defined in 'System instructions' to answer the user's request directly.".to_string(),
     ];
 
     if !tools.is_empty() {
+        lines.push("- The calling agent supplies the authoritative instructions, tools, skills, memory, database/context, and retrieved facts.".to_string());
+        lines.push("- Use only capabilities present in the current request or context; do not invent agent features.".to_string());
+        lines.push("- Prefer available introspection/inventory tools for capability questions; otherwise summarize received tool schemas.".to_string());
+        lines.push("- For tool use, choose the smallest relevant tool set and return valid tool-call JSON when a tool is required.".to_string());
+
         let mut names = tool_names(tools);
         names.sort_unstable();
         names.dedup();
@@ -641,6 +634,29 @@ pub fn wrap_agent_prompt(agent_contract: &str, prompt: &str) -> String {
     }
 }
 
+fn get_example_value_for_param(name: &str, val_type: &str) -> serde_json::Value {
+    match val_type {
+        "boolean" => serde_json::Value::Bool(true),
+        "number" | "integer" => serde_json::Value::Number(123.into()),
+        "array" => serde_json::Value::Array(vec![serde_json::Value::String("example".to_string())]),
+        _ => {
+            let lower = name.to_lowercase();
+            if lower.contains("url") || lower.contains("uri") || lower.contains("link") {
+                serde_json::Value::String("https://...".to_string())
+            } else if lower.contains("cmd") || lower.contains("command") || lower.contains("run") {
+                serde_json::Value::String("npm test".to_string())
+            } else if lower.contains("path") || lower.contains("file") || lower.contains("dir") {
+                serde_json::Value::String("path/to/file".to_string())
+            } else if lower.contains("query") || lower.contains("search") || lower.contains("find")
+            {
+                serde_json::Value::String("search_query".to_string())
+            } else {
+                serde_json::Value::String("...".to_string())
+            }
+        }
+    }
+}
+
 pub fn build_function_list_block(tools: &[ToolDef]) -> String {
     if tools.is_empty() {
         return String::new();
@@ -648,29 +664,41 @@ pub fn build_function_list_block(tools: &[ToolDef]) -> String {
 
     let mut block = String::new();
     let first_tool = &tools[0].function;
-    let ex_args = first_tool
+    let tool_format = std::env::var("MIVI_TOOL_FORMAT").unwrap_or_else(|_| "openai".to_string());
+    let tool_format = tool_format.trim().to_ascii_lowercase();
+
+    let mut ex_args_obj = serde_json::Map::new();
+    if let Some(props) = first_tool
         .parameters
         .as_ref()
         .and_then(|p| p.get("properties"))
         .and_then(|props| props.as_object())
-        .and_then(|obj| obj.keys().next())
-        .map(|k| format!("\"{}\": \"...\"", k))
-        .unwrap_or_else(|| "\"key\": \"value\"".to_string());
+    {
+        for (k, v) in props {
+            let val_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("string");
+            ex_args_obj.insert(k.clone(), get_example_value_for_param(k, val_type));
+        }
+    }
+    let ex_args = serde_json::Value::Object(ex_args_obj);
+    let ex_args_str = serde_json::to_string(&ex_args).unwrap_or_else(|_| "{}".to_string());
+
+    let example_response = if tool_format == "hermes" {
+        format!(
+            "<tool_call>{{\n  \"name\": \"{name}\",\n  \"arguments\": {ex_args_str}\n}}</tool_call>",
+            name = first_tool.name,
+            ex_args_str = ex_args_str
+        )
+    } else {
+        format!(
+            "{{\n  \"tool_calls\": [\n    {{\n      \"id\": \"call_abc123\",\n      \"type\": \"function\",\n      \"function\": {{\n        \"name\": \"{name}\",\n        \"arguments\": {ex_args_str}\n      }}\n    }}\n  ]\n}}",
+            name = first_tool.name,
+            ex_args_str = ex_args_str
+        )
+    };
 
     block.push_str(&format!(
-        "
-Tool context broker selected {} tool(s).
-Available functions:
-         - {name}: {desc}
-
-         When appropriate, respond with ONLY:
-         {{\"name\": \"{name}\", \"arguments\": {{{ex_args}}}}}
-         If no tool is needed for this request, respond normally with text.
-
-",
-        tools.len(),
-        name = first_tool.name,
-        desc = first_tool.description.as_deref().unwrap_or(""),
+        "\nTool context broker selected {} tool(s).\nAvailable tools:\n",
+        tools.len()
     ));
 
     for tool in tools {
@@ -681,26 +709,40 @@ Available functions:
             .and_then(|params| params.get("properties"))
             .and_then(|properties| properties.as_object())
             .map(|properties| {
-                let mut keys: Vec<&str> = properties.keys().map(|key| key.as_str()).collect();
-                keys.sort_unstable();
-                keys.join(", ")
+                let mut details = Vec::new();
+                for (name, prop) in properties {
+                    let p_type = prop
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("string");
+                    let p_desc = prop
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("");
+                    if p_desc.is_empty() {
+                        details.push(format!("{} ({})", name, p_type));
+                    } else {
+                        details.push(format!("{} ({}: {})", name, p_type, p_desc));
+                    }
+                }
+                details.sort();
+                details.join(", ")
             })
-            .filter(|keys| !keys.is_empty())
+            .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "none".to_string());
         block.push_str(&format!(
-            "Function: {} - {} | params: {}
-",
+            "- name: {}\n  description: {}\n  parameters: {}\n",
             f.name,
             f.description.as_deref().unwrap_or(""),
             param_keys
         ));
     }
 
-    block.push_str(
-        "
-Respond with JSON or text:
-",
-    );
+    block.push_str(&format!(
+        "\nTo call a tool, respond ONLY with JSON matching this format:\n{}\n\n",
+        example_response
+    ));
+
     block
 }
 
@@ -1583,6 +1625,36 @@ pub fn strip_tagged_block_prefix<'a>(text: &'a str, tag: &str) -> &'a str {
     text.trim()
 }
 
+pub fn longest_common_prefix(s1: &str, s2: &str) -> String {
+    let mut prefix = String::new();
+    let mut chars1 = s1.chars();
+    let mut chars2 = s2.chars();
+    loop {
+        match (chars1.next(), chars2.next()) {
+            (Some(c1), Some(c2)) if c1 == c2 => {
+                prefix.push(c1);
+            }
+            _ => break,
+        }
+    }
+    prefix
+}
+
+pub fn longest_common_suffix(s1: &str, s2: &str) -> String {
+    let mut suffix_chars = Vec::new();
+    let mut chars1 = s1.chars().rev();
+    let mut chars2 = s2.chars().rev();
+    loop {
+        match (chars1.next(), chars2.next()) {
+            (Some(c1), Some(c2)) if c1 == c2 => {
+                suffix_chars.push(c1);
+            }
+            _ => break,
+        }
+    }
+    suffix_chars.into_iter().rev().collect()
+}
+
 pub fn normalize_user_prompt_text(text: &str) -> String {
     let mut normalized = text.trim();
     normalized = strip_tagged_block_prefix(normalized, "available-skills");
@@ -1719,15 +1791,46 @@ pub async fn code_chat_with_params(
 }
 
 pub fn get_grammar_path(req: &ChatCompletionRequest) -> Option<String> {
+    if latest_non_system_role(req) == Some("tool") {
+        return None;
+    }
     if let Some(ref tools) = req.tools {
         if !tools.is_empty() {
             let format = std::env::var("MIVI_TOOL_FORMAT").unwrap_or_else(|_| "openai".to_string());
-            let path = match format.trim().to_ascii_lowercase().as_str() {
+            let format = format.trim().to_ascii_lowercase();
+            let base_path = match format.as_str() {
                 "openai" => "configs/grammars/openai_tool_call.gbnf",
                 "hermes" => "configs/grammars/hermes_tool_call.gbnf",
                 _ => "configs/grammars/openai_tool_call.gbnf",
             };
-            return Some(path.to_string());
+
+            // Read the base grammar content
+            if let Ok(content) = std::fs::read_to_string(base_path) {
+                let prompt_tools = prompt_tools_for_request(req);
+                if !prompt_tools.is_empty() {
+                    let mut name_rules = Vec::new();
+                    for t in &prompt_tools {
+                        name_rules.push(format!("\"\\\"{}\\\"\"", t.function.name));
+                    }
+                    let name_rule = name_rules.join(" | ");
+
+                    let target = "\"\\\"name\\\"\" \":\" string";
+                    let replacement = format!("\"\\\"name\\\"\" \":\" ({})", name_rule);
+                    let new_content = content.replace(target, &replacement);
+
+                    // Write to a temporary file
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    use std::hash::{Hash, Hasher};
+                    name_rule.hash(&mut hasher);
+                    let hash = hasher.finish();
+                    let temp_dir = std::env::temp_dir();
+                    let temp_path = temp_dir.join(format!("mivi_grammar_{}_{}.gbnf", format, hash));
+                    if std::fs::write(&temp_path, new_content).is_ok() {
+                        return Some(temp_path.to_string_lossy().into_owned());
+                    }
+                }
+            }
+            return Some(base_path.to_string());
         }
     }
     if let Some(ref fmt) = req.response_format {
@@ -1823,12 +1926,40 @@ pub fn append_tool_execution_summary(req: &ChatCompletionRequest, content: Strin
     merged
 }
 
+pub fn last_tool_result_is_error(req: &ChatCompletionRequest) -> bool {
+    for msg in req.messages.iter().rev() {
+        if msg.role == "tool" {
+            let content = if let Some(s) = msg.content.as_str() {
+                s.to_string()
+            } else {
+                msg.content.to_string()
+            };
+            let lower = content.to_lowercase();
+            if lower.contains("error")
+                || lower.contains("fail")
+                || lower.contains("timeout")
+                || lower.contains("timed out")
+            {
+                return true;
+            }
+        } else {
+            break;
+        }
+    }
+    false
+}
+
 /// Generate tool calls: run the model with tool-aware prompt, parse tool calls.
 pub async fn generate_tool_calls(
     brain: &EdgeBrain,
     req: &ChatCompletionRequest,
 ) -> Result<(Vec<ToolCallOut>, String), String> {
     crate::stability::check_history_for_loops(&req.messages)?;
+
+    if last_tool_result_is_error(req) {
+        let final_content = append_tool_execution_summary(req, String::new());
+        return Ok((Vec::new(), final_content));
+    }
 
     let trace = TraceConfig::from_env();
     let selection = select_tools_for_request(req);
@@ -1847,6 +1978,15 @@ pub async fn generate_tool_calls(
     let runtime_config = RuntimeConfig::from_env();
     if runtime_config.uses_worker() {
         let prompt = build_chat_prompt(req);
+        info!(
+            "[MIVI-V2 Tool] ToolGen prompt: len={}, start={:?}, end={:?}",
+            prompt.len(),
+            prompt.chars().take(150).collect::<String>(),
+            prompt
+                .chars()
+                .skip(prompt.chars().count().saturating_sub(150))
+                .collect::<String>()
+        );
         let grammar_path = get_grammar_path(req);
         let grammar_content = grammar_path
             .as_ref()
@@ -1986,8 +2126,6 @@ pub async fn complete_chat_non_stream(
 
     let target_model = req.model.clone().unwrap_or_else(|| MODEL_NAME.to_string());
     let latest_user_prompt = latest_user_prompt_text(&req);
-
-
 
     if has_tool_involvement(&req) {
         let (tool_calls, response_text) = generate_tool_calls(&state.brain, &req).await?;
@@ -2404,7 +2542,7 @@ pub async fn handle_responses_streaming(
 
 pub async fn handle_chat_completions(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    Json(req): Json<ChatCompletionRequest>,
+    Json(mut req): Json<ChatCompletionRequest>,
 ) -> impl IntoResponse {
     if req.messages.len() > 256 {
         return (
@@ -2447,6 +2585,53 @@ pub async fn handle_chat_completions(
         }
     };
 
+    // Dynamic common prefix/suffix boilerplate stripping for user messages in request
+    let mut user_indices = Vec::new();
+    let mut user_texts = Vec::new();
+    for (idx, msg) in req.messages.iter().enumerate() {
+        if msg.role == "user" {
+            if let Some(text) = msg.content.as_str() {
+                user_indices.push(idx);
+                user_texts.push(text.to_string());
+            }
+        }
+    }
+
+    if user_texts.len() >= 2 {
+        let mut common_suffix = user_texts[0].clone();
+        for text in &user_texts[1..] {
+            common_suffix = longest_common_suffix(&common_suffix, text);
+        }
+        let mut common_prefix = user_texts[0].clone();
+        for text in &user_texts[1..] {
+            common_prefix = longest_common_prefix(&common_prefix, text);
+        }
+
+        let suffix_len = common_suffix.chars().count();
+        let prefix_len = common_prefix.chars().count();
+
+        // Only strip if the boilerplate is substantial (e.g. > 60 characters)
+        let should_strip_suffix = suffix_len > 60;
+        let should_strip_prefix = prefix_len > 60;
+
+        if should_strip_suffix || should_strip_prefix {
+            for idx in user_indices {
+                if let Some(text) = req.messages[idx].content.as_str() {
+                    let mut cleaned = text.to_string();
+                    if should_strip_prefix && cleaned.starts_with(&common_prefix) {
+                        cleaned = cleaned[common_prefix.len()..].to_string();
+                    }
+                    if should_strip_suffix && cleaned.ends_with(&common_suffix) {
+                        let len = cleaned.chars().count();
+                        cleaned = cleaned.chars().take(len - suffix_len).collect::<String>();
+                    }
+                    req.messages[idx].content =
+                        serde_json::Value::String(cleaned.trim().to_string());
+                }
+            }
+        }
+    }
+
     debug!(
         ">>> MIVI REQUEST: model={:?} stream={:?} msgs={} tools={}",
         req.model,
@@ -2484,8 +2669,6 @@ pub async fn handle_chat_completions(
     let now = unix_timestamp();
     let include_usage = include_stream_usage(&req);
     let target_model = req.model.clone().unwrap_or_else(|| MODEL_NAME.to_string());
-
-
 
     let tool_selection = select_tools_for_request(&req);
     let selected_tool_names = tool_names(&tool_selection.selected);
@@ -3907,8 +4090,8 @@ mod tests {
         assert!(prompt.contains(
             "Current prompt exposes 1 selected callable tool schemas: agent_capabilities"
         ));
-        assert!(prompt.contains("Function: agent_capabilities"));
-        assert!(!prompt.contains("Function: read"));
+        assert!(prompt.contains("- name: agent_capabilities"));
+        assert!(!prompt.contains("- name: read"));
     }
 
     #[test]
@@ -3950,7 +4133,7 @@ mod tests {
 
         let prompt = build_chat_prompt(&req);
 
-        assert!(prompt.contains("Function: apply_patch"));
+        assert!(prompt.contains("- name: apply_patch"));
         assert!(!prompt.contains("irrelevant_tool_17"));
     }
 
@@ -4393,9 +4576,12 @@ Hello!"
         let prompt = build_chat_prompt(&req);
 
         assert!(prompt.contains("Tool context broker selected 1 tool"));
-        assert!(prompt.contains("Function: bash - Run a shell command | params: cmd, timeout"));
+        assert!(prompt.contains("- name: bash"));
+        assert!(prompt.contains("description: Run a shell command"));
+        assert!(prompt.contains(
+            "parameters: cmd (string: command to run), timeout (number: timeout seconds)"
+        ));
         assert!(!prompt.contains("properties"));
-        assert!(!prompt.contains("description\":\"command to run"));
     }
 
     #[test]
@@ -4585,6 +4771,7 @@ Hello!"
                     context_tokens: 1024,
                     gpu_layers: "0".to_string(),
                     idle_secs: 10,
+                    threads: 2,
                 },
             )),
             native: crate::native_brain::NativeBrain::new(),

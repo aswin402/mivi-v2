@@ -73,7 +73,22 @@ fn apply_reasoning_directive(prompt: &str) -> String {
     if trimmed.starts_with("/think") || trimmed.starts_with("/no_think") {
         prompt.to_string()
     } else {
-        format!("{}\n{}", reasoning_directive(prompt), prompt)
+        let is_qwen = if let Ok(catalog) = crate::model_catalog::ModelCatalog::load_default() {
+            catalog
+                .models
+                .iter()
+                .find(|m| m.role == crate::model_catalog::ModelRole::Reasoner)
+                .map(|m| m.path.to_lowercase().contains("qwen"))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        if is_qwen {
+            format!("{}\n{}", reasoning_directive(prompt), prompt)
+        } else {
+            prompt.to_string()
+        }
     }
 }
 
@@ -110,7 +125,21 @@ pub fn split_prompt_system_user(prompt: &str) -> (String, String) {
     let mut system_parts = Vec::new();
     let mut user_parts = Vec::new();
 
-    for section in prompt.split("\n\n") {
+    let mut directive = None;
+    let mut cleaned_prompt = prompt;
+    let trimmed_prompt = prompt.trim_start();
+    if trimmed_prompt.starts_with("/think") {
+        directive = Some("/think");
+        cleaned_prompt = trimmed_prompt.strip_prefix("/think").unwrap().trim_start();
+    } else if trimmed_prompt.starts_with("/no_think") {
+        directive = Some("/no_think");
+        cleaned_prompt = trimmed_prompt
+            .strip_prefix("/no_think")
+            .unwrap()
+            .trim_start();
+    }
+
+    for section in cleaned_prompt.split("\n\n") {
         let trimmed = section.trim();
         if trimmed.is_empty() {
             continue;
@@ -123,8 +152,16 @@ pub fn split_prompt_system_user(prompt: &str) -> (String, String) {
         }
     }
 
-    let system_str = system_parts.join("\n\n");
+    let mut system_str = system_parts.join("\n\n");
     let user_str = user_parts.join("\n\n");
+
+    if let Some(dir) = directive {
+        if !system_str.is_empty() {
+            system_str = format!("{}\n{}", dir, system_str);
+        } else {
+            system_str = dir.to_string();
+        }
+    }
 
     (system_str, user_str)
 }
@@ -276,14 +313,30 @@ impl EdgeBrain {
             .unwrap_or_else(|| llama_cli.clone());
 
         let models_dir = base_dir.join("models");
-        let llama_path = model_path_from_env(
-            "MIVI_REASONER_MODEL",
-            models_dir.join("Llama-3.2-1B-Instruct-IQ3_M.gguf"),
-        );
-        let qwen_path = model_path_from_env(
-            "MIVI_CODER_MODEL",
-            models_dir.join("Llama-3.2-1B-Instruct-IQ3_M.gguf"),
-        );
+        let default_reasoner = if models_dir
+            .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
+            .exists()
+        {
+            "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+        } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
+            "Qwen3-1.7B-Q2_K.gguf"
+        } else {
+            "Llama-3.2-1B-Instruct-IQ3_M.gguf"
+        };
+        let default_coder = if models_dir
+            .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
+            .exists()
+        {
+            "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+        } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
+            "Qwen3-1.7B-Q2_K.gguf"
+        } else {
+            "Llama-3.2-1B-Instruct-IQ3_M.gguf"
+        };
+
+        let llama_path =
+            model_path_from_env("MIVI_REASONER_MODEL", models_dir.join(default_reasoner));
+        let qwen_path = model_path_from_env("MIVI_CODER_MODEL", models_dir.join(default_coder));
         let minicpm_path = model_path_from_env(
             "MIVI_VISION_MODEL",
             models_dir.join("MiniCPM-V-4.6-Q4_K_M.gguf"),
@@ -432,7 +485,11 @@ impl EdgeBrain {
             .arg(temp)
             .arg("--simple-io")
             .arg("--no-display-prompt")
-            .arg("-st");
+            .arg("-st")
+            .arg("-t")
+            .arg(runtime_config.threads.to_string())
+            .arg("-tb")
+            .arg(runtime_config.threads.to_string());
 
         if self.ultra_low_ram {
             cmd.arg("--mmap");
@@ -606,7 +663,11 @@ impl EdgeBrain {
             .arg("-ctv")
             .arg(&runtime_config.kv_cache_type)
             .arg("-f")
-            .arg(&prompt_file);
+            .arg(&prompt_file)
+            .arg("-t")
+            .arg(runtime_config.threads.to_string())
+            .arg("-tb")
+            .arg(runtime_config.threads.to_string());
 
         let temp_str = temp.unwrap_or(0.2).to_string();
         cmd.arg("--temp").arg(&temp_str);
@@ -759,17 +820,32 @@ mod tests {
 
     #[test]
     fn clean_response_uses_last_assistant_marker() {
-        let stdout = "<|im_start|>system\nctx<|im_end|>\n<|im_start|>assistant\nechoed old answer<|im_end|>\n<|im_start|>assistant\nfinal answer\n[ Prompt: 12 tokens]";
+        let t = crate::server::active_chat_template();
+        let assistant_start = t.assistant_start.trim();
+        let stop_word = t
+            .stop_words
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("<|im_end|>");
+        let stdout = format!(
+            "system\nctx\n{}echoed old answer{}\n{}final answer\n[ Prompt: 12 tokens]",
+            assistant_start, stop_word, assistant_start
+        );
 
-        assert_eq!(clean_llama_cli_response(stdout), "final answer");
+        assert_eq!(clean_llama_cli_response(&stdout), "final answer");
     }
 
     #[test]
     fn clean_response_strips_end_token() {
-        assert_eq!(
-            clean_llama_cli_response("<|im_start|>assistant\nHello<|im_end|>"),
-            "Hello"
-        );
+        let t = crate::server::active_chat_template();
+        let assistant_start = t.assistant_start.trim();
+        let stop_word = t
+            .stop_words
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("<|im_end|>");
+        let input = format!("{}Hello{}", assistant_start, stop_word);
+        assert_eq!(clean_llama_cli_response(&input), "Hello");
     }
 
     #[test]
@@ -877,5 +953,17 @@ Debug it."
         assert!(!usr.contains("Agent contract:"));
         assert!(usr.contains("Current user request:"));
         assert!(usr.contains("hii"));
+
+        // With /no_think prefix
+        let prompt_with_directive = "/no_think\nAgent contract:\n- Do not expose worker name.\n\nSystem instructions:\nYou are OpenZ.\n\nRelevant recent context:\nHello.\n\nCurrent user request:\nhii";
+        let (sys2, usr2) = split_prompt_system_user(prompt_with_directive);
+        assert!(sys2.starts_with("/no_think"));
+        assert!(sys2.contains("Agent contract:"));
+        assert!(sys2.contains("System instructions:"));
+        assert!(!sys2.contains("Current user request:"));
+        assert!(!usr2.contains("/no_think"));
+        assert!(!usr2.contains("Agent contract:"));
+        assert!(usr2.contains("Current user request:"));
+        assert!(usr2.contains("hii"));
     }
 }
