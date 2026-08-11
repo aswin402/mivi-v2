@@ -106,6 +106,29 @@ pub(crate) fn strip_think_blocks(text: &str) -> String {
     strip_delimited_block(&without_bracketed, "start thinking", "end thinking")
 }
 
+pub fn split_prompt_system_user(prompt: &str) -> (String, String) {
+    let mut system_parts = Vec::new();
+    let mut user_parts = Vec::new();
+
+    for section in prompt.split("\n\n") {
+        let trimmed = section.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.starts_with("Agent contract:") || trimmed.starts_with("System instructions:") {
+            system_parts.push(trimmed.to_string());
+        } else {
+            user_parts.push(trimmed.to_string());
+        }
+    }
+
+    let system_str = system_parts.join("\n\n");
+    let user_str = user_parts.join("\n\n");
+
+    (system_str, user_str)
+}
+
 #[allow(dead_code)]
 fn clean_llama_cli_response(stdout: &str) -> String {
     let t = crate::server::active_chat_template();
@@ -353,13 +376,29 @@ impl EdgeBrain {
         }
 
         let t = crate::server::active_chat_template();
+        let (extracted_system, extracted_user) = split_prompt_system_user(prompt);
+        let final_system = if extracted_system.is_empty() {
+            system_prompt.to_string()
+        } else {
+            if system_prompt.trim().is_empty() {
+                extracted_system
+            } else {
+                format!("{}\n\n{}", system_prompt.trim(), extracted_system)
+            }
+        };
+        let final_user = if extracted_user.is_empty() {
+            prompt.to_string()
+        } else {
+            extracted_user
+        };
+
         let formatted_prompt = format!(
             "{}{}{}{}{}{}{}",
             t.system_prefix,
-            system_prompt,
+            final_system,
             t.system_suffix,
             t.user_prefix,
-            prompt,
+            final_user,
             t.user_suffix,
             t.assistant_start
         );
@@ -825,5 +864,17 @@ Debug it."
             scrub_generated_prompt_echo(leaked),
             "To fix it, remove the broken cache directory."
         );
+    }
+
+    #[test]
+    fn test_split_prompt_system_user() {
+        let prompt = "Agent contract:\n- Do not expose worker name.\n\nSystem instructions:\nYou are OpenZ.\n\nRelevant recent context:\nHello.\n\nCurrent user request:\nhii";
+        let (sys, usr) = split_prompt_system_user(prompt);
+        assert!(sys.contains("Agent contract:"));
+        assert!(sys.contains("System instructions:"));
+        assert!(!sys.contains("Current user request:"));
+        assert!(!usr.contains("Agent contract:"));
+        assert!(usr.contains("Current user request:"));
+        assert!(usr.contains("hii"));
     }
 }
