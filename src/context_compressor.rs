@@ -70,13 +70,33 @@ pub fn compress_context(messages: &[ChatMessage], budget: ContextBudget) -> Comp
         format!("Dropped {dropped} low-value or injected context messages.")
     };
 
+    let system_raw = system_parts.join("\n");
+    let system_pruned = prune_system_message(&system_raw);
+    let system_final = truncate_chars(&system_pruned, budget.max_input_tokens);
+
     CompressedContext {
-        system: truncate_chars(&system_parts.join("\n"), budget.max_input_tokens),
+        system: system_final,
         protected_recent,
         tool_observations,
         summary,
         original_user_request,
     }
+}
+
+pub fn prune_system_message(system_text: &str) -> String {
+    let mut kept_lines = Vec::new();
+    for line in system_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Version history:")
+            || trimmed.starts_with("### v")
+            || trimmed.starts_with("Changelog:")
+            || trimmed.starts_with("Release Notes:")
+        {
+            break;
+        }
+        kept_lines.push(line);
+    }
+    kept_lines.join("\n").trim().to_string()
 }
 
 pub fn render_context_prompt(compressed: &CompressedContext, latest_user_prompt: &str) -> String {
@@ -429,5 +449,15 @@ Your agent has tools.",
 
         assert!(prompt.contains("Original User Request (Goal):"));
         assert!(prompt.contains("Write a pure Rust compiler engine"));
+    }
+
+    #[test]
+    fn test_prune_system_message() {
+        let system_text = "System instructions:\nYou are Noz.\n\nCreator: Aswin\n\nVersion history:\n### v0.0.126\nAdded features\n### v0.0.125\nMore features";
+        let pruned = prune_system_message(system_text);
+        assert!(pruned.contains("System instructions:"));
+        assert!(pruned.contains("Creator: Aswin"));
+        assert!(!pruned.contains("Version history:"));
+        assert!(!pruned.contains("v0.0.126"));
     }
 }
