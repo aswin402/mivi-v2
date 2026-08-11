@@ -2564,55 +2564,56 @@ pub async fn handle_chat_completions(
                 system_fingerprint: Some("fp_mivi".to_string()),
             })
             .into_response();
-        }
-
-        // No tool calls — fall through to normal response with the text.
-        let final_text = response_text;
-        let chosen_model = MODEL_NAME.to_string();
-        let _ = trace_event(
-            &trace,
-            serde_json::json!({
-                "kind": "final_response",
-                "route": "tool_text_fallback",
-                "finish_reason": if req.stream.unwrap_or(false) { "stream" } else { "stop" },
-                "response_chars": final_text.chars().count()
-            }),
-        );
-        if req.stream.unwrap_or(false) {
-            return stream_text_response(
-                final_text.clone(),
-                now,
-                agent_reasoning_summary(&req, &latest_user_prompt, "tool_text_fallback"),
-                include_usage.then(|| estimated_usage_for_text(&req, &final_text)),
-                permit,
-            )
+        } else if !response_text.is_empty() {
+            // No tool calls but we have text response — return it.
+            let final_text = response_text;
+            let chosen_model = MODEL_NAME.to_string();
+            let _ = trace_event(
+                &trace,
+                serde_json::json!({
+                    "kind": "final_response",
+                    "route": "tool_text_fallback",
+                    "finish_reason": if req.stream.unwrap_or(false) { "stream" } else { "stop" },
+                    "response_chars": final_text.chars().count()
+                }),
+            );
+            if req.stream.unwrap_or(false) {
+                return stream_text_response(
+                    final_text.clone(),
+                    now,
+                    agent_reasoning_summary(&req, &latest_user_prompt, "tool_text_fallback"),
+                    include_usage.then(|| estimated_usage_for_text(&req, &final_text)),
+                    permit,
+                )
+                .into_response();
+            }
+            return Json(ChatCompletionResponse {
+                id: format!("chatcmpl-v2-{}", now),
+                object: "chat.completion".to_string(),
+                created: now,
+                model: chosen_model,
+                usage: Some(estimated_usage_for_text(&req, &final_text)),
+                choices: vec![ChoiceOut {
+                    index: 0,
+                    message: ChatMessageOut {
+                        role: "assistant".to_string(),
+                        content: final_text,
+                        refusal: None,
+                        reasoning_content: agent_reasoning_summary(
+                            &req,
+                            &latest_user_prompt,
+                            "tool_text_fallback",
+                        ),
+                        tool_calls: None,
+                    },
+                    logprobs: None,
+                    finish_reason: "stop".to_string(),
+                }],
+                system_fingerprint: Some("fp_mivi".to_string()),
+            })
             .into_response();
         }
-        return Json(ChatCompletionResponse {
-            id: format!("chatcmpl-v2-{}", now),
-            object: "chat.completion".to_string(),
-            created: now,
-            model: chosen_model,
-            usage: Some(estimated_usage_for_text(&req, &final_text)),
-            choices: vec![ChoiceOut {
-                index: 0,
-                message: ChatMessageOut {
-                    role: "assistant".to_string(),
-                    content: final_text,
-                    refusal: None,
-                    reasoning_content: agent_reasoning_summary(
-                        &req,
-                        &latest_user_prompt,
-                        "tool_text_fallback",
-                    ),
-                    tool_calls: None,
-                },
-                logprobs: None,
-                finish_reason: "stop".to_string(),
-            }],
-            system_fingerprint: Some("fp_mivi".to_string()),
-        })
-        .into_response();
+        // Both empty — fall through to regular chat path!
     }
 
     // ── Non-tool path (existing logic) ───────────────────────────────
