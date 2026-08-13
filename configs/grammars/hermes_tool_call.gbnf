@@ -1,7 +1,10 @@
 # GBNF Grammar for Nous Hermes tool calling format (minified JSON, no whitespace)
 # Enforces `<tool_call>{"name": "...", "arguments": {...}}</tool_call>`
 
-root ::= toolcall
+root ::= (thinkblock ws)? toolcall
+
+thinkblock ::= "<think>" [^<]* "</think>"
+ws ::= [ \t\n\r]*
 
 toolcall ::= "<tool_call>" jsonobject "</tool_call>"
 

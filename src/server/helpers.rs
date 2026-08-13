@@ -27,6 +27,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::brain::EdgeBrain;
 use crate::context_compressor::{compress_context, render_context_prompt};
+#[allow(unused_imports)]
 use crate::model_process::spawn_streaming;
 use crate::okf_memory::load_memory_dir;
 use crate::orchestrator::AgentOrchestrator;
@@ -119,6 +120,7 @@ pub trait TokenCounter {
     fn count_tokens(&self, text: &str) -> u32;
 }
 
+#[allow(dead_code)]
 pub fn count_with_llama_cpp_tokenizer(command: &Path, model: &Path, text: &str) -> Option<u32> {
     let output = Command::new(command)
         .arg("--model")
@@ -395,15 +397,72 @@ pub fn responses_response_from_chat(chat: ChatCompletionResponse) -> ResponsesRe
 // ──────────────────────────────────────────────
 
 pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
+    let config = RuntimeConfig::from_env();
+
+    // Check if total token count of messages exceeds 80% of max_input_tokens
+    let total_tokens = req
+        .messages
+        .iter()
+        .map(|m| {
+            let text = value_text_for_usage(&m.content);
+            crate::tokenizer::count_tokens(&text) as usize
+        })
+        .sum::<usize>();
+
+    let compressed_messages = if total_tokens > (config.context.max_input_tokens * 80 / 100) {
+        crate::context_compressor::compress_request_messages(&req.messages, config.context)
+    } else {
+        // Strip think blocks from past assistant turns
+        req.messages
+            .iter()
+            .map(|m| {
+                let mut new_m = m.clone();
+                if new_m.role == "assistant" {
+                    if let Some(text) = new_m.content.as_str() {
+                        let cleaned = crate::brain::strip_think_blocks(text);
+                        new_m.content = serde_json::json!(cleaned);
+                    }
+                }
+                new_m
+            })
+            .collect()
+    };
+
     let t = active_chat_template();
     let mut prompt = String::new();
-    let prompt_tools = prompt_tools_for_request(req);
+
+    // Estimate message token cost first
+    let message_cost: usize = compressed_messages
+        .iter()
+        .map(|m| {
+            let text = if m.role == "user" {
+                extract_user_text(m)
+            } else {
+                m.content.as_str().unwrap_or("").to_string()
+            };
+            text.len() / 4 + 20 // +20 for role markers/template overhead
+        })
+        .sum();
+
+    // Reserve space: 350 tokens for agent contract / response headroom
+    let budget = config.context.max_input_tokens;
+    let remaining_for_tools = budget.saturating_sub(message_cost + 350);
+
+    let all_tools = prompt_tools_for_request(req);
+    // Budget-aware tool selection: each tool schema is estimated to be ~300 tokens
+    let max_tools_by_budget = remaining_for_tools / 300;
+    let prompt_tools = if all_tools.len() > max_tools_by_budget {
+        all_tools.into_iter().take(max_tools_by_budget).collect()
+    } else {
+        all_tools
+    };
+
     let agent_contract = agent_contract_prompt_for_tools(&prompt_tools);
     let func_block = build_function_list_block(&prompt_tools);
 
-    let has_user_system = req.messages.iter().any(|m| m.role == "system");
+    let has_user_system = compressed_messages.iter().any(|m| m.role == "system");
     if has_user_system {
-        for msg in &req.messages {
+        for msg in &compressed_messages {
             if msg.role == "system" {
                 if let Some(text) = msg.content.as_str() {
                     if !text.is_empty() {
@@ -425,9 +484,9 @@ pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
 
     // Conversation turns.
     let has_tools = !prompt_tools.is_empty();
-    let last_user_pos = req.messages.iter().rposition(|m| m.role == "user");
+    let last_user_pos = compressed_messages.iter().rposition(|m| m.role == "user");
 
-    for (idx, msg) in req.messages.iter().enumerate() {
+    for (idx, msg) in compressed_messages.iter().enumerate() {
         match msg.role.as_str() {
             "user" => {
                 let text = extract_user_text(msg);
@@ -514,6 +573,25 @@ pub fn select_tools_for_request(req: &ChatCompletionRequest) -> ToolSelection {
         };
     }
 
+    if let Some(serde_json::Value::Object(ref obj)) = req.tool_choice {
+        if let Some(serde_json::Value::Object(ref func)) = obj.get("function") {
+            if let Some(serde_json::Value::String(ref name)) = func.get("name") {
+                let matched: Vec<ToolDef> = tools
+                    .iter()
+                    .filter(|t| t.function.name == *name)
+                    .cloned()
+                    .collect();
+                if !matched.is_empty() {
+                    return ToolSelection {
+                        intent: AgentIntent::ToolCall,
+                        selected: matched,
+                        blocked: Vec::new(),
+                    };
+                }
+            }
+        }
+    }
+
     let decision = agent_decision_from_request(req);
     if decision.needs_tool() {
         return ToolSelection {
@@ -528,7 +606,8 @@ pub fn select_tools_for_request(req: &ChatCompletionRequest) -> ToolSelection {
         if !inv.selected.is_empty() {
             return inv;
         }
-        // No inventory tool found — fall through to general fallback
+        // No inventory tool found — return empty to fall through to regular chat
+        return ToolSelection::empty(intent);
     }
 
     // Score-based filtering for relevance.
@@ -684,13 +763,13 @@ pub fn build_function_list_block(tools: &[ToolDef]) -> String {
 
     let example_response = if tool_format == "hermes" {
         format!(
-            "<tool_call>{{\n  \"name\": \"{name}\",\n  \"arguments\": {ex_args_str}\n}}</tool_call>",
+            "<tool_call>{{\"name\": \"{name}\", \"arguments\": {ex_args_str}}}</tool_call>",
             name = first_tool.name,
             ex_args_str = ex_args_str
         )
     } else {
         format!(
-            "{{\n  \"tool_calls\": [\n    {{\n      \"id\": \"call_abc123\",\n      \"type\": \"function\",\n      \"function\": {{\n        \"name\": \"{name}\",\n        \"arguments\": {ex_args_str}\n      }}\n    }}\n  ]\n}}",
+            "{{\"tool_calls\": [{{\"id\": \"call_abc123\", \"type\": \"function\", \"function\": {{\"name\": \"{name}\", \"arguments\": {ex_args_str}}}}}]}}",
             name = first_tool.name,
             ex_args_str = ex_args_str
         )
@@ -703,6 +782,18 @@ pub fn build_function_list_block(tools: &[ToolDef]) -> String {
 
     for tool in tools {
         let f = &tool.function;
+        let required_fields: std::collections::HashSet<String> = f
+            .parameters
+            .as_ref()
+            .and_then(|params| params.get("required"))
+            .and_then(|req| req.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let param_keys = f
             .parameters
             .as_ref()
@@ -715,27 +806,23 @@ pub fn build_function_list_block(tools: &[ToolDef]) -> String {
                         .get("type")
                         .and_then(|t| t.as_str())
                         .unwrap_or("string");
-                    let p_desc = prop
-                        .get("description")
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("");
-                    if p_desc.is_empty() {
-                        details.push(format!("{} ({})", name, p_type));
-                    } else {
-                        details.push(format!("{} ({}: {})", name, p_type, p_desc));
-                    }
+                    let is_required = required_fields.contains(name);
+                    let optional_marker = if is_required { "" } else { "?" };
+                    details.push(format!("{}{}: {}", name, optional_marker, p_type));
                 }
                 details.sort();
                 details.join(", ")
             })
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "none".to_string());
-        block.push_str(&format!(
-            "- name: {}\n  description: {}\n  parameters: {}\n",
-            f.name,
-            f.description.as_deref().unwrap_or(""),
-            param_keys
-        ));
+            .unwrap_or_else(|| "".to_string());
+
+        let desc_suffix = f
+            .description
+            .as_deref()
+            .map(|d| format!(" - {}", d))
+            .unwrap_or_default();
+
+        block.push_str(&format!("TOOL {}({}){}\n", f.name, param_keys, desc_suffix));
     }
 
     block.push_str(&format!(
@@ -1309,11 +1396,22 @@ pub async fn model_prompt_from_request(
 ) -> String {
     let config = RuntimeConfig::from_env();
     let compressed = compress_context(&req.messages, config.context);
-    let memories =
+    let all_memories =
         tokio::task::spawn_blocking(|| load_memory_dir(Path::new("memory")).unwrap_or_default())
             .await
             .unwrap_or_default();
-    let workspace_rag = if should_include_workspace_rag(latest_user_prompt) {
+    let router_class = state.router.classify_intent_nb(latest_user_prompt).0;
+    let is_chat = router_class == "CHAT";
+    let is_code_or_multistep = router_class == "CODE" || router_class == "MULTI_STEP";
+    let has_tools = req.tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
+
+    // Limit memory count for simple chat to save prompt space and CPU
+    let memory_limit = if is_chat && !has_tools { 2 } else { 4 };
+    let memories =
+        crate::okf_memory::search_memories(&all_memories, latest_user_prompt, memory_limit);
+
+    let workspace_rag = if should_include_workspace_rag(latest_user_prompt) || is_code_or_multistep
+    {
         state
             .orchestrator
             .rag
@@ -1442,6 +1540,8 @@ pub fn parse_tool_calls(text: &str) -> Vec<ToolCallOut> {
     calls
 }
 
+static TOOL_CALL_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1000);
+
 pub fn parse_single_tool_call_value(val: &serde_json::Value) -> Option<ToolCallOut> {
     let obj = val.as_object()?;
 
@@ -1449,6 +1549,7 @@ pub fn parse_single_tool_call_value(val: &serde_json::Value) -> Option<ToolCallO
     let name = obj
         .get("name")
         .and_then(|value| value.as_str())
+        .or_else(|| obj.get("tool").and_then(|value| value.as_str()))
         .or_else(|| obj.get("function").and_then(|value| value.as_str()))
         .or_else(|| {
             function_obj
@@ -1461,8 +1562,9 @@ pub fn parse_single_tool_call_value(val: &serde_json::Value) -> Option<ToolCallO
         .or_else(|| function_obj.and_then(|function| function.get("arguments")));
     let arguments = normalize_tool_arguments(arguments_value)?;
 
+    let count = TOOL_CALL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Some(ToolCallOut {
-        id: format!("call_{}", name),
+        id: format!("call_{}", count),
         r#type: "function".to_string(),
         function: FunctionCallOut {
             name: name.to_string(),
@@ -1472,8 +1574,28 @@ pub fn parse_single_tool_call_value(val: &serde_json::Value) -> Option<ToolCallO
 }
 
 pub fn parse_single_tool_call(json_str: &str) -> Option<ToolCallOut> {
-    let val: serde_json::Value = serde_json::from_str(json_str).ok()?;
-    parse_single_tool_call_value(&val)
+    let mut fixed = json_str.trim().to_string();
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&fixed) {
+        return parse_single_tool_call_value(&val);
+    }
+
+    // Try basic JSON healing
+    fixed = fixed.replace(",}", "}");
+    fixed = fixed.replace(",]", "]");
+
+    let open_braces = fixed.chars().filter(|&c| c == '{').count();
+    let close_braces = fixed.chars().filter(|&c| c == '}').count();
+    if open_braces > close_braces {
+        for _ in 0..(open_braces - close_braces) {
+            fixed.push('}');
+        }
+    }
+
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&fixed) {
+        return parse_single_tool_call_value(&val);
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -1498,26 +1620,129 @@ pub fn required_tool_args(tool: &ToolDef) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn call_has_required_args(call: &ToolCallOut, tool: &ToolDef) -> bool {
-    let required = required_tool_args(tool);
-    if required.is_empty() {
-        return true;
+fn check_value_type(value: &serde_json::Value, expected_type: &str) -> bool {
+    match expected_type {
+        "null" => value.is_null(),
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => {
+            value.is_number() && (!value.is_f64() || value.as_f64().unwrap().fract() == 0.0)
+        }
+        "boolean" => value.is_boolean(),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        _ => true,
     }
-    let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.function.arguments) else {
-        return false;
+}
+
+fn validate_value_against_schema(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> Result<(), String> {
+    let Some(schema_obj) = schema.as_object() else {
+        return Ok(());
     };
-    let Some(obj) = args.as_object() else {
-        return false;
+
+    if let Some(type_val) = schema_obj.get("type") {
+        let is_valid_type = match type_val {
+            serde_json::Value::String(expected_type) => check_value_type(value, expected_type),
+            serde_json::Value::Array(types_arr) => types_arr.iter().any(|t| {
+                if let Some(t_str) = t.as_str() {
+                    check_value_type(value, t_str)
+                } else {
+                    false
+                }
+            }),
+            _ => true,
+        };
+        if !is_valid_type {
+            return Err(format!(
+                "Value {} does not match type {:?}",
+                value, type_val
+            ));
+        }
+    }
+
+    if value.is_array() {
+        if let Some(items_schema) = schema_obj.get("items") {
+            if let Some(arr) = value.as_array() {
+                for (idx, item) in arr.iter().enumerate() {
+                    validate_value_against_schema(item, items_schema)
+                        .map_err(|e| format!("At index {}: {}", idx, e))?;
+                }
+            }
+        }
+    }
+
+    if value.is_object() {
+        if let Some(obj) = value.as_object() {
+            if let Some(serde_json::Value::Array(required_fields)) = schema_obj.get("required") {
+                for req_field in required_fields {
+                    if let Some(req_str) = req_field.as_str() {
+                        if !obj.contains_key(req_str) {
+                            return Err(format!("Missing required property '{}'", req_str));
+                        }
+                    }
+                }
+            }
+            if let Some(properties) = schema_obj.get("properties").and_then(|p| p.as_object()) {
+                for (prop_name, prop_val) in obj {
+                    if let Some(prop_schema) = properties.get(prop_name) {
+                        validate_value_against_schema(prop_val, prop_schema)
+                            .map_err(|e| format!("In property '{}': {}", prop_name, e))?;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(serde_json::Value::Array(enum_values)) = schema_obj.get("enum") {
+        if !enum_values.contains(value) {
+            return Err(format!(
+                "Value {} is not one of the allowed enums {:?}",
+                value, enum_values
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_tool_call_arguments(call: &ToolCallOut, tool: &ToolDef) -> Result<(), String> {
+    let required = required_tool_args(tool);
+    let args_val = if call.function.arguments.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+            .map_err(|e| format!("Invalid JSON arguments: {}", e))?
     };
-    required.iter().all(|key| {
-        obj.get(key)
-            .map(|value| match value {
-                serde_json::Value::Null => false,
-                serde_json::Value::String(text) => !text.trim().is_empty(),
-                _ => true,
-            })
-            .unwrap_or(false)
-    })
+
+    let Some(args_obj) = args_val.as_object() else {
+        return Err("Arguments must be a JSON object".to_string());
+    };
+
+    for req_field in required {
+        if !args_obj.contains_key(&req_field) {
+            return Err(format!("Missing required property '{}'", req_field));
+        }
+        if let Some(val) = args_obj.get(&req_field) {
+            if let Some(s) = val.as_str() {
+                if s.trim().is_empty() {
+                    return Err(format!("Required property '{}' cannot be empty", req_field));
+                }
+            }
+        }
+    }
+
+    if let Some(ref schema) = tool.function.parameters {
+        validate_value_against_schema(&args_val, schema)?;
+    }
+
+    Ok(())
+}
+
+pub fn call_has_required_args(call: &ToolCallOut, tool: &ToolDef) -> bool {
+    validate_tool_call_arguments(call, tool).is_ok()
 }
 
 pub fn validate_tool_calls_for_tools(
@@ -1605,10 +1830,45 @@ pub fn repair_tool_argument_string(text: &str) -> Option<String> {
         return value.as_object().map(|_| value.to_string());
     }
 
-    if trimmed.contains('\'') && !trimmed.contains('"') {
-        let repaired = trimmed.replace('\'', "\"");
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&repaired) {
-            return value.as_object().map(|_| value.to_string());
+    let mut fixed = trimmed.to_string();
+
+    // Strip markdown code fences
+    if fixed.contains("```") {
+        fixed = fixed
+            .replace("```json", "")
+            .replace("```JSON", "")
+            .replace("```", "");
+        fixed = fixed.trim().to_string();
+    }
+
+    // Replace single quotes with double quotes
+    if !fixed.contains('"') && fixed.contains('\'') {
+        fixed = fixed.replace('\'', "\"");
+    }
+
+    // Remove trailing commas before } or ]
+    if let Ok(re) = regex::Regex::new(r",\s*([}\]])") {
+        fixed = re.replace_all(&fixed, "$1").to_string();
+    }
+
+    // Try parsing the fixed version
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&fixed) {
+        return value.as_object().map(|_| value.to_string());
+    }
+
+    // Try wrapping in braces
+    let wrapped = format!("{{{}}}", fixed.trim());
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&wrapped) {
+        return value.as_object().map(|_| value.to_string());
+    }
+
+    // Last resort: try to extract first JSON object
+    if let Some(start) = fixed.find('{') {
+        if let Some(end) = fixed.rfind('}') {
+            let substr = &fixed[start..=end];
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(substr) {
+                return value.as_object().map(|_| value.to_string());
+            }
         }
     }
 
@@ -1734,6 +1994,68 @@ pub fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
     }
 }
 
+/// Check if the request should proceed to the tool-calling generator or if it is simple chat.
+pub fn should_use_tool_path(req: &ChatCompletionRequest, latest_user_prompt: &str) -> bool {
+    if !has_tool_involvement(req) {
+        return false;
+    }
+
+    // Explicit tool_choice overrides
+    if let Some(serde_json::Value::String(choice)) = &req.tool_choice {
+        if choice == "required" {
+            return true;
+        }
+    }
+    if matches!(req.tool_choice, Some(serde_json::Value::Object(_))) {
+        return true;
+    }
+
+    // Check if prompt mentions any part of the available tool names
+    let mut mentions_any_tool = false;
+    if let Some(tools) = &req.tools {
+        let user_lower = latest_user_prompt.to_lowercase();
+        for tool in tools {
+            let name_lower = tool.function.name.to_lowercase();
+            if user_lower.contains(&name_lower) {
+                mentions_any_tool = true;
+                break;
+            }
+            for sub in name_lower.split(|c| c == '_' || c == '-') {
+                if sub.len() >= 3 && user_lower.contains(sub) {
+                    mentions_any_tool = true;
+                    break;
+                }
+            }
+            if mentions_any_tool {
+                break;
+            }
+        }
+    }
+
+    if mentions_any_tool {
+        return true;
+    }
+
+    let intent = classify_agent_intent(latest_user_prompt);
+    let prompt_lower = latest_user_prompt.to_lowercase();
+    let is_simple_chat = matches!(intent, AgentIntent::Chat)
+        && latest_user_prompt.len() < 100
+        && !prompt_lower.contains("tool")
+        && !prompt_lower.contains("call")
+        && !prompt_lower.contains("run")
+        && !prompt_lower.contains("execute")
+        && !prompt_lower.contains("search")
+        && !prompt_lower.contains("read")
+        && !prompt_lower.contains("write")
+        && !prompt_lower.contains("file")
+        && !prompt_lower.contains("open")
+        && !prompt_lower.contains("play")
+        && !prompt_lower.contains("use")
+        && !prompt_lower.contains("http");
+
+    !is_simple_chat
+}
+
 // ──────────────────────────────────────────────
 // Backend model calls
 // ──────────────────────────────────────────────
@@ -1762,9 +2084,17 @@ pub async fn reasoner_chat_with_params(
     temp: Option<f32>,
     top_p: Option<f32>,
     seed: Option<u64>,
+    max_tokens: Option<u32>,
 ) -> Result<(String, String), String> {
     let res = brain
-        .query_reasoner_with_params(user_prompt, MIVI_CHAT_SYSTEM_PROMPT, temp, top_p, seed)
+        .query_reasoner_with_params(
+            user_prompt,
+            MIVI_CHAT_SYSTEM_PROMPT,
+            temp,
+            top_p,
+            seed,
+            max_tokens,
+        )
         .await?;
     Ok((res, MODEL_NAME.to_string()))
 }
@@ -1772,7 +2102,14 @@ pub async fn reasoner_chat_with_params(
 /// One-shot coder call (spawns llama-cli per request).
 pub async fn code_chat(brain: &EdgeBrain, user_prompt: &str) -> Result<(String, String), String> {
     let res = brain
-        .query_coder(user_prompt, "You are a coding expert.")
+        .query_coder_with_params(
+            user_prompt,
+            "You are a coding expert.",
+            None,
+            None,
+            None,
+            None,
+        )
         .await?;
     Ok((res, MODEL_NAME.to_string()))
 }
@@ -1783,9 +2120,17 @@ pub async fn code_chat_with_params(
     temp: Option<f32>,
     top_p: Option<f32>,
     seed: Option<u64>,
+    max_tokens: Option<u32>,
 ) -> Result<(String, String), String> {
     let res = brain
-        .query_coder_with_params(user_prompt, "You are a coding expert.", temp, top_p, seed)
+        .query_coder_with_params(
+            user_prompt,
+            "You are a coding expert.",
+            temp,
+            top_p,
+            seed,
+            max_tokens,
+        )
         .await?;
     Ok((res, MODEL_NAME.to_string()))
 }
@@ -1949,44 +2294,13 @@ pub fn last_tool_result_is_error(req: &ChatCompletionRequest) -> bool {
     false
 }
 
-/// Generate tool calls: run the model with tool-aware prompt, parse tool calls.
-pub async fn generate_tool_calls(
+async fn query_model_for_tool_calls(
     brain: &EdgeBrain,
     req: &ChatCompletionRequest,
 ) -> Result<(Vec<ToolCallOut>, String), String> {
-    crate::stability::check_history_for_loops(&req.messages)?;
-
-    if last_tool_result_is_error(req) {
-        let final_content = append_tool_execution_summary(req, String::new());
-        return Ok((Vec::new(), final_content));
-    }
-
-    let trace = TraceConfig::from_env();
-    let selection = select_tools_for_request(req);
-    let selected_tools = selection.selected;
-
-    // If no tools matched the prompt, skip model call entirely.
-    // The caller will fall through to the regular chat path.
-    if selected_tools.is_empty() {
-        return Ok((Vec::new(), String::new()));
-    }
-
-    let selected_tool_names = tool_names(&selected_tools);
-    let selected_tool_roles = selected_tool_roles(&selected_tools);
-    let blocked_tools = blocked_tool_names(&selection.blocked);
-
     let runtime_config = RuntimeConfig::from_env();
     if runtime_config.uses_worker() {
         let prompt = build_chat_prompt(req);
-        info!(
-            "[MIVI-V2 Tool] ToolGen prompt: len={}, start={:?}, end={:?}",
-            prompt.len(),
-            prompt.chars().take(150).collect::<String>(),
-            prompt
-                .chars()
-                .skip(prompt.chars().count().saturating_sub(150))
-                .collect::<String>()
-        );
         let grammar_path = get_grammar_path(req);
         let grammar_content = grammar_path
             .as_ref()
@@ -2012,30 +2326,7 @@ pub async fn generate_tool_calls(
                 if let Some(content) = resp.get("content").and_then(|c| c.as_str()) {
                     let content_str = content.to_string();
                     let parsed_calls = parse_tool_calls(&content_str);
-                    let parsed_count = parsed_calls.len();
-                    let (calls, rejected_tool_calls) =
-                        validate_tool_calls_for_tools(parsed_calls, &selected_tools);
-
-                    let _ = trace_event(
-                        &trace,
-                        serde_json::json!({
-                            "kind": "tool_generation",
-                            "route": "worker_tool_raw",
-                            "agent_intent": selection.intent.as_str(),
-                            "selected_tools": selected_tool_names,
-                            "selected_tool_roles": selected_tool_roles,
-                            "blocked_tools": blocked_tools,
-                            "parsed_tool_calls": parsed_count,
-                            "accepted_tool_calls": call_names(&calls),
-                            "rejected_tool_calls": rejected_tool_calls
-                        }),
-                    );
-
-                    if !calls.is_empty() {
-                        return Ok((calls, String::new()));
-                    }
-                    let final_content = append_tool_execution_summary(req, content_str);
-                    return Ok((Vec::new(), final_content));
+                    return Ok((parsed_calls, content_str));
                 }
             }
             Err(err) => warn!("[MIVI-V2 Worker] ToolGen worker completion error: {}", err),
@@ -2043,43 +2334,138 @@ pub async fn generate_tool_calls(
     }
 
     let prompt = build_chat_prompt(req);
-    debug!("[MIVI-V2 ToolGen] Prompt length: {} chars", prompt.len());
-
     let raw = model_chat(brain, &prompt, req).await?;
-    let debug_preview = trace_preview(&raw, 200);
-    debug!(
-        "[MIVI-V2 ToolGen] Raw model output (truncated): {:?}",
-        debug_preview
-    );
-
-    // Parse, repair, and validate tool calls from output.
     let parsed_calls = parse_tool_calls(&raw);
-    let parsed_count = parsed_calls.len();
-    let (calls, rejected_tool_calls) = validate_tool_calls_for_tools(parsed_calls, &selected_tools);
-    let _ = trace_event(
-        &trace,
-        serde_json::json!({
-            "kind": "tool_generation",
-            "route": "model_tool",
-            "agent_intent": selection.intent.as_str(),
-            "prompt_chars": prompt.chars().count(),
-            "raw_preview": debug_preview,
-            "selected_tools": selected_tool_names,
-            "selected_tool_roles": selected_tool_roles,
-            "blocked_tools": blocked_tools,
-            "parsed_tool_calls": parsed_count,
-            "accepted_tool_calls": call_names(&calls),
-            "rejected_tool_calls": rejected_tool_calls
-        }),
-    );
+    Ok((parsed_calls, raw))
+}
 
-    if calls.is_empty() {
-        // No tool call detected — use raw output as content response.
-        let final_content = append_tool_execution_summary(req, raw);
-        Ok((Vec::new(), final_content))
-    } else {
-        Ok((calls, String::new()))
+/// Generate tool calls: run the model with tool-aware prompt, parse tool calls.
+pub async fn generate_tool_calls(
+    brain: &EdgeBrain,
+    req: &ChatCompletionRequest,
+) -> Result<(Vec<ToolCallOut>, String), String> {
+    crate::stability::check_history_for_loops(&req.messages)?;
+
+    let trace = TraceConfig::from_env();
+    let selection = select_tools_for_request(req);
+    let selected_tools = selection.selected;
+
+    // If no tools matched the prompt, skip model call entirely.
+    // The caller will fall through to the regular chat path.
+    if selected_tools.is_empty() {
+        return Ok((Vec::new(), String::new()));
     }
+
+    let selected_tool_names = tool_names(&selected_tools);
+    let selected_tool_roles = selected_tool_roles(&selected_tools);
+    let blocked_tools = blocked_tool_names(&selection.blocked);
+
+    let mut current_req = req.clone();
+    let mut attempts = 0;
+    let mut last_raw = String::new();
+
+    while attempts < 3 {
+        let (parsed_calls, raw) = query_model_for_tool_calls(brain, &current_req).await?;
+        last_raw = raw.clone();
+
+        if parsed_calls.is_empty() {
+            // Model generated text instead of tool calls — return it.
+            let final_content = append_tool_execution_summary(req, raw);
+            return Ok((Vec::new(), final_content));
+        }
+
+        // Validate tool calls (individual parameter checking)
+        let mut validation_errors = Vec::new();
+        let mut valid_calls = Vec::new();
+        for call in parsed_calls {
+            if let Some(tool) = selected_tools
+                .iter()
+                .find(|t| t.function.name == call.function.name)
+            {
+                match validate_tool_call_arguments(&call, tool) {
+                    Ok(_) => valid_calls.push(call),
+                    Err(err_msg) => {
+                        validation_errors.push((call, err_msg));
+                    }
+                }
+            } else {
+                validation_errors.push((
+                    call.clone(),
+                    format!("Unknown tool name '{}'", call.function.name),
+                ));
+            }
+        }
+
+        let parsed_count = valid_calls.len() + validation_errors.len();
+        let rejected_tool_calls = validation_errors.len();
+
+        let _ = trace_event(
+            &trace,
+            serde_json::json!({
+                "kind": "tool_generation",
+                "route": "loop_attempt",
+                "attempt": attempts + 1,
+                "agent_intent": selection.intent.as_str(),
+                "selected_tools": selected_tool_names,
+                "selected_tool_roles": selected_tool_roles,
+                "blocked_tools": blocked_tools,
+                "parsed_tool_calls": parsed_count,
+                "accepted_tool_calls": call_names(&valid_calls),
+                "rejected_tool_calls": rejected_tool_calls
+            }),
+        );
+
+        if validation_errors.is_empty() {
+            return Ok((valid_calls, String::new()));
+        }
+
+        // If there are validation errors, we append the invalid tool calls assistant message
+        // and the corresponding tool role error messages to current_req.messages, and try again!
+        let assistant_tool_calls: Vec<ToolCallIn> = valid_calls
+            .iter()
+            .chain(validation_errors.iter().map(|(c, _)| c))
+            .map(|call| ToolCallIn {
+                id: call.id.clone(),
+                r#type: call.r#type.clone(),
+                function: FunctionCallIn {
+                    name: call.function.name.clone(),
+                    arguments: call.function.arguments.clone(),
+                },
+            })
+            .collect();
+
+        let assistant_msg = ChatMessage {
+            role: "assistant".to_string(),
+            content: serde_json::Value::String(raw),
+            tool_call_id: None,
+            tool_calls: Some(assistant_tool_calls),
+        };
+        current_req.messages.push(assistant_msg);
+
+        for (call, err_msg) in &validation_errors {
+            let error_json = serde_json::json!({
+                "status": "error",
+                "message": format!("Validation error: {}", err_msg)
+            });
+            let tool_msg = ChatMessage {
+                role: "tool".to_string(),
+                content: serde_json::Value::String(error_json.to_string()),
+                tool_call_id: Some(call.id.clone()),
+                tool_calls: None,
+            };
+            current_req.messages.push(tool_msg);
+        }
+
+        attempts += 1;
+        info!(
+            "[MIVI-V2 ToolGen] Tool call failed validation. Retrying self-correction attempt {}/3",
+            attempts
+        );
+    }
+
+    // If we exhausted attempts, fall back to returning text or last raw
+    let final_content = append_tool_execution_summary(req, last_raw);
+    Ok((Vec::new(), final_content))
 }
 
 // ──────────────────────────────────────────────
@@ -2114,7 +2500,6 @@ pub fn chat_error_response(now: u64, message: String) -> ChatCompletionResponse 
         system_fingerprint: Some("fp_mivi".to_string()),
     }
 }
-
 pub async fn complete_chat_non_stream(
     state: Arc<AppState>,
     req: ChatCompletionRequest,
@@ -2124,10 +2509,39 @@ pub async fn complete_chat_non_stream(
         return Ok(chat_error_response(now, err));
     }
 
+    if let Some(last_msg) = req.messages.last() {
+        if last_msg.role == "tool" {
+            let final_text = append_tool_execution_summary(&req, String::new());
+            let final_text = apply_response_format(final_text, &req)?;
+            return Ok(ChatCompletionResponse {
+                id: format!("chatcmpl-v2-{now}"),
+                object: "chat.completion".to_string(),
+                created: now,
+                model: MODEL_NAME.to_string(),
+                usage: Some(estimated_usage_for_text(&req, &final_text)),
+                choices: vec![ChoiceOut {
+                    index: 0,
+                    message: ChatMessageOut {
+                        role: "assistant".to_string(),
+                        content: final_text,
+                        refusal: None,
+                        reasoning_content: Some(
+                            "Synthesized tool result answer (no model load)".to_string(),
+                        ),
+                        tool_calls: None,
+                    },
+                    logprobs: None,
+                    finish_reason: "stop".to_string(),
+                }],
+                system_fingerprint: Some("fp_mivi".to_string()),
+            });
+        }
+    }
+
     let target_model = req.model.clone().unwrap_or_else(|| MODEL_NAME.to_string());
     let latest_user_prompt = latest_user_prompt_text(&req);
 
-    if has_tool_involvement(&req) {
+    if should_use_tool_path(&req, &latest_user_prompt) {
         let (tool_calls, response_text) = generate_tool_calls(&state.brain, &req).await?;
         if !tool_calls.is_empty() {
             return Ok(ChatCompletionResponse {
@@ -2180,15 +2594,62 @@ pub async fn complete_chat_non_stream(
                 system_fingerprint: Some("fp_mivi".to_string()),
             });
         }
-        // Both empty — no tools matched the prompt. Fall through to regular chat.
     }
 
     let (user_prompt, image_path) = extract_content(&req);
+
+    // Fast-path for simple greetings to save CPU/RAM and prevent model distraction
+    let cleaned_prompt = user_prompt.trim().to_ascii_lowercase();
+    let is_greeting = cleaned_prompt == "hi"
+        || cleaned_prompt == "hii"
+        || cleaned_prompt == "hello"
+        || cleaned_prompt == "hey"
+        || cleaned_prompt == "yo"
+        || cleaned_prompt == "sup"
+        || cleaned_prompt == "hello there"
+        || cleaned_prompt == "hi there";
+
+    if is_greeting && image_path.is_none() {
+        let greeting_text = "Hello! I am OpenZ, your local AI assistant. How can I help you today?";
+        return Ok(ChatCompletionResponse {
+            id: format!("chatcmpl-v2-{now}"),
+            object: "chat.completion".to_string(),
+            created: now,
+            model: MODEL_NAME.to_string(),
+            usage: Some(estimated_usage_for_text(&req, greeting_text)),
+            choices: vec![ChoiceOut {
+                index: 0,
+                message: ChatMessageOut {
+                    role: "assistant".to_string(),
+                    content: greeting_text.to_string(),
+                    refusal: None,
+                    reasoning_content: Some(
+                        "Fast-path greeting response (no model load)".to_string(),
+                    ),
+                    tool_calls: None,
+                },
+                logprobs: None,
+                finish_reason: "stop".to_string(),
+            }],
+            system_fingerprint: Some("fp_mivi".to_string()),
+        });
+    }
+
     let model_user_prompt = model_prompt_from_request(&req, &user_prompt, &state).await;
     let (intent, _confidence) = state
         .router
         .classify_intent(&state.brain, &user_prompt)
         .await;
+
+    let intent_max_tokens = if intent == "CHAT" {
+        128
+    } else if intent == "CODE" || intent == "MULTI_STEP" {
+        512
+    } else {
+        256
+    };
+    let resolved_max_tokens = Some(req.max_tokens.unwrap_or(intent_max_tokens));
+
     let (response_text, chosen_model, route) = if image_path.is_some() {
         let path = image_path.unwrap_or_default();
         (
@@ -2205,6 +2666,7 @@ pub async fn complete_chat_non_stream(
                     req.temperature,
                     req.top_p,
                     req.seed,
+                    resolved_max_tokens,
                 )
                 .await?;
                 (text, model, "coder")
@@ -2216,6 +2678,7 @@ pub async fn complete_chat_non_stream(
                     req.temperature,
                     req.top_p,
                     req.seed,
+                    resolved_max_tokens,
                 )
                 .await?;
                 (text, model, "reasoner")
@@ -2227,6 +2690,7 @@ pub async fn complete_chat_non_stream(
                     req.temperature,
                     req.top_p,
                     req.seed,
+                    resolved_max_tokens,
                 )
                 .await?;
                 (text, model, "direct_reasoner")
@@ -2311,6 +2775,7 @@ pub async fn handle_responses(
     }
 }
 
+#[allow(unused_variables)]
 pub async fn handle_responses_streaming(
     state: Arc<AppState>,
     chat_req: ChatCompletionRequest,
@@ -2357,35 +2822,58 @@ pub async fn handle_responses_streaming(
 
     let temp_str = chat_req.temperature.unwrap_or(0.2).to_string();
     let top_p = chat_req.top_p;
-    let max_tokens = chat_req.max_tokens;
     let stop = chat_req.stop.clone();
     let seed = chat_req.seed;
     let json_schema = extract_json_schema(&chat_req);
 
+    let (intent, _confidence) = state
+        .router
+        .classify_intent(&state.brain, &user_prompt)
+        .await;
+
+    let intent_max_tokens = if intent == "CHAT" {
+        128
+    } else if intent == "CODE" || intent == "MULTI_STEP" {
+        512
+    } else {
+        256
+    };
+    let resolved_max_tokens = Some(chat_req.max_tokens.unwrap_or(intent_max_tokens));
+
+    let grammar_path = get_grammar_path(&chat_req);
+
     tokio::spawn(async move {
-        #[cfg(feature = "native")]
-        {
-            match brain.native.query_stream(
-                std::path::Path::new(&model_path),
-                &model_user_prompt,
-                &system_prompt,
-                &temp_str,
-                max_tokens.unwrap_or(512) as usize,
-            ) {
-                Ok(mut native_rx) => {
-                    while let Some(token) = native_rx.recv().await {
-                        if tx.send(token).await.is_err() {
-                            break;
+        let run_native = if cfg!(feature = "native") {
+            let runtime_config = RuntimeConfig::from_env();
+            runtime_config.mode != crate::runtime::RuntimeMode::Spawn
+        } else {
+            false
+        };
+
+        if run_native {
+            #[cfg(feature = "native")]
+            {
+                match brain.native.query_stream(
+                    std::path::Path::new(&model_path),
+                    &model_user_prompt,
+                    &system_prompt,
+                    &temp_str,
+                    resolved_max_tokens.unwrap_or(512) as usize,
+                    grammar_path.clone(),
+                ) {
+                    Ok(mut native_rx) => {
+                        while let Some(token) = native_rx.recv().await {
+                            if tx.send(token).await.is_err() {
+                                break;
+                            }
                         }
                     }
-                }
-                Err(err) => {
-                    error!("[NativeBrain] Native stream error: {}", err);
+                    Err(err) => {
+                        error!("[NativeBrain] Native stream error: {}", err);
+                    }
                 }
             }
-        }
-        #[cfg(not(feature = "native"))]
-        {
+        } else {
             let grammar_path = get_grammar_path(&chat_req);
             let mut spawn_rx = spawn_streaming(
                 &cli_path,
@@ -2395,7 +2883,7 @@ pub async fn handle_responses_streaming(
                 &streaming_context,
                 &temp_str,
                 top_p,
-                max_tokens,
+                resolved_max_tokens,
                 stop,
                 seed,
                 json_schema,
@@ -2670,11 +3158,66 @@ pub async fn handle_chat_completions(
     let include_usage = include_stream_usage(&req);
     let target_model = req.model.clone().unwrap_or_else(|| MODEL_NAME.to_string());
 
+    // ── Verified tool result answer (no model load) ──────────────────
+    if let Some(last_msg) = req.messages.last() {
+        if last_msg.role == "tool" {
+            let final_text = append_tool_execution_summary(&req, String::new());
+            let final_text = match apply_response_format(final_text, &req) {
+                Ok(t) => t,
+                Err(err) => {
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": err
+                            }
+                        })),
+                    )
+                        .into_response();
+                }
+            };
+            if req.stream.unwrap_or(false) {
+                return stream_text_response(
+                    final_text.clone(),
+                    now,
+                    Some("Synthesized tool result answer (no model load)".to_string()),
+                    include_usage.then(|| estimated_usage_for_text(&req, &final_text)),
+                    permit,
+                )
+                .into_response();
+            }
+            return Json(ChatCompletionResponse {
+                id: format!("chatcmpl-v2-{now}"),
+                object: "chat.completion".to_string(),
+                created: now,
+                model: MODEL_NAME.to_string(),
+                usage: Some(estimated_usage_for_text(&req, &final_text)),
+                choices: vec![ChoiceOut {
+                    index: 0,
+                    message: ChatMessageOut {
+                        role: "assistant".to_string(),
+                        content: final_text,
+                        refusal: None,
+                        reasoning_content: Some(
+                            "Synthesized tool result answer (no model load)".to_string(),
+                        ),
+                        tool_calls: None,
+                    },
+                    logprobs: None,
+                    finish_reason: "stop".to_string(),
+                }],
+                system_fingerprint: Some("fp_mivi".to_string()),
+            })
+            .into_response();
+        }
+    }
+
     let tool_selection = select_tools_for_request(&req);
     let selected_tool_names = tool_names(&tool_selection.selected);
     let selected_tool_roles = selected_tool_roles(&tool_selection.selected);
     let blocked_tools = blocked_tool_names(&tool_selection.blocked);
-    let has_tools = has_tool_involvement(&req);
+    let has_tools = should_use_tool_path(&req, &latest_user_prompt);
     let _ = trace_event(
         &trace,
         serde_json::json!({
@@ -2807,7 +3350,70 @@ pub async fn handle_chat_completions(
 
     // ── Non-tool path (existing logic) ───────────────────────────────
     let (user_prompt, image_path) = extract_content(&req);
+
+    // Fast-path for simple greetings to save CPU/RAM and prevent model distraction
+    let cleaned_prompt = user_prompt.trim().to_ascii_lowercase();
+    let is_greeting = cleaned_prompt == "hi"
+        || cleaned_prompt == "hii"
+        || cleaned_prompt == "hello"
+        || cleaned_prompt == "hey"
+        || cleaned_prompt == "yo"
+        || cleaned_prompt == "sup"
+        || cleaned_prompt == "hello there"
+        || cleaned_prompt == "hi there";
+
+    if is_greeting && image_path.is_none() {
+        let greeting_text = "Hello! I am OpenZ, your local AI assistant. How can I help you today?";
+        if req.stream.unwrap_or(false) {
+            return stream_text_response(
+                greeting_text.to_string(),
+                now,
+                Some("Fast-path greeting response (no model load)".to_string()),
+                include_usage.then(|| estimated_usage_for_text(&req, greeting_text)),
+                permit,
+            )
+            .into_response();
+        }
+        return Json(ChatCompletionResponse {
+            id: format!("chatcmpl-v2-{}", now),
+            object: "chat.completion".to_string(),
+            created: now,
+            model: MODEL_NAME.to_string(),
+            usage: Some(estimated_usage_for_text(&req, greeting_text)),
+            choices: vec![ChoiceOut {
+                index: 0,
+                message: ChatMessageOut {
+                    role: "assistant".to_string(),
+                    content: greeting_text.to_string(),
+                    refusal: None,
+                    reasoning_content: Some(
+                        "Fast-path greeting response (no model load)".to_string(),
+                    ),
+                    tool_calls: None,
+                },
+                logprobs: None,
+                finish_reason: "stop".to_string(),
+            }],
+            system_fingerprint: Some("fp_mivi".to_string()),
+        })
+        .into_response();
+    }
+
     let model_user_prompt = model_prompt_from_request(&req, &user_prompt, &state).await;
+
+    let (intent, confidence) = state
+        .router
+        .classify_intent(&state.brain, &user_prompt)
+        .await;
+
+    let intent_max_tokens = if intent == "CHAT" {
+        128
+    } else if intent == "CODE" || intent == "MULTI_STEP" {
+        512
+    } else {
+        256
+    };
+    let resolved_max_tokens = Some(req.max_tokens.unwrap_or(intent_max_tokens));
 
     // Streaming path.
     if req.stream.unwrap_or(false) {
@@ -2854,16 +3460,20 @@ pub async fn handle_chat_completions(
                 "finish_reason": "stream"
             }),
         );
-        return handle_streaming(state, model_user_prompt, &req, now, include_usage, permit)
-            .await
-            .into_response();
+        return handle_streaming(
+            state,
+            model_user_prompt,
+            &req,
+            now,
+            include_usage,
+            permit,
+            resolved_max_tokens,
+        )
+        .await
+        .into_response();
     }
 
     // Non-streaming path.
-    let (intent, confidence) = state
-        .router
-        .classify_intent(&state.brain, &user_prompt)
-        .await;
     info!(
         "[MIVI-V2 Server] Intent: {} (conf: {:.2}) | Model: '{}' | Prompt: '{}'",
         intent, confidence, target_model, user_prompt
@@ -2894,6 +3504,7 @@ pub async fn handle_chat_completions(
                 req.temperature,
                 req.top_p,
                 req.seed,
+                resolved_max_tokens,
             )
             .await
             {
@@ -2917,6 +3528,7 @@ pub async fn handle_chat_completions(
                 req.temperature,
                 req.top_p,
                 req.seed,
+                resolved_max_tokens,
             )
             .await
             {
@@ -2941,6 +3553,7 @@ pub async fn handle_chat_completions(
                     req.temperature,
                     req.top_p,
                     req.seed,
+                    resolved_max_tokens,
                 )
                 .await
                 {
@@ -3233,6 +3846,7 @@ pub fn stream_text_response(
 /// SSE streaming handler — spawns llama-cli per request, sends tokens as
 /// they arrive from stdout, then emits a final `finish_reason: stop` chunk
 /// and a `[DONE]` sentinel per the OpenAI streaming spec.
+#[allow(unused_variables, unused_assignments)]
 pub async fn handle_streaming(
     state: Arc<AppState>,
     user_prompt: String,
@@ -3240,6 +3854,7 @@ pub async fn handle_streaming(
     created: u64,
     include_usage: bool,
     permit: tokio::sync::OwnedSemaphorePermit,
+    max_tokens: Option<u32>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let (tx, rx) = mpsc::channel::<String>(32);
     let id = format!("chatcmpl-v2-{}", created);
@@ -3272,7 +3887,6 @@ pub async fn handle_streaming(
 
     let temp_str = req.temperature.unwrap_or(0.2).to_string();
     let top_p = req.top_p;
-    let max_tokens = req.max_tokens;
     let stop = req.stop.clone();
     let seed = req.seed;
     let json_schema = extract_json_schema(req);
@@ -3281,7 +3895,7 @@ pub async fn handle_streaming(
     let text_worker = brain.text_worker.clone();
     let req_temp = req.temperature;
     let req_top_p = req.top_p;
-    let req_max_tokens = req.max_tokens;
+    let req_max_tokens = max_tokens;
     let req_stop = req.stop.clone();
     let req_seed = req.seed;
     let req_fp = req.frequency_penalty;
@@ -3297,6 +3911,26 @@ pub async fn handle_streaming(
     let grammar_content_for_worker = grammar_content.clone();
     let grammar_path_for_spawn = grammar_path.clone();
     tokio::spawn(async move {
+        let cleaned_prompt = fallback_user_prompt.trim().to_ascii_lowercase();
+        let is_greeting = cleaned_prompt == "hi"
+            || cleaned_prompt == "hii"
+            || cleaned_prompt == "hello"
+            || cleaned_prompt == "hey"
+            || cleaned_prompt == "yo"
+            || cleaned_prompt == "sup"
+            || cleaned_prompt == "hello there"
+            || cleaned_prompt == "hi there";
+
+        if is_greeting {
+            let _ = tx
+                .send(
+                    "Hello! I am OpenZ, your local AI assistant. How can I help you today?"
+                        .to_string(),
+                )
+                .await;
+            return;
+        }
+
         let mut emitted = false;
         if uses_worker {
             match text_worker
@@ -3358,38 +3992,45 @@ pub async fn handle_streaming(
                             }
                         }
                     }
+                    return;
                 }
                 Err(err) => {
                     error!("Failed to query completion stream from worker: {}", err);
                 }
             }
-        } else {
-            #[cfg(feature = "native")]
-            {
-                match brain.native.query_stream(
-                    std::path::Path::new(&model_path),
-                    &fallback_user_prompt,
-                    &system_prompt,
-                    &temp_str,
-                    max_tokens.unwrap_or(512) as usize,
-                ) {
-                    Ok(mut native_rx) => {
-                        while let Some(token) = native_rx.recv().await {
-                            if !token.trim().is_empty() {
-                                emitted = true;
-                            }
-                            if tx.send(token).await.is_err() {
-                                return; // Receiver dropped (client disconnected).
+            let run_native = if cfg!(feature = "native") {
+                runtime_config.mode != crate::runtime::RuntimeMode::Spawn
+            } else {
+                false
+            };
+
+            if run_native {
+                #[cfg(feature = "native")]
+                {
+                    match brain.native.query_stream(
+                        std::path::Path::new(&model_path),
+                        &fallback_user_prompt,
+                        &system_prompt,
+                        &temp_str,
+                        req_max_tokens.unwrap_or(512) as usize,
+                        grammar_path.clone(),
+                    ) {
+                        Ok(mut native_rx) => {
+                            while let Some(token) = native_rx.recv().await {
+                                if !token.trim().is_empty() {
+                                    emitted = true;
+                                }
+                                if tx.send(token).await.is_err() {
+                                    return; // Receiver dropped (client disconnected).
+                                }
                             }
                         }
-                    }
-                    Err(err) => {
-                        error!("[NativeBrain] Native stream error: {}", err);
+                        Err(err) => {
+                            error!("[NativeBrain] Native stream error: {}", err);
+                        }
                     }
                 }
-            }
-            #[cfg(not(feature = "native"))]
-            {
+            } else {
                 let mut rx = spawn_streaming(
                     &cli_path,
                     &model_path,
@@ -3398,7 +4039,7 @@ pub async fn handle_streaming(
                     &streaming_context,
                     &temp_str,
                     top_p,
-                    max_tokens,
+                    req_max_tokens,
                     stop,
                     seed,
                     json_schema,
@@ -3551,6 +4192,71 @@ pub async fn handle_streaming(
     Sse::new(stream)
 }
 
+fn get_client_identifier(req: &axum::http::Request<axum::body::Body>) -> String {
+    if let Some(forwarded) = req.headers().get("x-forwarded-for") {
+        if let Ok(s) = forwarded.to_str() {
+            if let Some(first_ip) = s.split(',').next() {
+                return first_ip.trim().to_string();
+            }
+        }
+    }
+
+    if let Some(real_ip) = req.headers().get("x-real-ip") {
+        if let Ok(s) = real_ip.to_str() {
+            return s.trim().to_string();
+        }
+    }
+
+    if let Some(auth) = req.headers().get("authorization") {
+        if let Ok(s) = auth.to_str() {
+            return s.to_string();
+        }
+    }
+
+    "generic_client".to_string()
+}
+
+async fn rate_limit_middleware(
+    State(state): State<Arc<AppState>>,
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, axum::http::StatusCode> {
+    let client_id = get_client_identifier(&req);
+    if let Err(msg) = state.rate_limiter.check_rate_limit(client_id) {
+        let error_json = serde_json::json!({
+            "error": {
+                "type": "rate_limit_error",
+                "message": msg
+            }
+        });
+        let mut res = axum::response::Json(error_json).into_response();
+        *res.status_mut() = axum::http::StatusCode::TOO_MANY_REQUESTS;
+        return Ok(res);
+    }
+    Ok(next.run(req).await)
+}
+
+async fn timeout_middleware(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, axum::http::StatusCode> {
+    let duration = std::time::Duration::from_secs(300);
+    match tokio::time::timeout(duration, next.run(req)).await {
+        Ok(res) => Ok(res),
+        Err(_) => {
+            let error_json = serde_json::json!({
+                "error": {
+                    "type": "timeout_error",
+                    "message": "Request timed out after 300 seconds."
+                }
+            });
+            let mut res = axum::response::Json(error_json).into_response();
+            *res.status_mut() = axum::http::StatusCode::REQUEST_TIMEOUT;
+            Ok(res)
+        }
+    }
+}
+
 async fn auth_middleware(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
@@ -3586,21 +4292,36 @@ pub async fn start_api_server(
     orchestrator: AgentOrchestrator,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let max_concurrent = std::env::var("MIVI_MAX_CONCURRENT_REQUESTS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(2);
+    let ultra_low = std::env::var("MIVI_ULTRA_LOW_RAM")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
+
+    let max_concurrent = if ultra_low {
+        info!("[MIVI-V2] Ultra-low-RAM mode: forcing max concurrent requests to 1");
+        1
+    } else {
+        std::env::var("MIVI_MAX_CONCURRENT_REQUESTS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(2)
+    };
     let state = Arc::new(AppState {
         brain,
         orchestrator,
         router: NeedleRouter::new(),
         semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent)),
+        rate_limiter: crate::server::types::RateLimiter::new(),
     });
 
     let api_routes = Router::new()
         .route("/models", get(handle_models))
         .route("/chat/completions", post(handle_chat_completions))
         .route("/responses", post(handle_responses))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn(timeout_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
     let app = Router::new()
@@ -3624,36 +4345,40 @@ pub async fn start_api_server(
         addr
     );
 
-    // Spawn warmup task in the background
-    let warmup_brain = state.brain.clone();
-    tokio::spawn(async move {
-        info!("[MIVI-V2 Warmup] Initializing model cache and pre-compiling kernels...");
-        let start = std::time::Instant::now();
-        let messages = serde_json::json!([
-            {"role": "user", "content": "warmup"}
-        ]);
-        let _ = warmup_brain
-            .text_worker
-            .query_chat_full(
-                messages,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(1),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .await;
-        info!(
-            "[MIVI-V2 Warmup] Warmup completed in {:.2}s. Engine is hot and ready.",
-            start.elapsed().as_secs_f32()
-        );
-    });
+    if !ultra_low {
+        // Spawn warmup task in the background
+        let warmup_brain = state.brain.clone();
+        tokio::spawn(async move {
+            info!("[MIVI-V2 Warmup] Initializing model cache and pre-compiling kernels...");
+            let start = std::time::Instant::now();
+            let messages = serde_json::json!([
+                {"role": "user", "content": "warmup"}
+            ]);
+            let _ = warmup_brain
+                .text_worker
+                .query_chat_full(
+                    messages,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(1),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+            info!(
+                "[MIVI-V2 Warmup] Warmup completed in {:.2}s. Engine is hot and ready.",
+                start.elapsed().as_secs_f32()
+            );
+        });
+    } else {
+        info!("[MIVI-V2 Warmup] Skipping warmup in ultra-low-RAM mode to save memory");
+    }
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -3739,6 +4464,42 @@ mod tests {
         assert_eq!(req.stop, Some(json!(["END"])));
         assert_eq!(req.stream_options.as_ref().unwrap()["include_usage"], true);
         assert_eq!(response_format_type(&req), Some("json_object".to_string()));
+    }
+
+    #[test]
+    pub fn test_grammar_dynamic_compilation() {
+        let req = tool_request("Run cargo test", None);
+        let path_opt = get_grammar_path(&req);
+        assert!(path_opt.is_some(), "get_grammar_path returned None");
+        let path = path_opt.unwrap();
+        let content = std::fs::read_to_string(&path).expect("failed to read grammar file");
+
+        // Assert that get_weather is present in the grammar content, proving the replacement occurred
+        assert!(
+            content.contains("get_weather"),
+            "tool name was not dynamically injected: {}",
+            content
+        );
+
+        let mut cleaned_str = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some(idx) = line.find(" #") {
+                cleaned_str.push_str(&line[..idx]);
+            } else {
+                cleaned_str.push_str(line);
+            }
+            cleaned_str.push('\n');
+        }
+        let res = schoolmarm::Grammar::new(cleaned_str.trim());
+        assert!(
+            res.is_ok(),
+            "schoolmarm failed to parse generated grammar: {:?}",
+            res.err()
+        );
     }
 
     #[test]
@@ -4090,8 +4851,8 @@ mod tests {
         assert!(prompt.contains(
             "Current prompt exposes 1 selected callable tool schemas: agent_capabilities"
         ));
-        assert!(prompt.contains("- name: agent_capabilities"));
-        assert!(!prompt.contains("- name: read"));
+        assert!(prompt.contains("TOOL agent_capabilities("));
+        assert!(!prompt.contains("TOOL read("));
     }
 
     #[test]
@@ -4133,7 +4894,7 @@ mod tests {
 
         let prompt = build_chat_prompt(&req);
 
-        assert!(prompt.contains("- name: apply_patch"));
+        assert!(prompt.contains("TOOL apply_patch("));
         assert!(!prompt.contains("irrelevant_tool_17"));
     }
 
@@ -4555,6 +5316,139 @@ Hello!"
     }
 
     #[test]
+    pub fn object_tool_choice_selects_specific_tool() {
+        let tool_c = json!({
+            "type": "function",
+            "function": {
+                "name": "bash"
+            }
+        });
+        let mut req = tool_request("hello", Some(tool_c));
+        req.tools = Some(vec![
+            ToolDef {
+                function: FunctionDef {
+                    name: "bash".to_string(),
+                    description: Some("Run command".to_string()),
+                    parameters: None,
+                },
+                r#type: "function".to_string(),
+            },
+            ToolDef {
+                function: FunctionDef {
+                    name: "read_file".to_string(),
+                    description: Some("Read file".to_string()),
+                    parameters: None,
+                },
+                r#type: "function".to_string(),
+            },
+        ]);
+
+        let selection = select_tools_for_request(&req);
+        assert_eq!(selection.selected.len(), 1);
+        assert_eq!(selection.selected[0].function.name, "bash");
+    }
+
+    #[test]
+    pub fn tool_argument_json_schema_validation() {
+        let tool = ToolDef {
+            r#type: "function".to_string(),
+            function: FunctionDef {
+                name: "test_tool".to_string(),
+                description: None,
+                parameters: Some(json!({
+                    "type": "object",
+                    "required": ["cmd", "retries"],
+                    "properties": {
+                        "cmd": {
+                            "type": "string"
+                        },
+                        "retries": {
+                            "type": "integer"
+                        },
+                        "env": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["fast", "slow"]
+                        }
+                    }
+                })),
+            },
+        };
+
+        // Valid call
+        let call_valid = ToolCallOut {
+            id: "call_1".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCallOut {
+                name: "test_tool".to_string(),
+                arguments:
+                    r#"{"cmd": "npm run test", "retries": 3, "env": ["PATH"], "mode": "fast"}"#
+                        .to_string(),
+            },
+        };
+        assert!(validate_tool_call_arguments(&call_valid, &tool).is_ok());
+
+        // Missing required property
+        let call_missing = ToolCallOut {
+            id: "call_2".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCallOut {
+                name: "test_tool".to_string(),
+                arguments: r#"{"cmd": "npm run test"}"#.to_string(),
+            },
+        };
+        let err_missing = validate_tool_call_arguments(&call_missing, &tool).unwrap_err();
+        assert!(err_missing.contains("Missing required property 'retries'"));
+
+        // Invalid type
+        let call_invalid_type = ToolCallOut {
+            id: "call_3".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCallOut {
+                name: "test_tool".to_string(),
+                arguments: r#"{"cmd": 12345, "retries": 3}"#.to_string(),
+            },
+        };
+        let err_type = validate_tool_call_arguments(&call_invalid_type, &tool).unwrap_err();
+        assert!(err_type.contains("does not match type"));
+
+        // Invalid enum
+        let call_invalid_enum = ToolCallOut {
+            id: "call_4".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCallOut {
+                name: "test_tool".to_string(),
+                arguments: r#"{"cmd": "test", "retries": 3, "mode": "normal"}"#.to_string(),
+            },
+        };
+        let err_enum = validate_tool_call_arguments(&call_invalid_enum, &tool).unwrap_err();
+        assert!(err_enum.contains("not one of the allowed enums"));
+    }
+
+    #[test]
+    pub fn test_rate_limiter_allows_under_limit_and_blocks_over_limit() {
+        let limiter = crate::server::types::RateLimiter::new();
+        let client = "test_client_1".to_string();
+
+        for _ in 0..60 {
+            assert!(limiter.check_rate_limit(client.clone()).is_ok());
+        }
+
+        let res = limiter.check_rate_limit(client);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Rate limit exceeded"));
+
+        assert!(limiter
+            .check_rate_limit("test_client_2".to_string())
+            .is_ok());
+    }
+
+    #[test]
     pub fn tool_prompt_uses_compact_schema_summary() {
         let mut req = tool_request("run npm test", None);
         req.tools = Some(vec![ToolDef {
@@ -4576,11 +5470,7 @@ Hello!"
         let prompt = build_chat_prompt(&req);
 
         assert!(prompt.contains("Tool context broker selected 1 tool"));
-        assert!(prompt.contains("- name: bash"));
-        assert!(prompt.contains("description: Run a shell command"));
-        assert!(prompt.contains(
-            "parameters: cmd (string: command to run), timeout (number: timeout seconds)"
-        ));
+        assert!(prompt.contains("TOOL bash(cmd: string, timeout?: number) - Run a shell command"));
         assert!(!prompt.contains("properties"));
     }
 
@@ -4625,6 +5515,27 @@ Hello!"
         assert_eq!(
             args.get("path").and_then(|value| value.as_str()),
             Some("src/main.rs")
+        );
+    }
+
+    #[test]
+    pub fn parses_custom_tool_format_tool_calls() {
+        let raw =
+            r#"{"tool":"inspect_browsers","arguments":{"action":"open","tool":"firefox_browser"}}"#;
+        let calls =
+            parse_tool_calls_for_tools(raw, &[server_tool("inspect_browsers", "Inspect browsers")]);
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "inspect_browsers");
+        let args: serde_json::Value = serde_json::from_str(&calls[0].function.arguments)
+            .expect("arguments must be valid JSON");
+        assert_eq!(
+            args.get("action").and_then(|value| value.as_str()),
+            Some("open")
+        );
+        assert_eq!(
+            args.get("tool").and_then(|value| value.as_str()),
+            Some("firefox_browser")
         );
     }
 
@@ -4781,6 +5692,7 @@ Hello!"
             orchestrator: AgentOrchestrator::new(brain),
             router: NeedleRouter::new(),
             semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+            rate_limiter: crate::server::types::RateLimiter::new(),
         });
 
         let resp = tokio::runtime::Builder::new_current_thread()

@@ -5,6 +5,16 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.12] - 2026-08-13
+
+### 🦀 Phase 9 & 10: Model Upgrade & Tokenizer Optimization (COMPLETE)
+
+#### Added
+* ⚡ **GGUF-Native Tokenizer Integration**: Integrated `shimmytok` to load the tokenizer vocabulary directly from the active GGUF model file on startup, replacing raw character estimations and slow subprocess tokenizer calls with exact, zero-overhead token counting.
+* 🚦 **Anchor-Window-Summary Context Slicing**: Implemented a highly optimized ContextBudget allocation (System 20%, Anchor 5%, Summary 15%, Recent 35%, RAG 10%, Gen 15%) and selective tool schema injection (top 5 max tools) for extremely efficient context utilization.
+* 🔍 **Pre-Invocation Auto-Compaction Gate**: Added a conditional gate that automatically compacts the conversation history only if total message tokens exceed 80% of the input budget, maintaining raw message context and stripping `<think>` blocks for shorter conversations.
+* 🛡️ **Tool Loop Compatibility & Case-Insensitive Matching**: Fixed tool path detection case-sensitivity bugs (e.g. `"Run..."`) and implemented instant `verified_tool_result_answer` checks to synthesize responses for tool-result loops directly, resolving all HTTP compatibility smoke cases.
+
 ## [v0.0.11] - 2026-08-12
 
 ### 🦀 Chat & Context Optimization (COMPLETE)

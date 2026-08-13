@@ -37,13 +37,20 @@ pub fn compress_context(messages: &[ChatMessage], budget: ContextBudget) -> Comp
 
         match msg.role.as_str() {
             "system" => system_parts.push(normalized),
-            "tool" => tool_observations.push(format!(
-                "tool: {}",
-                truncate_chars(
-                    &render_compressed_tool_output(&normalized, &normalized, 8),
-                    budget.tool_tokens * 4
-                )
-            )),
+            "tool" => {
+                let cmd_name = msg
+                    .tool_call_id
+                    .as_deref()
+                    .and_then(|id| find_tool_name_by_id(messages, id))
+                    .unwrap_or_else(|| "tool".to_string());
+                tool_observations.push(format!(
+                    "tool: {}",
+                    truncate_chars(
+                        &render_compressed_tool_output(&cmd_name, &normalized, 8),
+                        budget.tool_tokens * 4
+                    )
+                ));
+            }
             role => {
                 if is_low_value_turn(role, &normalized) {
                     dropped += 1;
@@ -192,7 +199,7 @@ fn normalize_context_text(text: &str) -> String {
     ] {
         normalized = strip_tagged_block(&normalized, tag);
     }
-    normalized = strip_all_tagged_blocks(&normalized, "think");
+    normalized = crate::brain::strip_think_blocks(&normalized);
     normalized.trim().to_string()
 }
 
@@ -210,6 +217,7 @@ fn strip_tagged_block(text: &str, tag: &str) -> String {
     trimmed.to_string()
 }
 
+#[allow(dead_code)]
 fn strip_all_tagged_blocks(text: &str, tag: &str) -> String {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
@@ -288,6 +296,108 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     }
 
     text.chars().take(max_chars).collect()
+}
+
+fn find_tool_name_by_id(messages: &[ChatMessage], call_id: &str) -> Option<String> {
+    for msg in messages {
+        if let Some(tool_calls) = &msg.tool_calls {
+            for call in tool_calls {
+                if call.id == call_id {
+                    return Some(call.function.name.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn compress_request_messages(
+    messages: &[ChatMessage],
+    budget: ContextBudget,
+) -> Vec<ChatMessage> {
+    let mut compressed = Vec::new();
+    if messages.is_empty() {
+        return compressed;
+    }
+
+    // 1. Keep all system messages
+    for msg in messages {
+        if msg.role == "system" {
+            compressed.push(msg.clone());
+        }
+    }
+
+    // 2. Keep the original user request if the conversation is long
+    let original_user_pos = messages.iter().position(|m| m.role == "user");
+    if messages.len() > 6 {
+        if let Some(pos) = original_user_pos {
+            let mut first_user = messages[pos].clone();
+            let text = message_text(&first_user);
+            first_user.content = serde_json::json!(format!("Original Goal / Request:\n{}", text));
+            compressed.push(first_user);
+        }
+    }
+
+    // 3. For the remaining messages, let's keep important ones or recent ones.
+    let mut turns_to_keep = std::collections::HashSet::new();
+    let mut user_assistant_count = 0;
+
+    for (idx, msg) in messages.iter().enumerate().rev() {
+        if msg.role == "system" {
+            continue;
+        }
+        if messages.len() > 6 && Some(idx) == original_user_pos {
+            continue;
+        }
+
+        if msg.role == "user" || msg.role == "assistant" {
+            if user_assistant_count < 6 {
+                turns_to_keep.insert(idx);
+                user_assistant_count += 1;
+            } else {
+                let text = message_text(msg);
+                if is_important_context(&text) {
+                    turns_to_keep.insert(idx);
+                }
+            }
+        } else if msg.role == "tool" {
+            let text = message_text(msg);
+            if is_important_context(&text) || user_assistant_count < 6 {
+                turns_to_keep.insert(idx);
+            }
+        }
+    }
+
+    // 4. Construct the middle/recent turns with compressed content
+    for (idx, msg) in messages.iter().enumerate() {
+        if !turns_to_keep.contains(&idx) {
+            continue;
+        }
+
+        let mut new_msg = msg.clone();
+        if new_msg.role == "tool" {
+            let text = message_text(msg);
+            let cmd_name = msg
+                .tool_call_id
+                .as_deref()
+                .and_then(|id| find_tool_name_by_id(messages, id))
+                .unwrap_or_else(|| "tool".to_string());
+
+            let compressed_text = render_compressed_tool_output(&cmd_name, &text, 8);
+            let truncated_text = truncate_chars(&compressed_text, budget.tool_tokens * 4);
+            new_msg.content = serde_json::json!(truncated_text);
+        } else if new_msg.role == "assistant" || new_msg.role == "user" {
+            let text = message_text(msg);
+            if text.chars().count() > budget.recent_turn_tokens * 4 {
+                let truncated_text = truncate_chars(&text, budget.recent_turn_tokens * 4);
+                new_msg.content = serde_json::json!(truncated_text);
+            }
+        }
+
+        compressed.push(new_msg);
+    }
+
+    compressed
 }
 
 #[cfg(test)]
@@ -418,7 +528,7 @@ Your agent has tools.",
             .collect::<Vec<_>>()
             .join("\n");
         let tool_output = format!(
-            "cargo test\n{long_noise}\nerror[E0425]: cannot find value `x` in this scope\nthread 'tests::works' panicked\nfinal filler line that should not matter"
+            "cargo test\n{long_noise}\nerror[E0425]: cannot find value `x` in this scope\nthread 'tests::works' panicked\nfiller\nfiller\nfiller\nfiller\nfiller\nfinal filler line that should not matter"
         );
         let messages = vec![msg("tool", &tool_output), msg("user", "fix compile error")];
 
@@ -459,5 +569,34 @@ Your agent has tools.",
         assert!(pruned.contains("Creator: Aswin"));
         assert!(!pruned.contains("Version history:"));
         assert!(!pruned.contains("v0.0.126"));
+    }
+
+    #[test]
+    fn test_compress_request_messages_prunes_and_compresses_appropriately() {
+        let messages = vec![
+            msg("system", "Authoritative instructions"),
+            msg("user", "Write a pure Rust compiler engine"),
+            msg("assistant", "Sure."),
+            msg("user", "Step 1: lexer"),
+            msg("assistant", "Here is code..."),
+            msg(
+                "tool",
+                "cargo build output: filler compiling... error[E0425]: cannot find x",
+            ),
+            msg("user", "fix that error"),
+        ];
+
+        let compressed =
+            compress_request_messages(&messages, ContextBudget::from_max_input_tokens(1024));
+
+        assert_eq!(compressed[0].role, "system");
+
+        let tool_msg = compressed.iter().find(|m| m.role == "tool").unwrap();
+        let text = message_text(tool_msg);
+        assert!(text.contains("error[E0425]"));
+
+        assert!(compressed
+            .iter()
+            .any(|m| message_text(m).contains("Original Goal / Request")));
     }
 }

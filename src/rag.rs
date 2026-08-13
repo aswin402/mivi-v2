@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use walkdir::WalkDir;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RagChunk {
     pub file_path: String,
     pub line_start: usize,
@@ -49,6 +49,7 @@ fn should_skip_path(path: &str) -> bool {
         || normalized.contains("/benchmarks/")
         || normalized.contains("/model-eval-results/")
         || normalized.contains("/.fastembed_cache/")
+        || normalized.contains("/.mivi/")
         || normalized.ends_with("/.DS_Store")
 }
 
@@ -128,7 +129,50 @@ impl TurboVecRAG {
     pub async fn index_directory(&self, path: &str) -> usize {
         let path = path.to_string();
         let chunks_result = tokio::task::spawn_blocking(move || {
-            let mut all_chunks = Vec::new();
+            #[derive(serde::Serialize, serde::Deserialize)]
+            struct FileMeta {
+                modified_sec: u64,
+                size: u64,
+            }
+
+            #[derive(serde::Serialize, serde::Deserialize)]
+            struct ProjectState {
+                workspace_path: String,
+                indexed_files: HashMap<String, FileMeta>,
+                chunks: Vec<RagChunk>,
+            }
+
+            fn get_file_meta(file_path: &std::path::Path) -> Option<FileMeta> {
+                let metadata = file_path.metadata().ok()?;
+                let modified = metadata.modified().ok()?;
+                let duration = modified.duration_since(std::time::SystemTime::UNIX_EPOCH).ok()?;
+                Some(FileMeta {
+                    modified_sec: duration.as_secs(),
+                    size: metadata.len(),
+                })
+            }
+
+            let canonical_path = std::fs::canonicalize(&path)
+                .unwrap_or_else(|_| std::path::PathBuf::from(&path))
+                .display()
+                .to_string();
+
+            // 1. Try to load cache
+            let cache_path = std::path::Path::new(".mivi/project_state.json");
+            let mut cached_state: Option<ProjectState> = None;
+            if cache_path.exists() {
+                if let Ok(data) = fs::read_to_string(cache_path) {
+                    if let Ok(state) = serde_json::from_str::<ProjectState>(&data) {
+                        if state.workspace_path == canonical_path {
+                            cached_state = Some(state);
+                        }
+                    }
+                }
+            }
+
+            // 2. Scan workspace to collect files and check against cache
+            let mut current_files = HashMap::new();
+            let mut files_to_read = Vec::new();
             let mut file_count = 0;
 
             for entry in WalkDir::new(&path).into_iter().filter_map(|e| e.ok()) {
@@ -140,27 +184,12 @@ impl TurboVecRAG {
 
                     if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                         if matches!(ext, "py" | "md" | "rs" | "json" | "js" | "ts" | "toml") {
-                            if let Ok(metadata) = entry.metadata() {
-                                if metadata.len() > 1_048_576 {
+                            if let Some(meta) = get_file_meta(entry.path()) {
+                                if meta.size > 1_048_576 {
                                     continue; // Skip files > 1 MB
                                 }
-                            } else {
-                                continue;
-                            }
-
-                            if let Ok(content) = fs::read_to_string(entry.path()) {
-                                let lines: Vec<&str> = content.lines().collect();
-                                let chunk_size = 25;
-                                for (i, chunk_lines) in lines.chunks(chunk_size).enumerate() {
-                                    let chunk_text = chunk_lines.join("\n");
-                                    if chunk_text.trim().len() > 10 {
-                                        all_chunks.push(RagChunk {
-                                            file_path: path_str.clone(),
-                                            line_start: (i * chunk_size) + 1,
-                                            text: chunk_text,
-                                        });
-                                    }
-                                }
+                                current_files.insert(path_str.clone(), meta);
+                                files_to_read.push(entry.path().to_path_buf());
                                 file_count += 1;
                                 if file_count >= 5000 {
                                     break;
@@ -170,6 +199,79 @@ impl TurboVecRAG {
                     }
                 }
             }
+
+            // 3. Check if cached state matches 100%
+            let mut use_cache = false;
+            if let Some(ref state) = cached_state {
+                if state.indexed_files.len() == current_files.len() {
+                    let mut all_match = true;
+                    for (file_path, current_meta) in current_files.iter() {
+                        if let Some(cached_meta) = state.indexed_files.get(file_path) {
+                            if cached_meta.modified_sec != current_meta.modified_sec
+                                || cached_meta.size != current_meta.size
+                            {
+                                all_match = false;
+                                break;
+                            }
+                        } else {
+                            all_match = false;
+                            break;
+                        }
+                    }
+                    if all_match {
+                        use_cache = true;
+                    }
+                }
+            }
+
+            if use_cache {
+                let state = cached_state.unwrap();
+                println!(
+                    "[TurboVec RAG] Loaded cached index for {} chunks from .mivi/project_state.json",
+                    state.chunks.len()
+                );
+                return state.chunks;
+            }
+
+            // 4. Mismatch or no cache -> perform full index
+            let mut all_chunks = Vec::new();
+            for file_path in files_to_read {
+                let path_str = file_path.display().to_string();
+                if let Ok(content) = fs::read_to_string(&file_path) {
+                    let lines: Vec<&str> = content.lines().collect();
+                    let chunk_size = 25;
+                    for (i, chunk_lines) in lines.chunks(chunk_size).enumerate() {
+                        let chunk_text = chunk_lines.join("\n");
+                        if chunk_text.trim().len() > 10 {
+                            all_chunks.push(RagChunk {
+                                file_path: path_str.clone(),
+                                line_start: (i * chunk_size) + 1,
+                                text: chunk_text,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // 5. Save cache
+            let new_state = ProjectState {
+                workspace_path: canonical_path,
+                indexed_files: current_files,
+                chunks: all_chunks.clone(),
+            };
+
+            if let Err(e) = std::fs::create_dir_all(".mivi") {
+                eprintln!("[TurboVec RAG] Failed to create .mivi dir: {}", e);
+            } else if let Ok(json_data) = serde_json::to_string(&new_state) {
+                if let Err(e) = fs::write(".mivi/project_state.json", json_data) {
+                    eprintln!("[TurboVec RAG] Failed to write cache: {}", e);
+                }
+            }
+
+            println!(
+                "[TurboVec RAG] Indexed {} code chunks in workspace (< 1 MB RAM footprint)!",
+                all_chunks.len()
+            );
             all_chunks
         })
         .await;
@@ -178,10 +280,6 @@ impl TurboVecRAG {
         let count = all_chunks.len();
         let mut guard = self.chunks.lock().await;
         *guard = all_chunks;
-        println!(
-            "[TurboVec RAG] Indexed {} code chunks in workspace (< 1 MB RAM footprint)!",
-            count
-        );
         count
     }
 

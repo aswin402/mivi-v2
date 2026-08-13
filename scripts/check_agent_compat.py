@@ -53,6 +53,7 @@ def build_plan(live=False, eval_live=False, base_url=DEFAULT_BASE_URL, trace_pat
                 'test_smoke_openai_compat.py',
                 'test_eval_agent_workflows.py',
                 'test_score_eval.py',
+                'test_eval_tool_calling.py',
             ),
             ROOT / 'scripts',
         ),
@@ -78,6 +79,19 @@ def build_plan(live=False, eval_live=False, base_url=DEFAULT_BASE_URL, trace_pat
                     trace_path,
                     '--kinds',
                     'trace-multi-tool-result',
+                ),
+                ROOT,
+                env,
+            )
+        )
+        steps.append(
+            Step(
+                'live-tool-calling-eval',
+                (
+                    'python3',
+                    'scripts/eval_tool_calling.py',
+                    '--url',
+                    chat_url_for(base_url),
                 ),
                 ROOT,
                 env,

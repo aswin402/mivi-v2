@@ -19,8 +19,15 @@ use tracing::{error, info};
 fn find_tokenizer_path(model_path: &Path) -> Option<PathBuf> {
     // Try using model catalog first
     if let Ok(catalog) = crate::model_catalog::ModelCatalog::load_default() {
+        let abs_model_path = model_path
+            .canonicalize()
+            .unwrap_or_else(|_| model_path.to_path_buf());
         for entry in catalog.models {
-            if Path::new(&entry.path) == model_path {
+            let entry_path = Path::new(&entry.path);
+            let abs_entry_path = entry_path
+                .canonicalize()
+                .unwrap_or_else(|_| entry_path.to_path_buf());
+            if abs_entry_path == abs_model_path {
                 if let Some(tok_path) = entry.tokenizer_path {
                     let p = Path::new(&tok_path);
                     if p.exists() {
@@ -33,12 +40,7 @@ fn find_tokenizer_path(model_path: &Path) -> Option<PathBuf> {
 
     // Fallback: search in the same directory as the model
     if let Some(parent) = model_path.parent() {
-        let tok_json = parent.join("tokenizer.json");
-        if tok_json.exists() {
-            return Some(tok_json);
-        }
-
-        // Match standard names
+        // Match standard names first
         let name_str = model_path.to_string_lossy().to_lowercase();
         if name_str.contains("qwen") {
             let qwen_tok = parent.join("qwen2.5-0.5b-tokenizer.json");
@@ -51,6 +53,12 @@ fn find_tokenizer_path(model_path: &Path) -> Option<PathBuf> {
                 return Some(llama_tok);
             }
         }
+
+        // Generic fallback
+        let tok_json = parent.join("tokenizer.json");
+        if tok_json.exists() {
+            return Some(tok_json);
+        }
     }
     None
 }
@@ -59,6 +67,7 @@ fn find_tokenizer_path(model_path: &Path) -> Option<PathBuf> {
 pub enum QuantizedModel {
     Llama(candle_transformers::models::quantized_llama::ModelWeights),
     Qwen2(candle_transformers::models::quantized_qwen2::ModelWeights),
+    Phi3(candle_transformers::models::quantized_phi3::ModelWeights),
 }
 
 #[cfg(feature = "native")]
@@ -76,6 +85,13 @@ impl QuantizedModel {
                 )
                 .map_err(|e| format!("failed to load quantized qwen2: {}", e))?;
                 Ok(Self::Qwen2(model))
+            }
+            "phi3" => {
+                let model = candle_transformers::models::quantized_phi3::ModelWeights::from_gguf(
+                    false, ct, reader, device,
+                )
+                .map_err(|e| format!("failed to load quantized phi3: {}", e))?;
+                Ok(Self::Phi3(model))
             }
             _ => {
                 let model = candle_transformers::models::quantized_llama::ModelWeights::from_gguf(
@@ -95,6 +111,9 @@ impl QuantizedModel {
             Self::Qwen2(m) => m
                 .forward(x, index_pos)
                 .map_err(|e| format!("Qwen2 forward error: {}", e)),
+            Self::Phi3(m) => m
+                .forward(x, index_pos)
+                .map_err(|e| format!("Phi3 forward error: {}", e)),
         }
     }
 }
@@ -103,6 +122,31 @@ impl QuantizedModel {
 pub struct LoadedModel {
     pub model: Mutex<QuantizedModel>,
     pub tokenizer: Tokenizer,
+    pub vocab: Vec<String>,
+}
+
+#[cfg(feature = "native")]
+fn load_grammar_state(grammar_path: &Option<String>) -> Option<schoolmarm::GrammarState> {
+    let path = grammar_path.as_ref()?;
+    let grammar_str = std::fs::read_to_string(path).ok()?;
+
+    // Clean up comment lines (starting with #) and inline comments (preceded by a space)
+    let mut cleaned_str = String::new();
+    for line in grammar_str.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(idx) = line.find(" #") {
+            cleaned_str.push_str(&line[..idx]);
+        } else {
+            cleaned_str.push_str(line);
+        }
+        cleaned_str.push('\n');
+    }
+
+    let grammar = schoolmarm::Grammar::new(cleaned_str.trim()).ok()?;
+    schoolmarm::GrammarState::new(grammar).ok()
 }
 
 #[cfg(feature = "native")]
@@ -138,6 +182,10 @@ impl NativeBrain {
     }
 
     pub fn get_or_load(&self, model_path: &Path) -> Result<Arc<LoadedModel>, String> {
+        let ultra_low = std::env::var("MIVI_ULTRA_LOW_RAM")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
+
         let mut cache = self.models.lock().unwrap();
         let canonical_path = model_path.to_path_buf();
 
@@ -179,12 +227,25 @@ impl NativeBrain {
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| format!("failed to load tokenizer: {}", e))?;
 
+        let vocab_size = tokenizer.get_vocab_size(true);
+        let mut vocab = vec![String::new(); vocab_size];
+        for id in 0..vocab_size {
+            if let Some(token) = tokenizer.id_to_token(id as u32) {
+                vocab[id] = token;
+            }
+        }
+
         let loaded = Arc::new(LoadedModel {
             model: Mutex::new(model),
             tokenizer,
+            vocab,
         });
 
-        cache.insert(canonical_path, loaded.clone());
+        if ultra_low {
+            info!("[NativeBrain] Ultra-low-RAM mode active: model will not be cached in memory");
+        } else {
+            cache.insert(canonical_path, loaded.clone());
+        }
         Ok(loaded)
     }
 
@@ -195,6 +256,7 @@ impl NativeBrain {
         system_prompt: &str,
         temp_str: &str,
         max_tokens: usize,
+        grammar_path: Option<String>,
     ) -> Result<String, String> {
         let loaded = self.get_or_load(model_path)?;
         let mut model = loaded.model.lock().unwrap();
@@ -265,22 +327,68 @@ impl NativeBrain {
 
         index_pos += token_ids.len();
 
+        let mut grammar_state = load_grammar_state(&grammar_path);
+        let vocab_refs: Vec<&str> = loaded.vocab.iter().map(|s| s.as_str()).collect();
+        let eos_token_id = tokenizer
+            .token_to_id("<|im_end|>")
+            .or_else(|| tokenizer.token_to_id("<|endoftext|>"));
+
         // Sample first token
-        let squeezed = logits
+        let mut squeezed = logits
             .squeeze(0)
             .map_err(|e| format!("Squeeze error: {}", e))?;
+
+        if let Some(ref mut g_state) = grammar_state {
+            let mut mask = g_state.allowed_tokens(&vocab_refs);
+            if g_state.is_accepting() {
+                if let Some(eos_id) = eos_token_id {
+                    if (eos_id as usize) < mask.len() {
+                        mask[eos_id as usize] = true;
+                    }
+                }
+            }
+            let mut logits_vec = squeezed
+                .to_vec1::<f32>()
+                .map_err(|e| format!("To vec1 error: {}", e))?;
+            for (idx, &allowed) in mask.iter().enumerate() {
+                if !allowed {
+                    logits_vec[idx] = f32::NEG_INFINITY;
+                }
+            }
+            squeezed = Tensor::new(&logits_vec[..], &device)
+                .map_err(|e| format!("Tensor creation error: {}", e))?;
+        }
 
         let mut next_token = logits_processor
             .sample(&squeezed)
             .map_err(|e| format!("Sampling error: {}", e))?;
 
+        if let Some(ref mut g_state) = grammar_state {
+            let token_str = &loaded.vocab[next_token as usize];
+            let _ = g_state.accept_token(token_str);
+        }
+
         generated_tokens.push(next_token);
 
-        let eos_token_id = tokenizer
-            .token_to_id("<|im_end|>")
-            .or_else(|| tokenizer.token_to_id("<|endoftext|>"));
+        let timeout_secs = if std::env::var("MIVI_ULTRA_LOW_RAM")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false)
+        {
+            30
+        } else {
+            60
+        };
+        let deadline = std::time::Instant::now();
 
         for _ in 1..max_tokens {
+            if deadline.elapsed().as_secs() > timeout_secs {
+                tracing::warn!(
+                    "[NativeBrain] Inference timeout reached ({}s wall-clock limit)",
+                    timeout_secs
+                );
+                break;
+            }
+
             if let Some(eos_id) = eos_token_id {
                 if next_token == eos_id {
                     break;
@@ -299,22 +407,263 @@ impl NativeBrain {
 
             index_pos += 1;
 
-            let squeezed = logits
+            let mut squeezed = logits
                 .squeeze(0)
                 .map_err(|e| format!("Squeeze error: {}", e))?;
+
+            if let Some(ref mut g_state) = grammar_state {
+                let mut mask = g_state.allowed_tokens(&vocab_refs);
+                if g_state.is_accepting() {
+                    if let Some(eos_id) = eos_token_id {
+                        if (eos_id as usize) < mask.len() {
+                            mask[eos_id as usize] = true;
+                        }
+                    }
+                }
+                let mut logits_vec = squeezed
+                    .to_vec1::<f32>()
+                    .map_err(|e| format!("To vec1 error: {}", e))?;
+                for (idx, &allowed) in mask.iter().enumerate() {
+                    if !allowed {
+                        logits_vec[idx] = f32::NEG_INFINITY;
+                    }
+                }
+                squeezed = Tensor::new(&logits_vec[..], &device)
+                    .map_err(|e| format!("Tensor creation error: {}", e))?;
+            }
 
             next_token = logits_processor
                 .sample(&squeezed)
                 .map_err(|e| format!("Sampling error: {}", e))?;
 
+            if let Some(ref mut g_state) = grammar_state {
+                let token_str = &loaded.vocab[next_token as usize];
+                let _ = g_state.accept_token(token_str);
+            }
+
             generated_tokens.push(next_token);
+
+            // Check if current decoded text ends with any of the stop words
+            let current_text = tokenizer
+                .decode(&generated_tokens, true)
+                .unwrap_or_default();
+            let mut matched_stop = false;
+            for stop in &t.stop_words {
+                if current_text.ends_with(stop) {
+                    matched_stop = true;
+                    break;
+                }
+            }
+            if matched_stop {
+                break;
+            }
         }
 
         let decoded = tokenizer
             .decode(&generated_tokens, true)
             .map_err(|e| format!("Decoding error: {}", e))?;
 
-        Ok(crate::brain::strip_think_blocks(&decoded))
+        let mut cleaned = decoded;
+        for stop in &t.stop_words {
+            if let Some(stripped) = cleaned.strip_suffix(stop) {
+                cleaned = stripped.to_string();
+            }
+        }
+
+        Ok(crate::brain::strip_think_blocks(&cleaned))
+    }
+
+    pub fn query_raw_prompt(
+        &self,
+        model_path: &Path,
+        formatted_prompt: &str,
+        temp_str: &str,
+        max_tokens: usize,
+        grammar_path: Option<String>,
+    ) -> Result<String, String> {
+        let loaded = self.get_or_load(model_path)?;
+        let mut model = loaded.model.lock().unwrap();
+        let tokenizer = &loaded.tokenizer;
+
+        let tokens = tokenizer
+            .encode(formatted_prompt, true)
+            .map_err(|e| format!("Tokenization error: {}", e))?;
+        let token_ids = tokens.get_ids().to_vec();
+        if token_ids.is_empty() {
+            return Err("Tokenized prompt is empty".to_string());
+        }
+
+        let device = Device::Cpu;
+        let temp = temp_str.parse::<f64>().unwrap_or(0.2);
+
+        let sampling = if temp <= 0.0 {
+            Sampling::ArgMax
+        } else {
+            Sampling::TopP {
+                p: 0.9,
+                temperature: temp,
+            }
+        };
+        let mut logits_processor = LogitsProcessor::from_sampling(299792458, sampling);
+
+        let mut generated_tokens = Vec::new();
+        let mut index_pos = 0;
+
+        // Prefill
+        let input = Tensor::new(&token_ids[..], &device)
+            .map_err(|e| format!("Tensor creation error: {}", e))?
+            .unsqueeze(0)
+            .map_err(|e| format!("Tensor unsqueeze error: {}", e))?;
+
+        let logits = model
+            .forward(&input, index_pos)
+            .map_err(|e| format!("Forward pass error: {}", e))?;
+
+        index_pos += token_ids.len();
+
+        let mut grammar_state = load_grammar_state(&grammar_path);
+        let vocab_refs: Vec<&str> = loaded.vocab.iter().map(|s| s.as_str()).collect();
+        let eos_token_id = tokenizer
+            .token_to_id("<|im_end|>")
+            .or_else(|| tokenizer.token_to_id("<|endoftext|>"));
+
+        // Sample first token
+        let mut squeezed = logits
+            .squeeze(0)
+            .map_err(|e| format!("Squeeze error: {}", e))?;
+
+        if let Some(ref mut g_state) = grammar_state {
+            let mut mask = g_state.allowed_tokens(&vocab_refs);
+            if g_state.is_accepting() {
+                if let Some(eos_id) = eos_token_id {
+                    if (eos_id as usize) < mask.len() {
+                        mask[eos_id as usize] = true;
+                    }
+                }
+            }
+            let mut logits_vec = squeezed
+                .to_vec1::<f32>()
+                .map_err(|e| format!("To vec1 error: {}", e))?;
+            for (idx, &allowed) in mask.iter().enumerate() {
+                if !allowed {
+                    logits_vec[idx] = f32::NEG_INFINITY;
+                }
+            }
+            squeezed = Tensor::new(&logits_vec[..], &device)
+                .map_err(|e| format!("Tensor creation error: {}", e))?;
+        }
+
+        let mut next_token = logits_processor
+            .sample(&squeezed)
+            .map_err(|e| format!("Sampling error: {}", e))?;
+
+        if let Some(ref mut g_state) = grammar_state {
+            let token_str = &loaded.vocab[next_token as usize];
+            let _ = g_state.accept_token(token_str);
+        }
+
+        generated_tokens.push(next_token);
+
+        let timeout_secs = if std::env::var("MIVI_ULTRA_LOW_RAM")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false)
+        {
+            30
+        } else {
+            60
+        };
+        let deadline = std::time::Instant::now();
+
+        let t = crate::server::active_chat_template();
+        for _ in 1..max_tokens {
+            if deadline.elapsed().as_secs() > timeout_secs {
+                tracing::warn!(
+                    "[NativeBrain] Inference timeout reached ({}s wall-clock limit)",
+                    timeout_secs
+                );
+                break;
+            }
+
+            if let Some(eos_id) = eos_token_id {
+                if next_token == eos_id {
+                    break;
+                }
+            }
+
+            let input = Tensor::new(&[next_token], &device)
+                .map_err(|e| format!("Tensor creation error: {}", e))?
+                .unsqueeze(0)
+                .map_err(|e| format!("Tensor unsqueeze error: {}", e))?;
+
+            let logits = model
+                .forward(&input, index_pos)
+                .map_err(|e| format!("Forward pass error: {}", e))?;
+
+            index_pos += 1;
+
+            let mut squeezed = logits
+                .squeeze(0)
+                .map_err(|e| format!("Squeeze error: {}", e))?;
+
+            if let Some(ref mut g_state) = grammar_state {
+                let mut mask = g_state.allowed_tokens(&vocab_refs);
+                if g_state.is_accepting() {
+                    if let Some(eos_id) = eos_token_id {
+                        if (eos_id as usize) < mask.len() {
+                            mask[eos_id as usize] = true;
+                        }
+                    }
+                }
+                let mut logits_vec = squeezed
+                    .to_vec1::<f32>()
+                    .map_err(|e| format!("To vec1 error: {}", e))?;
+                for (idx, &allowed) in mask.iter().enumerate() {
+                    if !allowed {
+                        logits_vec[idx] = f32::NEG_INFINITY;
+                    }
+                }
+                squeezed = Tensor::new(&logits_vec[..], &device)
+                    .map_err(|e| format!("Tensor creation error: {}", e))?;
+            }
+
+            next_token = logits_processor
+                .sample(&squeezed)
+                .map_err(|e| format!("Sampling error: {}", e))?;
+
+            if let Some(ref mut g_state) = grammar_state {
+                let token_str = &loaded.vocab[next_token as usize];
+                let _ = g_state.accept_token(token_str);
+            }
+
+            generated_tokens.push(next_token);
+
+            let current_text = tokenizer
+                .decode(&generated_tokens, true)
+                .unwrap_or_default();
+            let mut matched_stop = false;
+            for stop in &t.stop_words {
+                if current_text.ends_with(stop) {
+                    matched_stop = true;
+                    break;
+                }
+            }
+            if matched_stop {
+                break;
+            }
+        }
+
+        let decoded = tokenizer
+            .decode(&generated_tokens, true)
+            .map_err(|e| format!("Decoding error: {}", e))?;
+
+        let mut cleaned = decoded;
+        for stop in &t.stop_words {
+            if let Some(stripped) = cleaned.strip_suffix(stop) {
+                cleaned = stripped.to_string();
+            }
+        }
+
+        Ok(crate::brain::strip_think_blocks(&cleaned))
     }
 
     pub fn query_stream(
@@ -324,6 +673,7 @@ impl NativeBrain {
         system_prompt: &str,
         temp_str: &str,
         max_tokens: usize,
+        grammar_path: Option<String>,
     ) -> Result<tokio::sync::mpsc::Receiver<String>, String> {
         let loaded = self.get_or_load(model_path)?;
         let (tx, rx) = tokio::sync::mpsc::channel(100);
@@ -339,7 +689,7 @@ impl NativeBrain {
 
                 let t = crate::server::active_chat_template();
                 let (extracted_system, extracted_user) =
-                    crate::brain::split_prompt_system_user(prompt);
+                    crate::brain::split_prompt_system_user(&prompt);
                 let final_system = if extracted_system.is_empty() {
                     system_prompt.to_string()
                 } else {
@@ -403,20 +753,49 @@ impl NativeBrain {
 
                 index_pos += token_ids.len();
 
+                let mut grammar_state = load_grammar_state(&grammar_path);
+                let eos_token_id = tokenizer
+                    .token_to_id("<|im_end|>")
+                    .or_else(|| tokenizer.token_to_id("<|endoftext|>"));
+
+                let vocab_refs: Vec<&str> = loaded.vocab.iter().map(|s| s.as_str()).collect();
+
                 // Sample first token
-                let squeezed = logits
+                let mut squeezed = logits
                     .squeeze(0)
                     .map_err(|e| format!("Squeeze error: {}", e))?;
+
+                if let Some(ref mut g_state) = grammar_state {
+                    let mut mask = g_state.allowed_tokens(&vocab_refs);
+                    if g_state.is_accepting() {
+                        if let Some(eos_id) = eos_token_id {
+                            if (eos_id as usize) < mask.len() {
+                                mask[eos_id as usize] = true;
+                            }
+                        }
+                    }
+                    let mut logits_vec = squeezed
+                        .to_vec1::<f32>()
+                        .map_err(|e| format!("To vec1 error: {}", e))?;
+                    for (idx, &allowed) in mask.iter().enumerate() {
+                        if !allowed {
+                            logits_vec[idx] = f32::NEG_INFINITY;
+                        }
+                    }
+                    squeezed = Tensor::new(&logits_vec[..], &device)
+                        .map_err(|e| format!("Tensor creation error: {}", e))?;
+                }
 
                 let mut next_token = logits_processor
                     .sample(&squeezed)
                     .map_err(|e| format!("Sampling error: {}", e))?;
 
-                generated_tokens.push(next_token);
+                if let Some(ref mut g_state) = grammar_state {
+                    let token_str = &loaded.vocab[next_token as usize];
+                    let _ = g_state.accept_token(token_str);
+                }
 
-                let eos_token_id = tokenizer
-                    .token_to_id("<|im_end|>")
-                    .or_else(|| tokenizer.token_to_id("<|endoftext|>"));
+                generated_tokens.push(next_token);
 
                 let mut decoded_len = 0;
                 let mut skipping_think = false;
@@ -458,7 +837,29 @@ impl NativeBrain {
                     return Ok(());
                 }
 
+                let timeout_secs = if std::env::var("MIVI_ULTRA_LOW_RAM")
+                    .map(|v| v == "1" || v == "true")
+                    .unwrap_or(false)
+                {
+                    30
+                } else {
+                    60
+                };
+                let deadline = std::time::Instant::now();
+
                 for _ in 1..max_tokens {
+                    if deadline.elapsed().as_secs() > timeout_secs {
+                        tracing::warn!(
+                            "[NativeBrain] Inference timeout reached ({}s wall-clock limit)",
+                            timeout_secs
+                        );
+                        let _ = tx.blocking_send(format!(
+                            "\n[NativeBrain: Timeout reached after {}s]",
+                            timeout_secs
+                        ));
+                        break;
+                    }
+
                     if let Some(eos_id) = eos_token_id {
                         if next_token == eos_id {
                             break;
@@ -477,15 +878,56 @@ impl NativeBrain {
 
                     index_pos += 1;
 
-                    let squeezed = logits
+                    let mut squeezed = logits
                         .squeeze(0)
                         .map_err(|e| format!("Squeeze error: {}", e))?;
+
+                    if let Some(ref mut g_state) = grammar_state {
+                        let mut mask = g_state.allowed_tokens(&vocab_refs);
+                        if g_state.is_accepting() {
+                            if let Some(eos_id) = eos_token_id {
+                                if (eos_id as usize) < mask.len() {
+                                    mask[eos_id as usize] = true;
+                                }
+                            }
+                        }
+                        let mut logits_vec = squeezed
+                            .to_vec1::<f32>()
+                            .map_err(|e| format!("To vec1 error: {}", e))?;
+                        for (idx, &allowed) in mask.iter().enumerate() {
+                            if !allowed {
+                                logits_vec[idx] = f32::NEG_INFINITY;
+                            }
+                        }
+                        squeezed = Tensor::new(&logits_vec[..], &device)
+                            .map_err(|e| format!("Tensor creation error: {}", e))?;
+                    }
 
                     next_token = logits_processor
                         .sample(&squeezed)
                         .map_err(|e| format!("Sampling error: {}", e))?;
 
+                    if let Some(ref mut g_state) = grammar_state {
+                        let token_str = &loaded.vocab[next_token as usize];
+                        let _ = g_state.accept_token(token_str);
+                    }
+
                     generated_tokens.push(next_token);
+
+                    // Check if current decoded text ends with any of the stop words
+                    let current_text = tokenizer
+                        .decode(&generated_tokens, true)
+                        .map_err(|e| format!("Decoding error: {}", e))?;
+                    let mut matched_stop = false;
+                    for stop in &t.stop_words {
+                        if current_text.ends_with(stop) {
+                            matched_stop = true;
+                            break;
+                        }
+                    }
+                    if matched_stop {
+                        break;
+                    }
 
                     if !process_and_send(&generated_tokens, &mut skipping_think)? {
                         break;
@@ -511,21 +953,91 @@ impl NativeBrain {
     pub fn new() -> Self {
         Self
     }
+
+    pub fn query(
+        &self,
+        _model_path: &std::path::Path,
+        _prompt: &str,
+        _system_prompt: &str,
+        _temp_str: &str,
+        _max_tokens: usize,
+    ) -> Result<String, String> {
+        Err(
+            "Native inference backend is disabled. Rebuild with `--features native` to enable it."
+                .to_string(),
+        )
+    }
+
+    pub fn query_raw_prompt(
+        &self,
+        _model_path: &std::path::Path,
+        _formatted_prompt: &str,
+        _temp_str: &str,
+        _max_tokens: usize,
+    ) -> Result<String, String> {
+        Err(
+            "Native inference backend is disabled. Rebuild with `--features native` to enable it."
+                .to_string(),
+        )
+    }
+
+    pub fn query_stream(
+        &self,
+        _model_path: &std::path::Path,
+        _prompt: &str,
+        _system_prompt: &str,
+        _temp_str: &str,
+        _max_tokens: usize,
+    ) -> Result<tokio::sync::mpsc::Receiver<String>, String> {
+        Err(
+            "Native inference backend is disabled. Rebuild with `--features native` to enable it."
+                .to_string(),
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(feature = "native")]
     #[test]
-    fn test_native_brain_new() {
-        let _brain = NativeBrain::new();
+    fn test_grammar_error() {
+        for grammar_name in &[
+            "json_object.gbnf",
+            "openai_tool_call.gbnf",
+            "hermes_tool_call.gbnf",
+        ] {
+            let grammar_path = format!("configs/grammars/{}", grammar_name);
+            let grammar_str = std::fs::read_to_string(&grammar_path).unwrap();
+            let mut cleaned_str = String::new();
+            for line in grammar_str.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('#') {
+                    continue;
+                }
+                if let Some(idx) = line.find(" #") {
+                    cleaned_str.push_str(&line[..idx]);
+                } else {
+                    cleaned_str.push_str(line);
+                }
+                cleaned_str.push('\n');
+            }
+            let res = schoolmarm::Grammar::new(cleaned_str.trim());
+            assert!(
+                res.is_ok(),
+                "Failed to parse grammar {}: {:?}",
+                grammar_name,
+                res.err()
+            );
+        }
     }
 
     #[cfg(feature = "native")]
     #[test]
+    #[ignore]
     fn test_native_brain_inference_if_present() {
-        let model_path = std::path::Path::new("models/qwen2.5-0.5b-instruct-q4_k_m.gguf");
+        let model_path = std::path::Path::new("models/Qwen3-1.7B-Q2_K.gguf");
         if !model_path.exists() {
             println!("Skipping native brain test as model weights are missing");
             return;
@@ -535,7 +1047,7 @@ mod tests {
         let prompt = "Why is Rust a safe programming language? Keep it to 1 sentence.";
         let system_prompt = "You are a helpful assistant.";
 
-        let result = brain.query(model_path, prompt, system_prompt, "0.1", 100);
+        let result = brain.query(model_path, prompt, system_prompt, "0.1", 100, None);
         assert!(result.is_ok(), "Query failed: {:?}", result.err());
         let answer = result.unwrap();
         println!("Native inference answer: {}", answer);
@@ -543,7 +1055,49 @@ mod tests {
     }
 
     #[cfg(feature = "native")]
+    #[test]
+    #[ignore]
+    fn test_native_brain_grammar_inference_if_present() {
+        let model_path = std::path::Path::new("models/qwen2.5-0.5b-instruct-q4_k_m.gguf");
+        let grammar_path = std::path::Path::new("configs/grammars/json_object.gbnf");
+        if !model_path.exists() || !grammar_path.exists() {
+            println!("Skipping native brain grammar test as weights or grammar are missing");
+            return;
+        }
+
+        let brain = NativeBrain::new();
+        let grammar_state_loaded =
+            load_grammar_state(&Some(grammar_path.to_string_lossy().to_string()));
+        assert!(
+            grammar_state_loaded.is_some(),
+            "Grammar state failed to load"
+        );
+
+        let prompt =
+            "Output a JSON object with keys 'name' and 'age' for a person named John aged 30.";
+        let system_prompt = "You are a helpful JSON generator. You MUST output ONLY valid JSON.";
+
+        let result = brain.query(
+            model_path,
+            prompt,
+            system_prompt,
+            "0.1",
+            100,
+            Some(grammar_path.to_string_lossy().to_string()),
+        );
+        assert!(result.is_ok(), "Query failed: {:?}", result.err());
+        let answer = result.unwrap();
+        println!("Grammar constrained JSON output: {}", answer);
+
+        let json_val: serde_json::Value =
+            serde_json::from_str(&answer).expect("Output should be valid JSON");
+        assert!(json_val.get("name").is_some(), "Should contain name");
+        assert_eq!(json_val.get("age").and_then(|v| v.as_u64()), Some(30));
+    }
+
+    #[cfg(feature = "native")]
     #[tokio::test]
+    #[ignore]
     async fn test_native_brain_stream_inference_if_present() {
         let model_path = Path::new("models/qwen2.5-0.5b-instruct-q4_k_m.gguf");
         if !model_path.exists() {
@@ -556,7 +1110,7 @@ mod tests {
         let system_prompt = "You are a helpful assistant.";
 
         let mut rx = brain
-            .query_stream(model_path, prompt, system_prompt, "0.1", 100)
+            .query_stream(model_path, prompt, system_prompt, "0.1", 100, None)
             .expect("Stream setup failed");
 
         let mut output = String::new();

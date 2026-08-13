@@ -18,7 +18,7 @@ pub const DEFAULT_RAM_TARGET_MB: usize = 1000;
 pub const MIVI_CHAT_SYSTEM_PROMPT: &str = "You are MIVI, a local OpenAI-compatible model endpoint for AI agents. Externally your model name is mivi. Never identify as Qwen or Llama. Treat the calling agent's instructions, schemas, results, memory, and context as truth. Answer concisely and honestly.";
 
 /// The maximum number of tools to include in a filtered prompt context.
-pub const MAX_PROMPT_TOOLS: usize = 8;
+pub const MAX_PROMPT_TOOLS: usize = 5;
 
 /// The minimum similarity score threshold for selecting tools.
 pub const MIN_TOOL_SCORE: f32 = 1.0;

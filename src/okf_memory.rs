@@ -141,6 +141,68 @@ fn safe_file_stem(id: &str) -> String {
     }
 }
 
+pub fn search_memories(memories: &[OkfMemory], query: &str, limit: usize) -> Vec<OkfMemory> {
+    if query.trim().is_empty() {
+        return memories.to_vec();
+    }
+
+    let query_words: Vec<String> = query
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty() && s.len() > 2)
+        .map(|s| s.to_string())
+        .collect();
+
+    if query_words.is_empty() {
+        return memories.iter().take(limit).cloned().collect();
+    }
+
+    let mut scored_memories: Vec<(usize, OkfMemory)> = memories
+        .iter()
+        .map(|memory| {
+            let mut score = 0;
+
+            let title_lower = memory.title.to_lowercase();
+            let body_lower = memory.body.to_lowercase();
+
+            for word in &query_words {
+                if title_lower.contains(word) {
+                    score += 5;
+                }
+                for tag in &memory.tags {
+                    if tag.to_lowercase() == *word {
+                        score += 5;
+                    } else if tag.to_lowercase().contains(word) {
+                        score += 2;
+                    }
+                }
+                if body_lower.contains(word) {
+                    score += 1;
+                    let count = body_lower.matches(word).count();
+                    score += count.min(5);
+                }
+            }
+
+            (score, memory.clone())
+        })
+        .collect();
+
+    scored_memories.sort_by(|(score_a, _), (score_b, _)| score_b.cmp(score_a));
+
+    let mut results: Vec<OkfMemory> = scored_memories
+        .into_iter()
+        .filter(|(score, _)| *score > 0)
+        .map(|(_, memory)| memory)
+        .take(limit)
+        .collect();
+
+    if results.is_empty() && !memories.is_empty() {
+        results = memories.iter().take(limit).cloned().collect();
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +271,48 @@ mod tests {
 
         assert!(written.contains("type: preference"));
         assert_eq!(loaded, vec![memory]);
+    }
+
+    #[test]
+    fn test_search_memories_scores_and_filters_relevance() {
+        let memories = vec![
+            OkfMemory {
+                id: "rust-guide".to_string(),
+                title: "Rust coding guidelines".to_string(),
+                kind: "guide".to_string(),
+                tags: vec!["rust".to_string(), "compile".to_string()],
+                body: "Always use cargo test to verify changes.".to_string(),
+            },
+            OkfMemory {
+                id: "python-env".to_string(),
+                title: "Python environment setup".to_string(),
+                kind: "setup".to_string(),
+                tags: vec!["python".to_string(), "env".to_string()],
+                body: "Make sure uv or pip is installed.".to_string(),
+            },
+            OkfMemory {
+                id: "general-info".to_string(),
+                title: "General project overview".to_string(),
+                kind: "overview".to_string(),
+                tags: vec!["general".to_string()],
+                body: "This project uses Candle as native engine.".to_string(),
+            },
+        ];
+
+        // Search for "rust compiler guide" -> rust-guide should match first
+        let results = search_memories(&memories, "rust compiler guide", 2);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "rust-guide");
+
+        // Search for "python uv setup" -> python-env should match first
+        let results2 = search_memories(&memories, "python uv setup", 2);
+        assert_eq!(results2.len(), 1);
+        assert_eq!(results2[0].id, "python-env");
+
+        // Search for something irrelevant -> fallback to limit (first 2)
+        let results3 = search_memories(&memories, "something completely different", 2);
+        assert_eq!(results3.len(), 2);
+        assert_eq!(results3[0].id, "rust-guide");
+        assert_eq!(results3[1].id, "python-env");
     }
 }

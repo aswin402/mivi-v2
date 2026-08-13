@@ -1,0 +1,5 @@
+# Enable AVX2 + FMA SIMD instructions for native CPU inference.
+# This gives 2-4x speedup on AMD Ryzen / Intel Haswell+ CPUs.
+# The binary will only run on CPUs with AVX2 support (2013+).
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+avx2,+fma,+f16c"]

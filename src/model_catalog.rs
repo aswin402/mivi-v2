@@ -357,4 +357,17 @@ mod tests {
         let err = ModelCatalog::from_json(&duplicate).expect_err("duplicate ids should fail");
         assert!(err.to_string().contains("duplicate model id"));
     }
+
+    #[test]
+    fn print_default_catalog() {
+        let cat = ModelCatalog::load_default().expect("catalog load failed");
+        println!(
+            "Default Reasoner: {:?}",
+            cat.default_enabled_path(ModelRole::Reasoner)
+        );
+        println!(
+            "Default Coder: {:?}",
+            cat.default_enabled_path(ModelRole::Coder)
+        );
+    }
 }

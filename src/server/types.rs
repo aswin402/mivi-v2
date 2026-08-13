@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use super::helpers::{count_with_llama_cpp_tokenizer, default_tool_type, TokenCounter};
+use super::helpers::{default_tool_type, TokenCounter};
 use crate::brain::EdgeBrain;
 use crate::model_catalog::{ModelCatalog, ModelRole};
 use crate::orchestrator::AgentOrchestrator;
@@ -39,7 +41,7 @@ pub struct FunctionCallIn {
     pub arguments: String, // JSON string
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
     pub role: String,
     pub content: serde_json::Value,
@@ -49,7 +51,7 @@ pub struct ChatMessage {
     pub tool_calls: Option<Vec<ToolCallIn>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ChatCompletionRequest {
     pub model: Option<String>,
     pub messages: Vec<ChatMessage>,
@@ -296,13 +298,7 @@ pub struct RuntimeTokenCounter {
 
 impl TokenCounter for RuntimeTokenCounter {
     fn count_tokens(&self, text: &str) -> u32 {
-        match &self.backend {
-            TokenCounterBackend::Cheap => self.fallback.count_tokens(text),
-            TokenCounterBackend::LlamaCpp { command, model } => {
-                count_with_llama_cpp_tokenizer(command, model, text)
-                    .unwrap_or_else(|| self.fallback.count_tokens(text))
-            }
-        }
+        crate::tokenizer::count_tokens(text)
     }
 }
 
@@ -310,22 +306,7 @@ pub struct CheapTokenCounter;
 
 impl TokenCounter for CheapTokenCounter {
     fn count_tokens(&self, text: &str) -> u32 {
-        let mut tokens = 0_u32;
-        let mut in_word = false;
-        for ch in text.chars() {
-            if ch.is_alphanumeric() || ch == '_' {
-                if !in_word {
-                    tokens = tokens.saturating_add(1);
-                    in_word = true;
-                }
-            } else {
-                in_word = false;
-                if !ch.is_whitespace() {
-                    tokens = tokens.saturating_add(1);
-                }
-            }
-        }
-        tokens
+        crate::tokenizer::count_tokens(text)
     }
 }
 
@@ -395,6 +376,42 @@ pub struct AppState {
     pub orchestrator: AgentOrchestrator,
     pub router: NeedleRouter,
     pub semaphore: std::sync::Arc<tokio::sync::Semaphore>,
+    pub rate_limiter: RateLimiter,
+}
+
+#[derive(Clone)]
+pub struct RateLimiter {
+    requests: Arc<Mutex<HashMap<String, Vec<Instant>>>>,
+}
+
+impl RateLimiter {
+    pub fn new() -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn check_rate_limit(&self, client_id: String) -> Result<(), String> {
+        let mut reqs = self.requests.lock().unwrap();
+        let now = Instant::now();
+        let times = reqs.entry(client_id).or_default();
+
+        let window = Duration::from_secs(60);
+        let max_requests = 60;
+
+        let cutoff = now - window;
+        times.retain(|&t| t > cutoff);
+
+        if times.len() >= max_requests {
+            return Err(format!(
+                "Rate limit exceeded (max {} requests per minute).",
+                max_requests
+            ));
+        }
+
+        times.push(now);
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -43,7 +43,7 @@ const KEYWORD_RULES: &[(&str, &[&str])] = &[
 ];
 
 const TRAINING_DATA: &[(&str, &str)] = &[
-    // CHAT (25 examples)
+    // CHAT (35 examples)
     ("hello how are you", "CHAT"),
     ("what is the weather today", "CHAT"),
     ("tell me a joke", "CHAT"),
@@ -69,7 +69,50 @@ const TRAINING_DATA: &[(&str, &str)] = &[
     ("do you understand", "CHAT"),
     ("let's discuss", "CHAT"),
     ("what are your thoughts", "CHAT"),
-    // VISION (15 examples)
+    (
+        "what module handles intent routing in this codebase",
+        "CHAT",
+    ),
+    (
+        "explain the safest fix for a failed tool in codebase",
+        "CHAT",
+    ),
+    ("cargo cache is corrupted error fix", "CHAT"),
+    (
+        "who designed the google deepmind team working on advanced agentic coding",
+        "CHAT",
+    ),
+    ("what is the local server port default value", "CHAT"),
+    ("give me a summary of current tasks status", "CHAT"),
+    ("why does this error occur in my runtime config", "CHAT"),
+    ("how can i retrieve okf memory tag matches", "CHAT"),
+    ("can you translate this sentence into spanish", "CHAT"),
+    ("what are the core guidelines for rust skills", "CHAT"),
+    ("so whats new", "CHAT"),
+    ("hey whats new", "CHAT"),
+    ("whats new in your version", "CHAT"),
+    ("whats your name", "CHAT"),
+    ("what is your name", "CHAT"),
+    ("whats my name", "CHAT"),
+    ("what is my name", "CHAT"),
+    ("who are you", "CHAT"),
+    ("hey how are you", "CHAT"),
+    ("hi there", "CHAT"),
+    ("hii", "CHAT"),
+    ("hey", "CHAT"),
+    ("sup", "CHAT"),
+    ("yo", "CHAT"),
+    ("can you access the internet", "CHAT"),
+    ("do you have internet access", "CHAT"),
+    ("what can you do", "CHAT"),
+    ("how do you work", "CHAT"),
+    ("what are you", "CHAT"),
+    ("tell me about yourself", "CHAT"),
+    ("research about this", "CHAT"),
+    ("tell me about this link", "CHAT"),
+    ("what is this website", "CHAT"),
+    ("check this url", "CHAT"),
+    // VISION (25 examples)
     ("look at this image", "VISION"),
     ("describe this photo", "VISION"),
     ("what do you see in this picture", "VISION"),
@@ -85,7 +128,29 @@ const TRAINING_DATA: &[(&str, &str)] = &[
     ("is there a person in this photo", "VISION"),
     ("what is the text on screen", "VISION"),
     ("take a look at this diagram", "VISION"),
-    // CODE (20 examples)
+    ("what are the ui elements in this mock up design", "VISION"),
+    ("can you find the logo in this picture file", "VISION"),
+    ("read the whiteboard text in this photo", "VISION"),
+    (
+        "check if the graph layout in this image is correct",
+        "VISION",
+    ),
+    ("describe the chart shown in this png", "VISION"),
+    ("extract table data from this screenshot jpeg", "VISION"),
+    (
+        "tell me what architecture is shown in the diagram image",
+        "VISION",
+    ),
+    (
+        "analyze the user interface from this design screenshot",
+        "VISION",
+    ),
+    (
+        "is the text readable in this low resolution picture",
+        "VISION",
+    ),
+    ("what object is at the top left of this photo", "VISION"),
+    // CODE (30 examples)
     ("write a python script", "CODE"),
     ("create a function that sorts", "CODE"),
     ("implement a fibonacci sequence", "CODE"),
@@ -106,7 +171,32 @@ const TRAINING_DATA: &[(&str, &str)] = &[
     ("create a react component", "CODE"),
     ("implement authentication", "CODE"),
     ("parse this json response", "CODE"),
-    // MULTI_STEP (15 examples)
+    ("compile this rust code and fix compile errors", "CODE"),
+    ("write a handler for http post requests in axum", "CODE"),
+    (
+        "implement custom json schema deserializer in helpers",
+        "CODE",
+    ),
+    (
+        "fix syntax error unexpected closing delimiter in compiler output",
+        "CODE",
+    ),
+    ("add a test case to verify schema validation rules", "CODE"),
+    ("write a recursive tokenizer using candle core", "CODE"),
+    (
+        "generate git diff between branch main and current dev",
+        "CODE",
+    ),
+    (
+        "how to parse arguments dynamically from command line in rust",
+        "CODE",
+    ),
+    ("implement sliding window rate limiter state", "CODE"),
+    (
+        "refactor verifier module to repair python type errors",
+        "CODE",
+    ),
+    // MULTI_STEP (25 examples)
     ("first do this then that", "MULTI_STEP"),
     ("do step 1 and step 2", "MULTI_STEP"),
     ("then after that execute", "MULTI_STEP"),
@@ -122,6 +212,46 @@ const TRAINING_DATA: &[(&str, &str)] = &[
     ("perform these actions in order", "MULTI_STEP"),
     ("execute the following sequence", "MULTI_STEP"),
     ("run these commands sequentially", "MULTI_STEP"),
+    (
+        "first pull repo then build then run test suite",
+        "MULTI_STEP",
+    ),
+    (
+        "create a plan to refactor code then execute and check results",
+        "MULTI_STEP",
+    ),
+    (
+        "for every file in directory run grep and count occurrences",
+        "MULTI_STEP",
+    ),
+    (
+        "run compile phase then verifier checks then commit changes",
+        "MULTI_STEP",
+    ),
+    (
+        "first download model weights then run native server then audit",
+        "MULTI_STEP",
+    ),
+    (
+        "do a full sweep of codebase locate todos then fix them in sequence",
+        "MULTI_STEP",
+    ),
+    (
+        "step 1 parse response step 2 validate fields step 3 print output",
+        "MULTI_STEP",
+    ),
+    (
+        "run code check then if it fails fix it and check again",
+        "MULTI_STEP",
+    ),
+    (
+        "initialize repository build initial structure and setup ci cd pipeline",
+        "MULTI_STEP",
+    ),
+    (
+        "execute benchmark suite check scores compare with baseline and save stats",
+        "MULTI_STEP",
+    ),
 ];
 
 /// Pure Rust Naive Bayes classifier for prompt intent routing.
@@ -253,6 +383,21 @@ impl NeedleRouter {
     ) -> (&'static str, f64) {
         let (best_class, confidence) = self.classify_intent_nb(prompt);
 
+        // In ultra-low-RAM mode, skip model fallback entirely to avoid
+        // loading the 491 MB model just for intent classification.
+        // The Naive Bayes classifier is good enough for routing.
+        let ultra_low = std::env::var("MIVI_ULTRA_LOW_RAM")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
+
+        if ultra_low {
+            tracing::debug!(
+                "[NeedleRouter] Ultra-low-RAM: using NB classification directly (class={}, conf={:.2})",
+                best_class, confidence
+            );
+            return (best_class, confidence.max(0.70));
+        }
+
         if confidence < 0.70 {
             tracing::info!(
                 "[NeedleRouter] Low confidence ({:.2}) for class {}. Falling back to Coder model router...",
@@ -312,16 +457,7 @@ fn is_agent_context_chat(prompt: &str) -> bool {
         return false;
     }
 
-    let agent_context_terms = [
-        "codebase",
-        "project memory",
-        "intent routing",
-        "routing intent",
-        "module handles",
-        "cargo cache",
-        "tool failed",
-        "safest fix",
-    ];
+    let agent_context_terms = ["project memory", "agent context"];
 
     agent_context_terms.iter().any(|term| p.contains(term))
 }

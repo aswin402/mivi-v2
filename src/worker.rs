@@ -2,7 +2,7 @@ use crate::runtime::RuntimeConfig;
 use serde_json::json;
 use std::env;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::info;
@@ -101,7 +101,8 @@ impl WorkerManager {
     }
 
     pub fn server_args(&self) -> Vec<String> {
-        vec![
+        let runtime_config = RuntimeConfig::from_env();
+        let mut args = vec![
             "-m".to_string(),
             self.config.model_path.display().to_string(),
             "--host".to_string(),
@@ -115,9 +116,9 @@ impl WorkerManager {
             "-fa".to_string(),
             "on".to_string(),
             "-ctk".to_string(),
-            RuntimeConfig::from_env().kv_cache_type,
+            runtime_config.kv_cache_type.clone(),
             "-ctv".to_string(),
-            RuntimeConfig::from_env().kv_cache_type,
+            runtime_config.kv_cache_type,
             "-np".to_string(),
             "1".to_string(),
             "--sleep-idle-seconds".to_string(),
@@ -128,29 +129,65 @@ impl WorkerManager {
             self.config.threads.to_string(),
             "-tb".to_string(),
             self.config.threads.to_string(),
-        ]
-    }
+        ];
 
-    pub async fn ensure_text_worker(&self) -> Result<WorkerEndpoint, String> {
-        let endpoint_to_check = {
-            let slot = self
-                .slot
-                .lock()
-                .map_err(|_| "worker lock poisoned".to_string())?;
-            if slot.state == WorkerState::Ready {
-                slot.endpoint.clone()
-            } else {
-                None
-            }
-        };
-
-        if let Some(endpoint) = endpoint_to_check {
-            if self.health_check(&endpoint).await {
-                return Ok(endpoint);
+        if let Some(ref draft_path) = runtime_config.draft_model {
+            if std::path::Path::new(draft_path).exists() {
+                args.push("--model-draft".to_string());
+                args.push(draft_path.clone());
+                args.push("--gpu-layers-draft".to_string());
+                args.push(self.config.gpu_layers.clone());
             }
         }
 
-        self.start_worker().await
+        args
+    }
+
+    pub async fn ensure_text_worker(&self) -> Result<WorkerEndpoint, String> {
+        loop {
+            let (state, endpoint) = {
+                let slot = self
+                    .slot
+                    .lock()
+                    .map_err(|_| "worker lock poisoned".to_string())?;
+                (slot.state, slot.endpoint.clone())
+            };
+
+            match state {
+                WorkerState::Ready => {
+                    if let Some(ep) = endpoint {
+                        if self.health_check(&ep).await {
+                            return Ok(ep);
+                        }
+                    }
+                }
+                WorkerState::Starting => {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    continue;
+                }
+                _ => {}
+            }
+
+            let proceed = {
+                let mut slot = self
+                    .slot
+                    .lock()
+                    .map_err(|_| "worker lock poisoned".to_string())?;
+                if slot.state == WorkerState::Ready {
+                    false
+                } else if slot.state == WorkerState::Starting {
+                    false
+                } else {
+                    slot.state = WorkerState::Starting;
+                    slot.last_error = None;
+                    true
+                }
+            };
+
+            if proceed {
+                return self.start_worker().await;
+            }
+        }
     }
 
     pub async fn check_liveness(&self) -> Result<&'static str, String> {
@@ -485,9 +522,15 @@ impl WorkerManager {
         }
 
         let mut cmd = Command::new(&self.config.server_path);
-        cmd.args(self.server_args())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        let _ = std::fs::create_dir_all("logs");
+        if let Ok(stderr_file) = std::fs::File::create("logs/worker-stderr.log") {
+            cmd.stderr(std::process::Stdio::from(stderr_file));
+        } else {
+            cmd.stderr(std::process::Stdio::null());
+        }
+        cmd.stdout(std::process::Stdio::null());
+
+        cmd.args(self.server_args());
 
         if let Some(bin_dir) = self.config.server_path.parent() {
             let old_ld = env::var("LD_LIBRARY_PATH").unwrap_or_default();
@@ -766,12 +809,14 @@ mod tests {
             ram_target_mb: 1000,
             kv_cache_type: "q4_0".to_string(),
             threads: 1,
+            draft_model: None,
         }
     }
 
     #[test]
     fn spawn_mode_does_not_use_workers() {
         assert!(!config(RuntimeMode::Spawn).uses_worker());
+        assert!(!config(RuntimeMode::Native).uses_worker());
         assert!(config(RuntimeMode::WorkerEco).uses_worker());
         assert!(config(RuntimeMode::WorkerHot).uses_worker());
     }

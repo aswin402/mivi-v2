@@ -43,6 +43,14 @@ async fn main() {
         .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "mivi=info".to_string()))
         .init();
 
+    // Initialize exact tokenizer from GGUF model if available
+    mivi::tokenizer::init_from_env();
+
+    // Configure Rayon threads from environment or CPU count fallback
+    // to limit Candle/native inference CPU usage and prevent laptop lags
+    let runtime_config = mivi::runtime::RuntimeConfig::from_env();
+    std::env::set_var("RAYON_NUM_THREADS", runtime_config.threads.to_string());
+
     let args: Vec<String> = env::args().collect();
     let mode = args.get(1).map(|s| s.as_str()).unwrap_or("serve");
 

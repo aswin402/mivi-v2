@@ -99,16 +99,7 @@ pub fn build_retrieval_pack_with_sources(
         );
     }
 
-    if !compressed.summary.trim().is_empty() {
-        push_section(
-            &mut sections,
-            &mut sources,
-            "compression-summary",
-            "Compression summary",
-            &compressed.summary,
-            512,
-        );
-    }
+    // Skip injecting compression summary to avoid confusing the small model.
 
     let prompt = truncate_chars(&sections.join("\n\n"), max_chars);
     let estimated_tokens = estimate_tokens(&prompt);
@@ -160,11 +151,28 @@ pub(crate) fn should_include_workspace_rag(query: &str) -> bool {
         "runtime",
     ];
 
-    triggers.iter().any(|trigger| query.contains(trigger))
+    if triggers.iter().any(|trigger| query.contains(trigger)) {
+        return true;
+    }
+
+    if query.contains('/')
+        || query.contains('\\')
+        || query.contains(".rs")
+        || query.contains(".py")
+        || query.contains(".js")
+        || query.contains(".ts")
+        || query.contains(".json")
+        || query.contains(".toml")
+        || query.contains(".md")
+    {
+        return true;
+    }
+
+    false
 }
 
 fn estimate_tokens(text: &str) -> usize {
-    text.chars().count().div_ceil(4)
+    crate::tokenizer::count_tokens(text) as usize
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {

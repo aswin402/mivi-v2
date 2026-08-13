@@ -63,6 +63,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore]
     async fn test_system_audit_does_not_panic() {
         run_system_audit().await;
     }

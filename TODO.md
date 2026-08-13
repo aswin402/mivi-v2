@@ -56,7 +56,7 @@
 
 ---
 
-## Phase 7: Smarter Routing & Orchestration 🧠
+## Phase 7: Smarter Routing & Orchestration 🧠 ✅ COMPLETE
 
 > Inspired by: Fugu (learned conductor), Ornith-1 (scaffold-aware RL)
 
@@ -76,7 +76,6 @@
 ## Phase 8: Pure Rust Native Inference 🦀 ✅ COMPLETE
 
 > Inspired by: Candle (pure Rust GGUF runtime), kimi-k3-in-c (direct quantized GEMM)
-> This is the transformative evolution — replace llama-cli subprocess with native Rust inference.
 
 ### Wave 1 — Candle Integration (HIGH)
 
@@ -96,15 +95,95 @@
 
 ---
 
-## Phase 9: Advanced Capabilities 🔮
+## Phase 9: Model Upgrade + Critical Fixes 🦀 ✅ COMPLETE
 
-> Inspired by: kimi-k3-in-c (MoE streaming), Colibri (O_DIRECT), Candle (WASM)
+> **Goal:** Switch to 1.7B model, fix grammar bug, add KV cache optimization, speculative decoding
+> **Duration:** 1 day
+> **Impact:** Smarter model + 50% KV cache savings + 2-3x speed via speculative decoding
 
-- [ ] **9.1** MoE expert disk streaming with LRU cache — run models larger than available RAM
-- [ ] **9.2** Direct I/O (`O_DIRECT`) for model file reads under `MIVI_ULTRA_LOW_RAM` to avoid page cache bloat
-- [ ] **9.3** Multi-model concurrent serving — keep reasoner and coder loaded simultaneously with shared attention layers
-- [ ] **9.4** WebAssembly (WASM) inference target — run MIVI-V2 entirely in the browser
-- [ ] **9.5** Plugin system for custom model backends (Candle, llama.cpp, ONNX)
+- [x] **9.1** Switch Qwen3 1.7B Q2_K as primary model (disable 0.6B entries in `configs/models.json`)
+- [x] **9.2** Fix GBNF grammar — add `(think-block)?` preamble to allow Qwen3 reasoning before tool calls
+- [x] **9.3** Add KV cache quantization flags (`-ctk q8_0 -ctv q8_0`) to `brain.rs` llama-cli args
+- [x] **9.4** Add `MIVI_DRAFT_MODEL` env var for speculative decoding (`--model-draft`)
+- [x] **9.5** Benchmark 1.7B vs 0.6B: tool accuracy, latency, RAM usage
+
+---
+
+## Phase 10: Exact Tokenizer + Context Optimization 🦀 ✅ COMPLETE
+
+> **Goal:** Replace estimation with exact token counting, improve context utilization
+> **Duration:** 2 days
+> **Impact:** Perfect context budget, 200-500 token savings per request
+
+### Wave 1 — Exact Tokenizer
+
+- [x] **10.1** Add `shimmytok` crate — reads tokenizer directly from GGUF (zero external files)
+- [x] **10.2** Create `src/tokenizer.rs` with global `OnceLock<Tokenizer>` singleton
+- [x] **10.3** Replace `CheapTokenCounter` calls in `retrieval.rs` and `context_compressor.rs`
+- [x] **10.4** Init tokenizer from active model GGUF at startup in `main.rs`
+
+### Wave 2 — Context Improvements
+
+- [x] **10.5** Selective context injection — only inject top 5 matching tool schemas per request
+- [x] **10.6** Implement Anchor-Window-Summary architecture in `context_compressor.rs`
+- [x] **10.7** Token budget slicing: system 20%, anchor 5%, summary 15%, recent 35%, RAG 10%, gen 15%
+- [x] **10.8** Strip `<think>` blocks from past assistant turns in conversation history
+- [x] **10.9** Pre-invocation auto-compaction gate (compress if >80% budget used)
+
+---
+
+## Phase 11: Fine-Tuning Pipeline 🟡
+
+> **Goal:** Knowledge-lean fine-tune → 90%+ tool calling accuracy
+> **Duration:** 3 days (includes Colab time)
+> **Impact:** Tool calling 67% → 90%+, combined with grammar → ~100% valid JSON
+
+- [ ] **11.1** Update `prepare_tuning_dataset.py` — use Salesforce xLAM-60k (3-stage verified)
+- [ ] **11.2** Filter dataset: schema compliance + tool calling ONLY (exclude trivia/general knowledge)
+- [ ] **11.3** Format in Hermes XML with Qwen3 ChatML template
+- [ ] **11.4** Add MIVI-specific tool schemas (OpenCode, Continue.dev tools)
+- [ ] **11.5** Fine-tune Qwen3 1.7B on Colab with Unsloth QLoRA (rank=16, alpha=32, ~30 mins)
+- [ ] **11.6** Export: merge LoRA → GGUF Q2_K conversion
+- [ ] **11.7** Benchmark: tool accuracy, chat quality, code gen, latency
+- [ ] **11.8** Verify all tests pass with fine-tuned model
+
+---
+
+## Phase 12: Semantic RAG Upgrade 🔵
+
+> **Goal:** Replace keyword-based TurboVec with semantic embeddings
+> **Duration:** 2 days
+> **Impact:** 3-5x better code retrieval accuracy
+
+- [ ] **12.1** Add `fastembed` crate (behind `semantic-rag` feature flag)
+- [ ] **12.2** Download `bge-small-en-v1.5` quantized ONNX model (~67 MB)
+- [ ] **12.3** Create `src/semantic_rag.rs` — embed workspace chunks, cosine similarity search
+- [ ] **12.4** Implement hybrid search: 0.4 × keyword + 0.6 × semantic score
+- [ ] **12.5** Keep TurboVec as fallback when feature disabled
+
+---
+
+## Phase 13: API & UX Improvements 🔵
+
+> **Goal:** Parity with Ollama/LM Studio features
+> **Duration:** 2 days
+
+- [ ] **13.1** Per-request `keep_alive` parameter (Ollama-style model lifecycle)
+- [ ] **13.2** `mivi model fit <id>` CLI — RAM fit calculator from `/proc/meminfo`
+- [ ] **13.3** System prompt KV cache persistence (`--prompt-cache`)
+- [ ] **13.4** Anthropic `/v1/messages` endpoint adapter (Claude Code compatibility)
+
+---
+
+## Phase 14: Persistent Project State 🔵
+
+> **Goal:** Instant server restarts via `.mivi/project_state.json`
+> **Duration:** 1 day
+
+- [ ] **14.1** Design `.mivi/project_state.json` schema (hot files, tool usage, user profile, RAG hash)
+- [ ] **14.2** Write state on shutdown (SIGTERM handler), load on startup
+- [ ] **14.3** Skip RAG re-indexing if hash matches cached state
+- [ ] **14.4** Track tool usage counts and hot files for prioritization
 
 ---
 

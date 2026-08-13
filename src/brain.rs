@@ -145,7 +145,11 @@ pub fn split_prompt_system_user(prompt: &str) -> (String, String) {
             continue;
         }
 
-        if trimmed.starts_with("Agent contract:") || trimmed.starts_with("System instructions:") {
+        if trimmed.starts_with("Agent contract:")
+            || trimmed.starts_with("System instructions:")
+            || trimmed.starts_with("### System Instructions")
+            || trimmed.contains("Agent contract:")
+        {
             system_parts.push(trimmed.to_string());
         } else {
             user_parts.push(trimmed.to_string());
@@ -248,6 +252,7 @@ fn cli_context_size(var: &str, default_tokens: usize) -> String {
         .to_string()
 }
 
+#[allow(dead_code)]
 fn cli_timeout() -> Duration {
     env::var("MIVI_CLI_TIMEOUT_SECS")
         .ok()
@@ -257,6 +262,7 @@ fn cli_timeout() -> Duration {
         .unwrap_or_else(|| Duration::from_secs(180))
 }
 
+#[allow(dead_code)]
 async fn command_output_with_timeout(
     mut cmd: tokio::process::Command,
     timeout: Duration,
@@ -313,25 +319,58 @@ impl EdgeBrain {
             .unwrap_or_else(|| llama_cli.clone());
 
         let models_dir = base_dir.join("models");
-        let default_reasoner = if models_dir
-            .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
-            .exists()
-        {
-            "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-        } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
-            "Qwen3-1.7B-Q2_K.gguf"
+
+        // Note: q2_k quantization is not supported by Candle's GGUF loader (dtype 20).
+        // Stick with q4_k_m which is the smallest supported quantization.
+        let default_reasoner = if cfg!(feature = "native") {
+            if models_dir
+                .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
+                .exists()
+            {
+                "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+            } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
+                "Qwen3-1.7B-Q2_K.gguf"
+            } else {
+                "Llama-3.2-1B-Instruct-IQ3_M.gguf"
+            }
         } else {
-            "Llama-3.2-1B-Instruct-IQ3_M.gguf"
+            if models_dir.join("qwen3-0.6b-q4_k_m.gguf").exists() {
+                "qwen3-0.6b-q4_k_m.gguf"
+            } else if models_dir
+                .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
+                .exists()
+            {
+                "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+            } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
+                "Qwen3-1.7B-Q2_K.gguf"
+            } else {
+                "Llama-3.2-1B-Instruct-IQ3_M.gguf"
+            }
         };
-        let default_coder = if models_dir
-            .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
-            .exists()
-        {
-            "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-        } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
-            "Qwen3-1.7B-Q2_K.gguf"
+        let default_coder = if cfg!(feature = "native") {
+            if models_dir
+                .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
+                .exists()
+            {
+                "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+            } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
+                "Qwen3-1.7B-Q2_K.gguf"
+            } else {
+                "Llama-3.2-1B-Instruct-IQ3_M.gguf"
+            }
         } else {
-            "Llama-3.2-1B-Instruct-IQ3_M.gguf"
+            if models_dir.join("qwen3-0.6b-q4_k_m.gguf").exists() {
+                "qwen3-0.6b-q4_k_m.gguf"
+            } else if models_dir
+                .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
+                .exists()
+            {
+                "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+            } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
+                "Qwen3-1.7B-Q2_K.gguf"
+            } else {
+                "Llama-3.2-1B-Instruct-IQ3_M.gguf"
+            }
         };
 
         let llama_path =
@@ -378,16 +417,18 @@ impl EdgeBrain {
     }
 
     #[cfg(feature = "native")]
+    #[allow(unused_variables)]
     async fn run_cli(
         &self,
         model_path: &Path,
         prompt: &str,
         system_prompt: &str,
         temp: &str,
-        _context_size: &str,
-        _top_p: Option<f32>,
-        _seed: Option<u64>,
-        _grammar_path: Option<String>,
+        context_size: &str,
+        top_p: Option<f32>,
+        seed: Option<u64>,
+        grammar_path: Option<String>,
+        max_tokens: Option<u32>,
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
@@ -400,8 +441,132 @@ impl EdgeBrain {
                 ),
             }
         }
-        self.native
-            .query(model_path, prompt, system_prompt, temp, 512)
+
+        if runtime_config.mode == crate::runtime::RuntimeMode::Spawn {
+            let t = crate::server::active_chat_template();
+            let (extracted_system, extracted_user) = split_prompt_system_user(prompt);
+            let final_system = if extracted_system.is_empty() {
+                system_prompt.to_string()
+            } else {
+                extracted_system
+            };
+            let final_user = if extracted_user.is_empty() {
+                prompt.to_string()
+            } else {
+                let trimmed = extracted_user.trim();
+                if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
+                    stripped.trim().to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            };
+
+            let formatted_prompt = format!(
+                "{}{}{}{}{}{}{}",
+                t.system_prefix,
+                final_system,
+                t.system_suffix,
+                t.user_prefix,
+                final_user,
+                t.user_suffix,
+                t.assistant_start
+            );
+
+            let raw_context = cli_context_size(
+                "MIVI_REASONER_CONTEXT_SIZE",
+                runtime_config.context.max_input_tokens,
+            );
+            let eff_context_base =
+                if self.ultra_low_ram && raw_context.parse::<usize>().unwrap_or(3072) > 3072 {
+                    3072
+                } else {
+                    raw_context.parse::<usize>().unwrap_or(3072)
+                };
+            let prompt_tokens = (formatted_prompt.len() / 3) + 256;
+            let final_context = if prompt_tokens > eff_context_base {
+                ((prompt_tokens + 1023) / 1024) * 1024
+            } else {
+                eff_context_base
+            };
+            let final_context_str = final_context.to_string();
+            let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
+
+            let prompt_file = write_prompt_file(&formatted_prompt).await?;
+            let mut cmd = tokio::process::Command::new(&self.llama_cli);
+            cmd.arg("-m").arg(model_path);
+            cmd.arg("-ngl").arg(ngl_val);
+            cmd.arg("-c").arg(&final_context_str);
+            cmd.arg("-fa").arg("on");
+            cmd.arg("-ctk").arg(&runtime_config.kv_cache_type);
+            cmd.arg("-ctv").arg(&runtime_config.kv_cache_type);
+
+            if let Some(ref draft_path) = runtime_config.draft_model {
+                if std::path::Path::new(draft_path).exists() {
+                    cmd.arg("--model-draft").arg(draft_path);
+                    cmd.arg("--gpu-layers-draft").arg(ngl_val);
+                }
+            }
+
+            cmd.arg("-f").arg(&prompt_file);
+            cmd.arg("--temp").arg(temp);
+            cmd.arg("--simple-io");
+            cmd.arg("--no-display-prompt");
+            cmd.arg("-st");
+            cmd.arg("-t").arg(runtime_config.threads.to_string());
+            cmd.arg("-tb").arg(runtime_config.threads.to_string());
+
+            if let Some(mt) = max_tokens {
+                cmd.arg("-n").arg(mt.to_string());
+            }
+
+            if self.ultra_low_ram {
+                cmd.arg("--mmap");
+            }
+            if let Some(tp) = top_p {
+                cmd.arg("--top-p").arg(tp.to_string());
+            }
+            if let Some(sd) = seed {
+                cmd.arg("--seed").arg(sd.to_string());
+            }
+            if let Some(ref path) = grammar_path {
+                if std::path::Path::new(path).exists() {
+                    cmd.arg("--grammar-file").arg(path);
+                }
+            }
+
+            let output = match command_output_with_timeout(cmd, cli_timeout()).await {
+                Ok(output) => output,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&prompt_file);
+                    return Err(e);
+                }
+            };
+            let _ = std::fs::remove_file(&prompt_file);
+
+            #[cfg(target_os = "linux")]
+            if self.ultra_low_ram {
+                if let Ok(file) = std::fs::File::open(model_path) {
+                    use std::os::unix::io::AsRawFd;
+                    let fd = file.as_raw_fd();
+                    unsafe {
+                        libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
+                    }
+                }
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            return Ok(clean_llama_cli_response(&stdout));
+        }
+
+        let max_val = max_tokens.unwrap_or(512) as usize;
+        self.native.query(
+            model_path,
+            prompt,
+            system_prompt,
+            temp,
+            max_val,
+            grammar_path,
+        )
     }
 
     #[cfg(not(feature = "native"))]
@@ -415,6 +580,7 @@ impl EdgeBrain {
         top_p: Option<f32>,
         seed: Option<u64>,
         grammar_path: Option<String>,
+        max_tokens: Option<u32>,
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
@@ -457,39 +623,48 @@ impl EdgeBrain {
             t.assistant_start
         );
 
-        let eff_context = if self.ultra_low_ram && context_size == "8192" {
-            "4096"
+        let eff_context_base = if self.ultra_low_ram && context_size == "8192" {
+            4096
         } else {
-            context_size
+            context_size.parse::<usize>().unwrap_or(3072)
         };
+        let prompt_tokens = (formatted_prompt.len() / 3) + 256;
+        let final_context = if prompt_tokens > eff_context_base {
+            ((prompt_tokens + 1023) / 1024) * 1024
+        } else {
+            eff_context_base
+        };
+        let final_context_str = final_context.to_string();
 
         let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
 
         let prompt_file = write_prompt_file(&formatted_prompt).await?;
         let mut cmd = tokio::process::Command::new(&self.llama_cli);
-        cmd.arg("-m")
-            .arg(model_path)
-            .arg("-ngl")
-            .arg(ngl_val)
-            .arg("-c")
-            .arg(&eff_context)
-            .arg("-fa")
-            .arg("on")
-            .arg("-ctk")
-            .arg(&runtime_config.kv_cache_type)
-            .arg("-ctv")
-            .arg(&runtime_config.kv_cache_type)
-            .arg("-f")
-            .arg(&prompt_file)
-            .arg("--temp")
-            .arg(temp)
-            .arg("--simple-io")
-            .arg("--no-display-prompt")
-            .arg("-st")
-            .arg("-t")
-            .arg(runtime_config.threads.to_string())
-            .arg("-tb")
-            .arg(runtime_config.threads.to_string());
+        cmd.arg("-m").arg(model_path);
+        cmd.arg("-ngl").arg(ngl_val);
+        cmd.arg("-c").arg(&final_context_str);
+        cmd.arg("-fa").arg("on");
+        cmd.arg("-ctk").arg(&runtime_config.kv_cache_type);
+        cmd.arg("-ctv").arg(&runtime_config.kv_cache_type);
+
+        if let Some(ref draft_path) = runtime_config.draft_model {
+            if std::path::Path::new(draft_path).exists() {
+                cmd.arg("--model-draft").arg(draft_path);
+                cmd.arg("--gpu-layers-draft").arg(ngl_val);
+            }
+        }
+
+        cmd.arg("-f").arg(&prompt_file);
+        cmd.arg("--temp").arg(temp);
+        cmd.arg("--simple-io");
+        cmd.arg("--no-display-prompt");
+        cmd.arg("-st");
+        cmd.arg("-t").arg(runtime_config.threads.to_string());
+        cmd.arg("-tb").arg(runtime_config.threads.to_string());
+
+        if let Some(mt) = max_tokens {
+            cmd.arg("-n").arg(mt.to_string());
+        }
 
         if self.ultra_low_ram {
             cmd.arg("--mmap");
@@ -535,7 +710,7 @@ impl EdgeBrain {
         prompt: &str,
         system_prompt: &str,
     ) -> Result<String, String> {
-        self.query_reasoner_with_params(prompt, system_prompt, None, None, None)
+        self.query_reasoner_with_params(prompt, system_prompt, None, None, None, None)
             .await
     }
 
@@ -546,6 +721,7 @@ impl EdgeBrain {
         temp: Option<f32>,
         top_p: Option<f32>,
         seed: Option<u64>,
+        max_tokens: Option<u32>,
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         let context_size = cli_context_size(
@@ -563,12 +739,13 @@ impl EdgeBrain {
             top_p,
             seed,
             None,
+            max_tokens,
         )
         .await
     }
 
     pub async fn query_coder(&self, prompt: &str, system_prompt: &str) -> Result<String, String> {
-        self.query_coder_with_params(prompt, system_prompt, None, None, None)
+        self.query_coder_with_params(prompt, system_prompt, None, None, None, None)
             .await
     }
 
@@ -579,6 +756,7 @@ impl EdgeBrain {
         temp: Option<f32>,
         top_p: Option<f32>,
         seed: Option<u64>,
+        max_tokens: Option<u32>,
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
         let context_size = cli_context_size(
@@ -595,6 +773,7 @@ impl EdgeBrain {
             top_p,
             seed,
             None,
+            max_tokens,
         )
         .await
     }
@@ -624,6 +803,7 @@ impl EdgeBrain {
         }
     }
 
+    #[allow(unused_variables)]
     pub async fn query_raw(
         &self,
         prompt: &str,
@@ -636,141 +816,196 @@ impl EdgeBrain {
         grammar_path: Option<String>,
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::from_env();
-        let raw_context = cli_context_size(
-            "MIVI_REASONER_CONTEXT_SIZE",
-            runtime_config.context.max_input_tokens,
-        );
-        let eff_context =
-            if self.ultra_low_ram && raw_context.parse::<usize>().unwrap_or(3072) > 3072 {
-                "3072".to_string()
-            } else {
-                raw_context
-            };
-        let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
 
-        let prompt_file = write_prompt_file(prompt).await?;
-        let mut cmd = tokio::process::Command::new(&self.llama_cli);
-        cmd.arg("-m")
-            .arg(&self.llama_path)
-            .arg("-ngl")
-            .arg(ngl_val)
-            .arg("-c")
-            .arg(&eff_context)
-            .arg("-fa")
-            .arg("on")
-            .arg("-ctk")
-            .arg(&runtime_config.kv_cache_type)
-            .arg("-ctv")
-            .arg(&runtime_config.kv_cache_type)
-            .arg("-f")
-            .arg(&prompt_file)
-            .arg("-t")
-            .arg(runtime_config.threads.to_string())
-            .arg("-tb")
-            .arg(runtime_config.threads.to_string());
+        let run_native = if cfg!(feature = "native") {
+            runtime_config.mode != crate::runtime::RuntimeMode::Spawn
+        } else {
+            false
+        };
 
-        let temp_str = temp.unwrap_or(0.2).to_string();
-        cmd.arg("--temp").arg(&temp_str);
+        if run_native {
+            #[cfg(feature = "native")]
+            {
+                let temp_str = temp.unwrap_or(0.2).to_string();
+                let max = max_tokens.unwrap_or(512) as usize;
 
-        if let Some(tp) = top_p {
-            cmd.arg("--top-p").arg(tp.to_string());
-        }
-        if let Some(mt) = max_tokens {
-            cmd.arg("-n").arg(mt.to_string());
-        }
-        if let Some(sd) = seed {
-            cmd.arg("--seed").arg(sd.to_string());
-        }
-        if let Some(ref schema) = json_schema {
-            cmd.arg("--json-schema").arg(schema);
-        }
-        if let Some(ref path) = grammar_path {
-            if std::path::Path::new(path).exists() {
-                cmd.arg("--grammar-file").arg(path);
+                let mut prompt_with_hints = prompt.to_string();
+                if let Some(ref schema) = json_schema {
+                    prompt_with_hints.push_str(&format!(
+                        "\n\nIMPORTANT: You MUST respond ONLY with a JSON object matching this schema:\n{}",
+                        schema
+                    ));
+                } else if let Some(ref path) = grammar_path {
+                    if path.contains("openai_tool_call") {
+                        prompt_with_hints.push_str(
+                            "\n\nIMPORTANT: You MUST respond with ONLY a JSON object in this exact format:\n\
+                            {\"tool_calls\": [{\"id\": \"call_abc123\", \"type\": \"function\", \"function\": {\"name\": \"function_name\", \"arguments\": \"{\\\"arg_name\\\": \\\"value\\\"}\"}}]}"
+                        );
+                    } else if path.contains("hermes_tool_call") {
+                        prompt_with_hints.push_str(
+                            "\n\nIMPORTANT: You MUST respond with ONLY a tool call in this exact format:\n\
+                            <tool_call>{\"name\": \"function_name\", \"arguments\": {\"arg_name\": \"value\"}}</tool_call>"
+                        );
+                    } else if path.contains("json_object") {
+                        prompt_with_hints.push_str(
+                            "\n\nIMPORTANT: You MUST respond with ONLY a valid JSON object.",
+                        );
+                    }
+                }
+
+                return self.native.query_raw_prompt(
+                    &self.llama_path,
+                    &prompt_with_hints,
+                    &temp_str,
+                    max,
+                    grammar_path,
+                );
             }
         }
-        if let Some(stop_val) = stop {
-            if let Some(s) = stop_val.as_str() {
-                cmd.arg("--stop").arg(s);
-            } else if let Some(arr) = stop_val.as_array() {
-                for item in arr {
-                    if let Some(s) = item.as_str() {
-                        cmd.arg("--stop").arg(s);
+
+        {
+            let raw_context = cli_context_size(
+                "MIVI_REASONER_CONTEXT_SIZE",
+                runtime_config.context.max_input_tokens,
+            );
+            let eff_context_base =
+                if self.ultra_low_ram && raw_context.parse::<usize>().unwrap_or(3072) > 3072 {
+                    3072
+                } else {
+                    raw_context.parse::<usize>().unwrap_or(3072)
+                };
+            let prompt_tokens = (prompt.len() / 3) + 256;
+            let final_context = if prompt_tokens > eff_context_base {
+                ((prompt_tokens + 1023) / 1024) * 1024
+            } else {
+                eff_context_base
+            };
+            let final_context_str = final_context.to_string();
+            let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
+
+            let prompt_file = write_prompt_file(prompt).await?;
+            let mut cmd = tokio::process::Command::new(&self.llama_cli);
+            cmd.arg("-m").arg(&self.llama_path);
+            cmd.arg("-ngl").arg(ngl_val);
+            cmd.arg("-c").arg(&final_context_str);
+            cmd.arg("-fa").arg("on");
+            cmd.arg("-ctk").arg(&runtime_config.kv_cache_type);
+            cmd.arg("-ctv").arg(&runtime_config.kv_cache_type);
+
+            if let Some(ref draft_path) = runtime_config.draft_model {
+                if std::path::Path::new(draft_path).exists() {
+                    cmd.arg("--model-draft").arg(draft_path);
+                    cmd.arg("--gpu-layers-draft").arg(ngl_val);
+                }
+            }
+
+            cmd.arg("-f").arg(&prompt_file);
+            cmd.arg("-t").arg(runtime_config.threads.to_string());
+            cmd.arg("-tb").arg(runtime_config.threads.to_string());
+
+            let temp_str = temp.unwrap_or(0.2).to_string();
+            cmd.arg("--temp").arg(&temp_str);
+
+            if let Some(tp) = top_p {
+                cmd.arg("--top-p").arg(tp.to_string());
+            }
+            if let Some(mt) = max_tokens {
+                cmd.arg("-n").arg(mt.to_string());
+            }
+            if let Some(sd) = seed {
+                cmd.arg("--seed").arg(sd.to_string());
+            }
+            if let Some(ref schema) = json_schema {
+                cmd.arg("--json-schema").arg(schema);
+            }
+            if let Some(ref path) = grammar_path {
+                if std::path::Path::new(path).exists() {
+                    cmd.arg("--grammar-file").arg(path);
+                }
+            }
+            if let Some(stop_val) = stop {
+                if let Some(s) = stop_val.as_str() {
+                    cmd.arg("--stop").arg(s);
+                } else if let Some(arr) = stop_val.as_array() {
+                    for item in arr {
+                        if let Some(s) = item.as_str() {
+                            cmd.arg("--stop").arg(s);
+                        }
                     }
                 }
             }
-        }
 
-        cmd.arg("--simple-io").arg("--no-display-prompt").arg("-st");
+            cmd.arg("--simple-io").arg("--no-display-prompt").arg("-st");
 
-        if self.ultra_low_ram {
-            cmd.arg("--mmap");
-        }
-
-        let output = match command_output_with_timeout(cmd, cli_timeout()).await {
-            Ok(output) => output,
-            Err(e) => {
-                let _ = std::fs::remove_file(&prompt_file);
-                return Err(e);
+            if self.ultra_low_ram {
+                cmd.arg("--mmap");
             }
-        };
-        let _ = std::fs::remove_file(&prompt_file);
 
-        #[cfg(target_os = "linux")]
-        if self.ultra_low_ram {
-            if let Ok(file) = std::fs::File::open(&self.llama_path) {
-                use std::os::unix::io::AsRawFd;
-                let fd = file.as_raw_fd();
-                unsafe {
-                    libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
+            let output = match command_output_with_timeout(cmd, cli_timeout()).await {
+                Ok(output) => output,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&prompt_file);
+                    return Err(e);
+                }
+            };
+            let _ = std::fs::remove_file(&prompt_file);
+
+            #[cfg(target_os = "linux")]
+            if self.ultra_low_ram {
+                if let Ok(file) = std::fs::File::open(&self.llama_path) {
+                    use std::os::unix::io::AsRawFd;
+                    let fd = file.as_raw_fd();
+                    unsafe {
+                        libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
+                    }
                 }
             }
-        }
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
-        // Try extracting from after last <|im_start|>assistant tag (prompt echo).
-        // If not echoed, find the first JSON object or take the last non-empty line.
-        let t = crate::server::active_chat_template();
-        let assistant_marker = t.assistant_start.trim();
-        let response = if !assistant_marker.is_empty() {
-            if let Some(pos) = stdout.rfind(assistant_marker) {
-                let after = &stdout[pos + assistant_marker.len()..];
-                let sys_prefix = t.system_prefix.trim();
-                let user_prefix = t.user_prefix.trim();
-                let assist_prefix = t.assistant_prefix.trim();
-                if let Some(echo_end) = after
-                    .find(sys_prefix)
-                    .or_else(|| after.find(user_prefix))
-                    .or_else(|| after.find(assist_prefix))
-                {
-                    &after[..echo_end]
+            // Try extracting from after last <|im_start|>assistant tag (prompt echo).
+            // If not echoed, find the first JSON object or take the last non-empty line.
+            let t = crate::server::active_chat_template();
+            let assistant_marker = t.assistant_start.trim();
+            let response = if !assistant_marker.is_empty() {
+                if let Some(pos) = stdout.rfind(assistant_marker) {
+                    let after = &stdout[pos + assistant_marker.len()..];
+                    let sys_prefix = t.system_prefix.trim();
+                    let user_prefix = t.user_prefix.trim();
+                    let assist_prefix = t.assistant_prefix.trim();
+                    if let Some(echo_end) = after
+                        .find(sys_prefix)
+                        .or_else(|| after.find(user_prefix))
+                        .or_else(|| after.find(assist_prefix))
+                    {
+                        &after[..echo_end]
+                    } else {
+                        after
+                    }
                 } else {
-                    after
+                    &stdout
                 }
             } else {
-                &stdout
-            }
-        } else {
-            // Fallback: skip loading banner and take the last non-empty block.
-            let lines: Vec<&str> = stdout.lines().collect();
-            if let Some(&last) = lines.iter().rev().find(|l| !l.trim().is_empty()) {
-                last.trim()
-            } else {
-                &stdout[..]
-            }
-        };
+                // Fallback: skip loading banner and take the last non-empty block.
+                let lines: Vec<&str> = stdout.lines().collect();
+                if let Some(&last) = lines.iter().rev().find(|l| !l.trim().is_empty()) {
+                    last.trim()
+                } else {
+                    &stdout[..]
+                }
+            };
 
-        let clean = response
-            .split("[ Prompt:")
-            .next()
-            .unwrap_or(response)
-            .split("Exiting...")
-            .next()
-            .unwrap_or(response)
-            .trim();
+            let clean = response
+                .split("[ Prompt:")
+                .next()
+                .unwrap_or(response)
+                .split("Exiting...")
+                .next()
+                .unwrap_or(response)
+                .trim();
 
-        Ok(strip_think_blocks(clean))
+            Ok(strip_think_blocks(clean))
+        }
     }
 
     pub async fn query_vision(&self, image_path: &str, prompt: &str) -> Result<String, String> {

@@ -125,8 +125,12 @@ fn tag_score(prompt_tags: &HashSet<&'static str>, tool_name: &str, description: 
 }
 
 pub fn filter_tools(prompt: &str, tools: &[ToolDef], max_tools: usize) -> Vec<ToolDef> {
-    if tools.is_empty() || max_tools == 0 || !has_tool_intent(prompt, tools) {
+    if tools.is_empty() || max_tools == 0 {
         return Vec::new();
+    }
+
+    if tools.len() <= max_tools {
+        return tools.to_vec();
     }
 
     let prompt_tags = task_tags(prompt);
@@ -207,6 +211,7 @@ fn parameter_score(prompt: &str, parameters: &serde_json::Value) -> f32 {
         .unwrap_or(0.0)
 }
 
+#[allow(dead_code)]
 fn has_tool_intent(prompt: &str, tools: &[ToolDef]) -> bool {
     let text = prompt.to_ascii_lowercase();
 

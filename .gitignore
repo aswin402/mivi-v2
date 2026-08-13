@@ -9,6 +9,8 @@
 /models/*.gguf
 /models/.cache/
 /models/*.json
+/models/*.safetensors
+*.safetensors
 
 # Generated dataset & telemetry logs
 /dataset
@@ -21,6 +23,7 @@
 .idea/
 .crush/
 .superpowers/
+.mivi/
 memory.db
 memory.db-shm
 memory.db-wal

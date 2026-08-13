@@ -1,11 +1,11 @@
 # Generic JSON object grammar — fallback for structured output requests
 
-root ::= json_value_object
+root ::= jsonvalueobject
 
-json_value_object ::= "{" ws (pair (ws "," ws pair)*)? ws "}"
-pair ::= string ws ":" ws json_value
-json_value ::= json_value_object | json_array | string | number | "true" | "false" | "null"
-json_array ::= "[" ws (json_value (ws "," ws json_value)*)? ws "]"
+jsonvalueobject ::= "{" ws (pair (ws "," ws pair)*)? ws "}"
+pair ::= string ws ":" ws jsonvalue
+jsonvalue ::= jsonvalueobject | jsonarray | string | number | "true" | "false" | "null"
+jsonarray ::= "[" ws (jsonvalue (ws "," ws jsonvalue)*)? ws "]"
 
 string ::= "\"" ([^"\\] | "\\" .)* "\""
 number ::= "-"? [0-9]+ ("." [0-9]+)?

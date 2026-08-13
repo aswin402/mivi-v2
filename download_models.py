@@ -85,8 +85,13 @@ def download_models():
                 filename=item["filename"],
                 local_dir=models_dir
             )
-            size_mb = os.path.getsize(downloaded_path) / (1024 * 1024)
-            print(f"[SUCCESS] Saved '{item['filename']}' ({size_mb:.2f} MB)\n")
+            if os.path.exists(downloaded_path) and os.path.abspath(downloaded_path) != os.path.abspath(item["target"]):
+                target_dir = os.path.dirname(item["target"])
+                if target_dir:
+                    os.makedirs(target_dir, exist_ok=True)
+                os.rename(downloaded_path, item["target"])
+            size_mb = os.path.getsize(item["target"]) / (1024 * 1024)
+            print(f"[SUCCESS] Saved '{os.path.basename(item['target'])}' ({size_mb:.2f} MB)\n")
         except Exception as e:
             print(f"[ERROR] Failed to download {item['name']}: {e}\n")
 

@@ -1,7 +1,10 @@
 # GBNF Grammar for OpenAI Tool Call JSON format (minified JSON, no whitespace)
 # Enforces standard tool call schemas
 
-root ::= jsontoolcall
+root ::= (thinkblock ws)? jsontoolcall
+
+thinkblock ::= "<think>" [^<]* "</think>"
+ws ::= [ \t\n\r]*
 
 jsontoolcall ::= "{" "\"tool_calls\"" ":" "[" jsonobject "]" "}"
 
