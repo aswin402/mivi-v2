@@ -26,6 +26,7 @@ SPECIALIST_DATASETS = {
     "tools": "datasets/mivi_tools_dataset.jsonl",
     "coder": "datasets/mivi_coder_dataset.jsonl",
     "debugger": "datasets/mivi_debugger_dataset.jsonl",
+    "chat": "datasets/mivi_chat_dataset.jsonl",
 }
 
 def train_specialist(
@@ -173,14 +174,14 @@ def main():
         "--specialist",
         type=str,
         default="all",
-        choices=["reasoner", "tools", "coder", "debugger", "all"],
+        choices=["reasoner", "tools", "coder", "debugger", "chat", "all"],
         help="Specialist persona to train"
     )
     parser.add_argument("--steps", type=int, default=250, help="Max training steps per adapter")
     parser.add_argument("--base-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Base model")
     args = parser.parse_args()
 
-    specialists = ["reasoner", "tools", "coder", "debugger"] if args.specialist == "all" else [args.specialist]
+    specialists = ["reasoner", "tools", "coder", "debugger", "chat"] if args.specialist == "all" else [args.specialist]
     for s in specialists:
         train_specialist(specialist=s, base_model=args.base_model, max_steps=args.steps)
 

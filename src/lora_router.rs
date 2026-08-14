@@ -7,6 +7,7 @@ pub enum SpecialistPersona {
     Tools,
     Coder,
     Debugger,
+    Chat,
 }
 
 impl SpecialistPersona {
@@ -16,6 +17,7 @@ impl SpecialistPersona {
             Self::Tools => "tools",
             Self::Coder => "coder",
             Self::Debugger => "debugger",
+            Self::Chat => "chat",
         }
     }
 
@@ -32,6 +34,9 @@ impl SpecialistPersona {
             }
             Self::Debugger => {
                 "Specialist Role: MIVI Debugger (Diagnosis & Fix). Analyze compiler tracebacks and errors carefully to provide minimal, surgical replacement diffs."
+            }
+            Self::Chat => {
+                "Specialist Role: MIVI Chat (Conversational Intelligence). Understand user needs deeply, speak fluent natural English, and provide direct, clear, and engaging responses."
             }
         }
     }
@@ -56,6 +61,9 @@ pub fn resolve_specialist_persona(
 ) -> SpecialistPersona {
     if let Some(model) = requested_model {
         let lower = model.to_ascii_lowercase();
+        if lower.contains("chat") || lower.ends_with(":chat") {
+            return SpecialistPersona::Chat;
+        }
         if lower.contains("reason") || lower.ends_with(":reasoner") {
             return SpecialistPersona::Reasoner;
         }
@@ -81,7 +89,8 @@ pub fn resolve_specialist_persona(
     match intent.to_ascii_lowercase().as_str() {
         "code" => SpecialistPersona::Coder,
         "multi_step" | "reason" => SpecialistPersona::Reasoner,
-        _ => SpecialistPersona::Reasoner,
+        "chat" => SpecialistPersona::Chat,
+        _ => SpecialistPersona::Chat,
     }
 }
 
@@ -107,6 +116,10 @@ mod tests {
             resolve_specialist_persona(Some("mivi:debugger"), false, "CHAT", false),
             SpecialistPersona::Debugger
         );
+        assert_eq!(
+            resolve_specialist_persona(Some("mivi:chat"), false, "CHAT", false),
+            SpecialistPersona::Chat
+        );
     }
 
     #[test]
@@ -126,6 +139,10 @@ mod tests {
         assert_eq!(
             resolve_specialist_persona(None, false, "MULTI_STEP", false),
             SpecialistPersona::Reasoner
+        );
+        assert_eq!(
+            resolve_specialist_persona(None, false, "CHAT", false),
+            SpecialistPersona::Chat
         );
     }
 }

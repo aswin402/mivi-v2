@@ -14,6 +14,7 @@ from generate_specialist_datasets import (
     generate_tools_samples,
     generate_coder_samples,
     generate_debugger_samples,
+    generate_chat_samples,
 )
 
 class TestGenerateSpecialistDatasets(unittest.TestCase):
@@ -52,12 +53,21 @@ class TestGenerateSpecialistDatasets(unittest.TestCase):
             self.assertIn("text", s)
             self.assertIn("<think>", s["text"])
 
+    def test_generate_chat_samples(self):
+        samples = generate_chat_samples()
+        self.assertGreaterEqual(len(samples), 50)
+        for s in samples:
+            self.assertIn("text", s)
+            self.assertIn("<|im_start|>system", s["text"])
+            self.assertIn("<|im_start|>assistant", s["text"])
+
     def test_generate_all_specialist_datasets(self):
         counts = generate_all_specialist_datasets(self.tmp_dir)
         self.assertIn("mivi_reasoner_dataset.jsonl", counts)
         self.assertIn("mivi_tools_dataset.jsonl", counts)
         self.assertIn("mivi_coder_dataset.jsonl", counts)
         self.assertIn("mivi_debugger_dataset.jsonl", counts)
+        self.assertIn("mivi_chat_dataset.jsonl", counts)
 
         for filename, count in counts.items():
             filepath = os.path.join(self.tmp_dir, filename)
