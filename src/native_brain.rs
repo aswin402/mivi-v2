@@ -329,9 +329,22 @@ impl NativeBrain {
 
         let mut grammar_state = load_grammar_state(&grammar_path);
         let vocab_refs: Vec<&str> = loaded.vocab.iter().map(|s| s.as_str()).collect();
-        let eos_token_id = tokenizer
-            .token_to_id("<|im_end|>")
-            .or_else(|| tokenizer.token_to_id("<|endoftext|>"));
+
+        let mut eos_token_ids: Vec<u32> = [
+            "<|im_end|>",
+            "<|endoftext|>",
+            "<|im_start|>",
+            "</s>",
+            "<eos>",
+        ]
+        .iter()
+        .filter_map(|t| tokenizer.token_to_id(t))
+        .collect();
+        for known_id in [151645, 151643, 151644, 2, 0] {
+            if !eos_token_ids.contains(&known_id) {
+                eos_token_ids.push(known_id);
+            }
+        }
 
         // Sample first token
         let mut squeezed = logits
@@ -341,7 +354,7 @@ impl NativeBrain {
         if let Some(ref mut g_state) = grammar_state {
             let mut mask = g_state.allowed_tokens(&vocab_refs);
             if g_state.is_accepting() {
-                if let Some(eos_id) = eos_token_id {
+                for &eos_id in &eos_token_ids {
                     if (eos_id as usize) < mask.len() {
                         mask[eos_id as usize] = true;
                     }
@@ -390,10 +403,8 @@ impl NativeBrain {
                 break;
             }
 
-            if let Some(eos_id) = eos_token_id {
-                if next_token == eos_id {
-                    break;
-                }
+            if eos_token_ids.contains(&next_token) {
+                break;
             }
 
             // Single token forward
@@ -415,7 +426,7 @@ impl NativeBrain {
             if let Some(ref mut g_state) = grammar_state {
                 let mut mask = g_state.allowed_tokens(&vocab_refs);
                 if g_state.is_accepting() {
-                    if let Some(eos_id) = eos_token_id {
+                    for &eos_id in &eos_token_ids {
                         if (eos_id as usize) < mask.len() {
                             mask[eos_id as usize] = true;
                         }
@@ -527,9 +538,21 @@ impl NativeBrain {
 
         let mut grammar_state = load_grammar_state(&grammar_path);
         let vocab_refs: Vec<&str> = loaded.vocab.iter().map(|s| s.as_str()).collect();
-        let eos_token_id = tokenizer
-            .token_to_id("<|im_end|>")
-            .or_else(|| tokenizer.token_to_id("<|endoftext|>"));
+        let mut eos_token_ids: Vec<u32> = [
+            "<|im_end|>",
+            "<|endoftext|>",
+            "<|im_start|>",
+            "</s>",
+            "<eos>",
+        ]
+        .iter()
+        .filter_map(|t| tokenizer.token_to_id(t))
+        .collect();
+        for known_id in [151645, 151643, 151644, 2, 0] {
+            if !eos_token_ids.contains(&known_id) {
+                eos_token_ids.push(known_id);
+            }
+        }
 
         // Sample first token
         let mut squeezed = logits
@@ -539,7 +562,7 @@ impl NativeBrain {
         if let Some(ref mut g_state) = grammar_state {
             let mut mask = g_state.allowed_tokens(&vocab_refs);
             if g_state.is_accepting() {
-                if let Some(eos_id) = eos_token_id {
+                for &eos_id in &eos_token_ids {
                     if (eos_id as usize) < mask.len() {
                         mask[eos_id as usize] = true;
                     }
@@ -589,10 +612,8 @@ impl NativeBrain {
                 break;
             }
 
-            if let Some(eos_id) = eos_token_id {
-                if next_token == eos_id {
-                    break;
-                }
+            if eos_token_ids.contains(&next_token) {
+                break;
             }
 
             let input = Tensor::new(&[next_token], &device)
@@ -613,7 +634,7 @@ impl NativeBrain {
             if let Some(ref mut g_state) = grammar_state {
                 let mut mask = g_state.allowed_tokens(&vocab_refs);
                 if g_state.is_accepting() {
-                    if let Some(eos_id) = eos_token_id {
+                    for &eos_id in &eos_token_ids {
                         if (eos_id as usize) < mask.len() {
                             mask[eos_id as usize] = true;
                         }
