@@ -445,19 +445,21 @@ impl NativeBrain {
 
             generated_tokens.push(next_token);
 
-            // Check if current decoded text ends with any of the stop words
-            let current_text = tokenizer
-                .decode(&generated_tokens, true)
-                .unwrap_or_default();
-            let mut matched_stop = false;
-            for stop in &t.stop_words {
-                if current_text.ends_with(stop) {
-                    matched_stop = true;
+            // Check if current decoded text ends with any of the stop words (every 4 tokens to avoid expensive per-token decoding)
+            if generated_tokens.len() % 4 == 0 {
+                let current_text = tokenizer
+                    .decode(&generated_tokens, true)
+                    .unwrap_or_default();
+                let mut matched_stop = false;
+                for stop in &t.stop_words {
+                    if current_text.ends_with(stop) {
+                        matched_stop = true;
+                        break;
+                    }
+                }
+                if matched_stop {
                     break;
                 }
-            }
-            if matched_stop {
-                break;
             }
         }
 
@@ -641,18 +643,21 @@ impl NativeBrain {
 
             generated_tokens.push(next_token);
 
-            let current_text = tokenizer
-                .decode(&generated_tokens, true)
-                .unwrap_or_default();
-            let mut matched_stop = false;
-            for stop in &t.stop_words {
-                if current_text.ends_with(stop) {
-                    matched_stop = true;
+            // Check if current decoded text ends with any of the stop words (every 4 tokens to avoid expensive per-token decoding)
+            if generated_tokens.len() % 4 == 0 {
+                let current_text = tokenizer
+                    .decode(&generated_tokens, true)
+                    .unwrap_or_default();
+                let mut matched_stop = false;
+                for stop in &t.stop_words {
+                    if current_text.ends_with(stop) {
+                        matched_stop = true;
+                        break;
+                    }
+                }
+                if matched_stop {
                     break;
                 }
-            }
-            if matched_stop {
-                break;
             }
         }
 

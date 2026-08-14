@@ -129,10 +129,6 @@ pub fn filter_tools(prompt: &str, tools: &[ToolDef], max_tools: usize) -> Vec<To
         return Vec::new();
     }
 
-    if tools.len() <= max_tools {
-        return tools.to_vec();
-    }
-
     let prompt_tags = task_tags(prompt);
     let mut scored: Vec<(usize, f32, ToolDef)> = tools
         .iter()

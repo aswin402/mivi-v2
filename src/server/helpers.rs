@@ -1907,8 +1907,28 @@ pub fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
     }
 }
 
+pub fn is_identity_or_greeting(prompt: &str) -> Option<&'static str> {
+    let clean = prompt.trim().to_ascii_lowercase();
+    let clean = clean.trim_matches(|c: char| {
+        c == '?' || c == '.' || c == '!' || c == ',' || c == '"' || c == '\''
+    });
+
+    match clean {
+        "hi" | "hii" | "hello" | "hey" | "yo" | "sup" | "hello there" | "hi there"
+        | "greetings" => {
+            Some("Hello! I am MIVI, your local AI assistant. How can I help you today?")
+        }
+        "who are you" | "who are u" | "who r you" | "who r u" | "what is your name"
+        | "whats your name" | "what are you" | "what are u" | "tell me about yourself"
+        | "who created you" | "who made you" => Some(
+            "I am MIVI, a 100% Pure Rust, low-resource local AI engine with multi-specialist reasoning, tools, and coding capabilities.",
+        ),
+        _ => None,
+    }
+}
+
 /// Check if the request should proceed to the tool-calling generator or if it is simple chat.
-pub fn should_use_tool_path(req: &ChatCompletionRequest, _latest_user_prompt: &str) -> bool {
+pub fn should_use_tool_path(req: &ChatCompletionRequest, latest_user_prompt: &str) -> bool {
     if !has_tool_involvement(req) {
         return false;
     }
@@ -1917,11 +1937,19 @@ pub fn should_use_tool_path(req: &ChatCompletionRequest, _latest_user_prompt: &s
         if choice == "none" {
             return false;
         }
+        if choice == "required" {
+            return true;
+        }
+    }
+
+    if is_identity_or_greeting(latest_user_prompt).is_some() {
+        return false;
     }
 
     if let Some(tools) = &req.tools {
         if !tools.is_empty() {
-            return true;
+            let selection = select_tools_for_request(req);
+            return !selection.selected.is_empty() || selection.intent.is_inventory();
         }
     }
 
@@ -3205,6 +3233,56 @@ pub async fn handle_chat_completions(
         }
     }
 
+    // ── Verified Identity & Greeting fast-path (0ms / 0MB model load) ──
+    if let Some(fast_text) = is_identity_or_greeting(&latest_user_prompt) {
+        if !matches!(req.tool_choice, Some(serde_json::Value::String(ref choice)) if choice == "required")
+        {
+            let final_text = fast_text.to_string();
+            let _ = trace_event(
+                &trace,
+                serde_json::json!({
+                    "kind": "final_response",
+                    "route": "verified_identity_fast_path",
+                    "finish_reason": if req.stream.unwrap_or(false) { "stream" } else { "stop" },
+                    "response_chars": final_text.chars().count()
+                }),
+            );
+            if req.stream.unwrap_or(false) {
+                return stream_text_response(
+                    final_text.clone(),
+                    now,
+                    Some("Verified MIVI identity fast-path (no model load)".to_string()),
+                    include_usage.then(|| estimated_usage_for_text(&req, &final_text)),
+                    permit,
+                )
+                .into_response();
+            }
+            return Json(ChatCompletionResponse {
+                id: format!("chatcmpl-v2-{}", now),
+                object: "chat.completion".to_string(),
+                created: now,
+                model: MODEL_NAME.to_string(),
+                usage: Some(estimated_usage_for_text(&req, &final_text)),
+                choices: vec![ChoiceOut {
+                    index: 0,
+                    message: ChatMessageOut {
+                        role: "assistant".to_string(),
+                        content: final_text,
+                        refusal: None,
+                        reasoning_content: Some(
+                            "Verified MIVI identity fast-path (no model load)".to_string(),
+                        ),
+                        tool_calls: None,
+                    },
+                    logprobs: None,
+                    finish_reason: "stop".to_string(),
+                }],
+                system_fingerprint: Some("fp_mivi".to_string()),
+            })
+            .into_response();
+        }
+    }
+
     let tool_selection = select_tools_for_request(&req);
     let selected_tool_names = tool_names(&tool_selection.selected);
     let selected_tool_roles = selected_tool_roles(&tool_selection.selected);
@@ -3342,54 +3420,6 @@ pub async fn handle_chat_completions(
 
     // ── Non-tool path (existing logic) ───────────────────────────────
     let (user_prompt, image_path) = extract_content(&req);
-
-    // Fast-path for simple greetings to save CPU/RAM and prevent model distraction
-    let cleaned_prompt = user_prompt.trim().to_ascii_lowercase();
-    let is_greeting = cleaned_prompt == "hi"
-        || cleaned_prompt == "hii"
-        || cleaned_prompt == "hello"
-        || cleaned_prompt == "hey"
-        || cleaned_prompt == "yo"
-        || cleaned_prompt == "sup"
-        || cleaned_prompt == "hello there"
-        || cleaned_prompt == "hi there";
-
-    if is_greeting && image_path.is_none() {
-        let greeting_text = "Hello! I am OpenZ, your local AI assistant. How can I help you today?";
-        if req.stream.unwrap_or(false) {
-            return stream_text_response(
-                greeting_text.to_string(),
-                now,
-                Some("Fast-path greeting response (no model load)".to_string()),
-                include_usage.then(|| estimated_usage_for_text(&req, greeting_text)),
-                permit,
-            )
-            .into_response();
-        }
-        return Json(ChatCompletionResponse {
-            id: format!("chatcmpl-v2-{}", now),
-            object: "chat.completion".to_string(),
-            created: now,
-            model: MODEL_NAME.to_string(),
-            usage: Some(estimated_usage_for_text(&req, greeting_text)),
-            choices: vec![ChoiceOut {
-                index: 0,
-                message: ChatMessageOut {
-                    role: "assistant".to_string(),
-                    content: greeting_text.to_string(),
-                    refusal: None,
-                    reasoning_content: Some(
-                        "Fast-path greeting response (no model load)".to_string(),
-                    ),
-                    tool_calls: None,
-                },
-                logprobs: None,
-                finish_reason: "stop".to_string(),
-            }],
-            system_fingerprint: Some("fp_mivi".to_string()),
-        })
-        .into_response();
-    }
 
     let model_user_prompt = model_prompt_from_request(&req, &user_prompt, &state).await;
 
@@ -4461,7 +4491,7 @@ mod tests {
 
     #[test]
     pub fn test_grammar_dynamic_compilation() {
-        let req = tool_request("Run cargo test", None);
+        let req = tool_request("What is the weather in Tokyo?", None);
         let path_opt = get_grammar_path(&req);
         assert!(path_opt.is_some(), "get_grammar_path returned None");
         let path = path_opt.unwrap();
