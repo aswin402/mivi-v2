@@ -6,12 +6,56 @@ Generates high-signal, knowledge-lean training datasets for 4 specialized LoRA p
 2. mivi:tools     — Hermes XML & OpenAI function calling, web research, skills & memory retrieval.
 3. mivi:coder     — Full-stack polyglot (Rust/Axum, Python/FastAPI/uv, TS/React/Next/Tailwind/Hono, Bash).
 4. mivi:debugger  — Compiler error diagnosis (rustc, tsc, python) and minimal diff repair.
+
+Features:
+- Strict schema validation using Pydantic v2 (pydantic-core in Rust)
+- High-speed deduplication and analytics using Polars (Rust DataFrame engine)
 """
 
 import json
 import os
 import random
+import sys
 from typing import Dict, List, Any
+
+# Optional Pydantic validation (Rust-backed)
+try:
+    from pydantic import BaseModel, Field, field_validator
+    HAS_PYDANTIC = True
+
+    class ChatMessage(BaseModel):
+        role: str = Field(..., min_length=1)
+        content: str = Field(..., min_length=1)
+
+    class TrainingSampleModel(BaseModel):
+        text: str = Field(..., min_length=10)
+        messages: List[ChatMessage] = Field(..., min_length=2)
+
+        @field_validator("text")
+        def validate_tags(cls, v: str) -> str:
+            if "<think>" in v and "</think>" not in v:
+                raise ValueError("Unbalanced <think> tag in training sample")
+            if "<tool_call>" in v and "</tool_call>" not in v:
+                raise ValueError("Unbalanced <tool_call> tag in training sample")
+            return v
+except ImportError:
+    HAS_PYDANTIC = False
+
+# Optional Polars acceleration (Rust-backed)
+try:
+    import polars as pl
+    HAS_POLARS = True
+except ImportError:
+    HAS_POLARS = False
+
+# Fast orjson (Rust-backed)
+try:
+    import orjson as fast_json
+    def dumps(obj: Any) -> str:
+        return fast_json.dumps(obj).decode("utf-8")
+except ImportError:
+    def dumps(obj: Any) -> str:
+        return json.dumps(obj, ensure_ascii=False)
 
 SYSTEM_PROMPTS = {
     "reasoner": "You are MIVI Reasoner, an expert AI architectural thinker and planner. Think deeply step-by-step using <think>...</think> before presenting clean, structured solutions.",
@@ -22,7 +66,7 @@ SYSTEM_PROMPTS = {
 
 def format_sample(system: str, user: str, assistant: str) -> Dict[str, Any]:
     text = f"<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n{assistant}<|im_end|>"
-    return {
+    sample = {
         "text": text,
         "messages": [
             {"role": "system", "content": system},
@@ -30,6 +74,9 @@ def format_sample(system: str, user: str, assistant: str) -> Dict[str, Any]:
             {"role": "assistant", "content": assistant}
         ]
     }
+    if HAS_PYDANTIC:
+        TrainingSampleModel.model_validate(sample)
+    return sample
 
 # =====================================================================
 # 1. MIVI REASONER DATASET GENERATOR
@@ -39,7 +86,6 @@ def generate_reasoner_samples() -> List[Dict[str, Any]]:
     samples = []
     system = SYSTEM_PROMPTS["reasoner"]
 
-    # Architecture Planning
     arch_tasks = [
         ("Design a high-throughput event ingestion pipeline in Rust handling 50k req/sec with Tokio.",
          "<think>\n1. Ingestion: Use Tokio with Axum/Hyper with jemalloc allocator.\n2. Backpressure: Bounded mpsc channels (crossbeam or tokio::sync::mpsc) with drop/shedding policies.\n3. Processing: Rayon threadpool or Tokio worker tasks batching events in chunks of 1,000.\n4. Persistence: Zero-copy serialization (rkyv or bincode) to ClickHouse or persistent ring buffer.\n</think>\n### Architecture Overview\n- **Transport**: Axum HTTP/2 + TCP listeners on epoll/kqueue.\n- **Buffering**: Lock-free bounded channel (`flume` or `crossbeam-channel`) with pre-allocated buffer.\n- **Worker Pool**: Vectorized batching workers flushing micro-batches every 10ms or 1,000 items."),
@@ -54,7 +100,6 @@ def generate_reasoner_samples() -> List[Dict[str, Any]]:
     for user_prompt, response in arch_tasks:
         samples.append(format_sample(system, user_prompt, response))
 
-    # Algorithmic & Logic Problems
     logic_tasks = [
         ("Find the longest substring without repeating characters in O(n) time.",
          "<think>\n1. Sliding window approach with two pointers (left, right).\n2. Use a hash map or array of last seen character indices.\n3. When character at `right` is already seen in current window, move `left = max(left, last_seen[char] + 1)`.\n4. Max length is updated at every step: `max_len = max(max_len, right - left + 1)`.\n5. Space complexity: O(min(m, n)) where m is charset size.\n</think>\n```python\ndef length_of_longest_substring(s: str) -> int:\n    last_seen = {}\n    left = 0\n    max_len = 0\n    for right, char in enumerate(s):\n        if char in last_seen and last_seen[char] >= left:\n            left = last_seen[char] + 1\n        last_seen[char] = right\n        max_len = max(max_len, right - left + 1)\n    return max_len\n```"),
@@ -66,7 +111,6 @@ def generate_reasoner_samples() -> List[Dict[str, Any]]:
     for user_prompt, response in logic_tasks:
         samples.append(format_sample(system, user_prompt, response))
 
-    # Expand variations
     for i in range(len(samples), 120):
         samples.append(format_sample(
             system,
@@ -111,7 +155,6 @@ def generate_tools_samples() -> List[Dict[str, Any]]:
         prompt_with_tools = f"{tools_decl}\n\n{user_prompt}"
         samples.append(format_sample(system, prompt_with_tools, response))
 
-    # Synthetic variations
     tools_list = [
         ("grep_search", '{"path": "src/", "query": "struct RuntimeConfig"}', "Find where struct RuntimeConfig is defined in src/"),
         ("list_dir", '{"path": "notebooks/"}', "List all Jupyter notebooks in the notebooks directory."),
@@ -137,28 +180,25 @@ def generate_coder_samples() -> List[Dict[str, Any]]:
     samples = []
     system = SYSTEM_PROMPTS["coder"]
 
-    # Rust Backend
     rust_tasks = [
         ("Write a high-performance Axum route in Rust that handles a JSON payload with validation and returns a 201 Created.",
          "```rust\nuse axum::{\n    extract::Json,\n    http::StatusCode,\n    response::IntoResponse,\n    routing::post,\n    Router,\n};\nuse serde::{Deserialize, Serialize};\n\n#[derive(Debug, Deserialize)]\npub struct CreateItemRequest {\n    pub name: String,\n    pub quantity: u32,\n}\n\n#[derive(Debug, Serialize)]\npub struct ItemResponse {\n    pub id: u64,\n    pub name: String,\n    pub quantity: u32,\n}\n\npub async fn create_item(\n    Json(payload): Json<CreateItemRequest>,\n) -> Result<(StatusCode, Json<ItemResponse>), (StatusCode, String)> {\n    if payload.name.trim().is_empty() {\n        return Err((StatusCode::BAD_REQUEST, \"Name cannot be empty\".to_string()));\n    }\n\n    let item = ItemResponse {\n        id: 101,\n        name: payload.name,\n        quantity: payload.quantity,\n    };\n\n    Ok((StatusCode::CREATED, Json(item)))\n}\n\npub fn app() -> Router {\n    Router::new().route(\"/items\", post(create_item))\n}\n```"),
         
         ("Create an asynchronous Tokio channel worker in Rust that consumes tasks from a receiver and processes them with timeout.",
-         "```rust\nuse tokio::sync::mpsc;\nuse tokio::time::{timeout, Duration};\nuse tracing::{error, info, warn};\n\npub struct Job {\n    pub id: String,\n    pub payload: Vec<u8>,\n}\n\npub async fn run_worker(mut rx: mpsc::Receiver<Job>) {\n    info!(\"[Worker] Starting job consumer loop\");\n    while let Some(job) = rx.recv().await {\n        let job_id = job.id.clone();\n        let process_future = async {\n            // Process job payload\n            tokio::time::sleep(Duration::from_millis(50)).await;\n            info!(\"[Worker] Successfully processed job {}\", job_id);\n        };\n\n        if timeout(Duration::from_secs(5), process_future).await.is_err() {\n            warn!(\"[Worker] Job {} timed out after 5s\", job.id);\n        }\n    }\n    info!(\"[Worker] Channel closed, worker shutting down\");\n}\n```")
+         "```rust\nuse tokio::sync::mpsc;\nuse tokio::time::{timeout, Duration};\nuse tracing::{error, info, warn};\n\npub struct Job {\n    pub id: String,\n    pub payload: Vec<u8>,\n}\n\npub async fn run_worker(mut rx: mpsc::Receiver<Job>) {\n    info!(\"[Worker] Starting job consumer loop\");\n    while let Some(job) = rx.recv().await {\n        let job_id = job.id.clone();\n        let process_future = async {\n            tokio::time::sleep(Duration::from_millis(50)).await;\n            info!(\"[Worker] Successfully processed job {}\", job_id);\n        };\n\n        if timeout(Duration::from_secs(5), process_future).await.is_err() {\n            warn!(\"[Worker] Job {} timed out after 5s\", job.id);\n        }\n    }\n    info!(\"[Worker] Channel closed, worker shutting down\");\n}\n```")
     ]
 
     for user_prompt, response in rust_tasks:
         samples.append(format_sample(system, user_prompt, response))
 
-    # Python / FastAPI / UV
     python_tasks = [
         ("Write a FastAPI router in Python 3.12 with Pydantic v2 validation models and async SQLAlchemy dependency.",
-         "```python\nfrom fastapi import APIRouter, Depends, HTTPException, status\nfrom pydantic import BaseModel, Field, EmailStr\nfrom sqlalchemy.ext.asyncio import AsyncSession\nfrom typing import Annotated\n\nrouter = APIRouter(prefix=\"/users\", tags=[\"Users\"])\n\nclass UserCreate(BaseModel):\n    username: str = Field(..., min_length=3, max_length=50)\n    email: EmailStr\n    is_active: bool = True\n\nclass UserResponse(BaseModel):\n    id: int\n    username: str\n    email: EmailStr\n    is_active: bool\n\n    model_config = {\"from_attributes\": True}\n\n# Simulated DB session dependency\nasync def get_db_session() -> AsyncSession:\n    pass\n\nDbSession = Annotated[AsyncSession, Depends(get_db_session)]\n\n@router.post(\"/\", response_model=UserResponse, status_code=status.HTTP_201_CREATED)\nasync def create_user(user_in: UserCreate, db: DbSession):\n    # Business logic & db commit\n    return UserResponse(\n        id=1,\n        username=user_in.username,\n        email=user_in.email,\n        is_active=user_in.is_active\n    )\n```")
+         "```python\nfrom fastapi import APIRouter, Depends, HTTPException, status\nfrom pydantic import BaseModel, Field, EmailStr\nfrom sqlalchemy.ext.asyncio import AsyncSession\nfrom typing import Annotated\n\nrouter = APIRouter(prefix=\"/users\", tags=[\"Users\"])\n\nclass UserCreate(BaseModel):\n    username: str = Field(..., min_length=3, max_length=50)\n    email: EmailStr\n    is_active: bool = True\n\nclass UserResponse(BaseModel):\n    id: int\n    username: str\n    email: EmailStr\n    is_active: bool\n\n    model_config = {\"from_attributes\": True}\n\nasync def get_db_session() -> AsyncSession:\n    pass\n\nDbSession = Annotated[AsyncSession, Depends(get_db_session)]\n\n@router.post(\"/\", response_model=UserResponse, status_code=status.HTTP_201_CREATED)\nasync def create_user(user_in: UserCreate, db: DbSession):\n    return UserResponse(\n        id=1,\n        username=user_in.username,\n        email=user_in.email,\n        is_active=user_in.is_active\n    )\n```")
     ]
 
     for user_prompt, response in python_tasks:
         samples.append(format_sample(system, user_prompt, response))
 
-    # TypeScript / Next.js / Tailwind / Hono
     ts_tasks = [
         ("Build a clean, accessible React component with Tailwind CSS and Zustand for a shopping cart drawer.",
          "```tsx\nimport React from 'react';\nimport { create } from 'zustand';\n\ninterface CartItem {\n  id: string;\n  name: string;\n  price: number;\n  quantity: number;\n}\n\ninterface CartState {\n  isOpen: boolean;\n  items: CartItem[];\n  toggleCart: () => void;\n  removeItem: (id: string) => void;\n}\n\nexport const useCartStore = create<CartState>((set) => ({\n  isOpen: false,\n  items: [],\n  toggleCart: () => set((s) => ({ isOpen: !s.isOpen })),\n  removeItem: (id) => set((s) => ({ items: s.items.filter((i) => i.id !== id) })),\n}));\n\nexport const CartDrawer: React.FC = () => {\n  const { isOpen, items, toggleCart, removeItem } = useCartStore();\n\n  if (!isOpen) return null;\n\n  return (\n    <div className=\"fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm\">\n      <div className=\"w-full max-w-md bg-neutral-900 border-l border-neutral-800 p-6 flex flex-col justify-between text-neutral-100\">\n        <div>\n          <div className=\"flex justify-between items-center pb-4 border-b border-neutral-800\">\n            <h2 className=\"text-lg font-semibold\">Your Cart ({items.length})</h2>\n            <button onClick={toggleCart} className=\"p-2 hover:bg-neutral-800 rounded-md\">✕</button>\n          </div>\n          <div className=\"mt-4 space-y-3\">\n            {items.map((item) => (\n              <div key={item.id} className=\"flex justify-between items-center p-3 bg-neutral-800/50 rounded-lg\">\n                <div>\n                  <p className=\"font-medium\">{item.name}</p>\n                  <p className=\"text-sm text-neutral-400\">Qty: {item.quantity}</p>\n                </div>\n                <button onClick={() => removeItem(item.id)} className=\"text-red-400 hover:text-red-300 text-sm\">Remove</button>\n              </div>\n            ))}\n          </div>\n        </div>\n        <button className=\"w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-neutral-200 transition\">\n          Checkout\n        </button>\n      </div>\n    </div>\n  );\n};\n```"),
@@ -170,7 +210,6 @@ def generate_coder_samples() -> List[Dict[str, Any]]:
     for user_prompt, response in ts_tasks:
         samples.append(format_sample(system, user_prompt, response))
 
-    # Fill variations
     for i in range(len(samples), 150):
         samples.append(format_sample(
             system,
@@ -199,7 +238,7 @@ def generate_debugger_samples() -> List[Dict[str, Any]]:
         ),
         (
             "Fix this Python async runtime error:\n```text\nRuntimeError: Task <Task pending> got Future <Future pending> attached to a different loop\n```",
-            "<think>\n1. Cause: An `asyncio.Queue` or `asyncio.Event` was instantiated in global scope or before `asyncio.run()` created the active event loop.\n2. Fix: Initialize asyncio primitives inside the async lifecycle function (e.g. `async def main()` or FastAPI `lifespan`).\n</think>\n### Diagnosis\nAsyncio primitives (`Queue`, `Lock`, `Event`) were initialized outside the active running event loop.\n\n### Fix\nInstantiate the primitive inside your async startup function:\n```python\n# Correct: initialize inside async scope\nasync def lifespan(app: FastAPI):\n    app.state.queue = asyncio.Queue()\n    yield\n```"
+            "<think>\n1. Cause: An `asyncio.Queue` or `asyncio.Event` was instantiated in global scope or before `asyncio.run()` created the active event loop.\n2. Fix: Initialize asyncio primitives inside the async lifecycle function (e.g. `async def main()` or FastAPI `lifespan`).\n</think>\n### Diagnosis\nAsyncio primitives (`Queue`, `Lock`, `Event`) were initialized outside the active running event loop.\n\n### Fix\nInstantiate the primitive inside your async startup function:\n```python\nasync def lifespan(app: FastAPI):\n    app.state.queue = asyncio.Queue()\n    yield\n```"
         )
     ]
 
@@ -216,7 +255,7 @@ def generate_debugger_samples() -> List[Dict[str, Any]]:
     return samples
 
 # =====================================================================
-# MAIN PIPELINE
+# MAIN PIPELINE WITH POLARS & PYDANTIC VALIDATION
 # =====================================================================
 
 def generate_all_specialist_datasets(output_dir: str = "datasets") -> Dict[str, int]:
@@ -232,16 +271,34 @@ def generate_all_specialist_datasets(output_dir: str = "datasets") -> Dict[str, 
 
     print("=" * 60)
     print("🚀 Generating MIVI-V2 Multi-Specialist Training Datasets")
+    if HAS_PYDANTIC:
+        print("🛡️ Pydantic v2 Schema Validation: ACTIVE (Rust core)")
+    if HAS_POLARS:
+        print("⚡ Polars DataFrame Acceleration: ACTIVE (Rust core)")
     print("=" * 60)
 
     for filename, gen_fn in configs:
         path = os.path.join(output_dir, filename)
         samples = gen_fn()
-        with open(path, "w", encoding="utf-8") as f:
+
+        if HAS_POLARS:
+            # High-speed deduplication using Polars
+            df = pl.DataFrame(samples)
+            df_unique = df.unique(subset=["text"])
+            clean_samples = df_unique.to_dicts()
+        else:
+            seen = set()
+            clean_samples = []
             for s in samples:
-                f.write(json.dumps(s, ensure_ascii=False) + "\n")
-        counts[filename] = len(samples)
-        print(f"✅ Generated {len(samples):>4} samples -> {path}")
+                if s["text"] not in seen:
+                    seen.add(s["text"])
+                    clean_samples.append(s)
+
+        with open(path, "w", encoding="utf-8") as f:
+            for s in clean_samples:
+                f.write(dumps(s) + "\n")
+        counts[filename] = len(clean_samples)
+        print(f"✅ Generated {len(clean_samples):>4} verified samples -> {path}")
 
     print("=" * 60)
     return counts
