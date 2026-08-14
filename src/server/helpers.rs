@@ -2242,112 +2242,47 @@ pub async fn generate_tool_calls(
     let selected_tool_roles = selected_tool_roles(&selected_tools);
     let blocked_tools = blocked_tool_names(&selection.blocked);
 
-    let mut current_req = req.clone();
-    let mut attempts = 0;
-    let mut last_raw = String::new();
+    let (parsed_calls, raw) = query_model_for_tool_calls(brain, req).await?;
 
-    while attempts < 3 {
-        let (parsed_calls, raw) = query_model_for_tool_calls(brain, &current_req).await?;
-        last_raw = raw.clone();
-
-        if parsed_calls.is_empty() {
-            // Model generated text instead of tool calls — return it.
-            let final_content = append_tool_execution_summary(req, raw);
-            return Ok((Vec::new(), final_content));
-        }
-
-        // Validate tool calls (individual parameter checking)
-        let mut validation_errors = Vec::new();
-        let mut valid_calls = Vec::new();
-        for call in parsed_calls {
-            if let Some(tool) = selected_tools
-                .iter()
-                .find(|t| t.function.name == call.function.name)
-            {
-                match validate_tool_call_arguments(&call, tool) {
-                    Ok(_) => valid_calls.push(call),
-                    Err(err_msg) => {
-                        validation_errors.push((call, err_msg));
-                    }
-                }
-            } else {
-                validation_errors.push((
-                    call.clone(),
-                    format!("Unknown tool name '{}'", call.function.name),
-                ));
-            }
-        }
-
-        let parsed_count = valid_calls.len() + validation_errors.len();
-        let rejected_tool_calls = validation_errors.len();
-
-        let _ = trace_event(
-            &trace,
-            serde_json::json!({
-                "kind": "tool_generation",
-                "route": "loop_attempt",
-                "attempt": attempts + 1,
-                "agent_intent": selection.intent.as_str(),
-                "selected_tools": selected_tool_names,
-                "selected_tool_roles": selected_tool_roles,
-                "blocked_tools": blocked_tools,
-                "parsed_tool_calls": parsed_count,
-                "accepted_tool_calls": call_names(&valid_calls),
-                "rejected_tool_calls": rejected_tool_calls
-            }),
-        );
-
-        if validation_errors.is_empty() {
-            return Ok((valid_calls, String::new()));
-        }
-
-        // If there are validation errors, we append the invalid tool calls assistant message
-        // and the corresponding tool role error messages to current_req.messages, and try again!
-        let assistant_tool_calls: Vec<ToolCallIn> = valid_calls
-            .iter()
-            .chain(validation_errors.iter().map(|(c, _)| c))
-            .map(|call| ToolCallIn {
-                id: call.id.clone(),
-                r#type: call.r#type.clone(),
-                function: FunctionCallIn {
-                    name: call.function.name.clone(),
-                    arguments: call.function.arguments.clone(),
-                },
-            })
-            .collect();
-
-        let assistant_msg = ChatMessage {
-            role: "assistant".to_string(),
-            content: serde_json::Value::String(raw),
-            tool_call_id: None,
-            tool_calls: Some(assistant_tool_calls),
-        };
-        current_req.messages.push(assistant_msg);
-
-        for (call, err_msg) in &validation_errors {
-            let error_json = serde_json::json!({
-                "status": "error",
-                "message": format!("Validation error: {}", err_msg)
-            });
-            let tool_msg = ChatMessage {
-                role: "tool".to_string(),
-                content: serde_json::Value::String(error_json.to_string()),
-                tool_call_id: Some(call.id.clone()),
-                tool_calls: None,
-            };
-            current_req.messages.push(tool_msg);
-        }
-
-        attempts += 1;
-        info!(
-            "[MIVI-V2 ToolGen] Tool call failed validation. Retrying self-correction attempt {}/3",
-            attempts
-        );
+    if parsed_calls.is_empty() {
+        let final_content = append_tool_execution_summary(req, raw);
+        return Ok((Vec::new(), final_content));
     }
 
-    // If we exhausted attempts, fall back to returning text or last raw
-    let final_content = append_tool_execution_summary(req, last_raw);
-    Ok((Vec::new(), final_content))
+    // Validate parsed tool calls against selected tools
+    let mut valid_calls = Vec::new();
+    for call in parsed_calls {
+        if let Some(tool) = selected_tools
+            .iter()
+            .find(|t| t.function.name == call.function.name)
+        {
+            if validate_tool_call_arguments(&call, tool).is_ok() {
+                valid_calls.push(call);
+            }
+        }
+    }
+
+    let parsed_count = valid_calls.len();
+    let _ = trace_event(
+        &trace,
+        serde_json::json!({
+            "kind": "tool_generation",
+            "route": "single_pass",
+            "agent_intent": selection.intent.as_str(),
+            "selected_tools": selected_tool_names,
+            "selected_tool_roles": selected_tool_roles,
+            "blocked_tools": blocked_tools,
+            "parsed_tool_calls": parsed_count,
+            "accepted_tool_calls": call_names(&valid_calls)
+        }),
+    );
+
+    if !valid_calls.is_empty() {
+        Ok((valid_calls, String::new()))
+    } else {
+        let final_content = append_tool_execution_summary(req, raw);
+        Ok((Vec::new(), final_content))
+    }
 }
 
 // ──────────────────────────────────────────────
