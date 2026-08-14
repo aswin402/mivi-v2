@@ -457,7 +457,13 @@ pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
         all_tools
     };
 
-    let agent_contract = agent_contract_prompt_for_tools(&prompt_tools);
+    let persona = crate::lora_router::resolve_specialist_persona(
+        req.model.as_deref(),
+        !prompt_tools.is_empty(),
+        "",
+        false,
+    );
+    let agent_contract = agent_contract_prompt_for_tools_with_persona(&prompt_tools, Some(persona));
     let func_block = build_function_list_block(&prompt_tools);
 
     let has_user_system = compressed_messages.iter().any(|m| m.role == "system");
@@ -670,11 +676,22 @@ pub fn agent_contract_prompt(req: &ChatCompletionRequest) -> String {
 }
 
 pub fn agent_contract_prompt_for_tools(tools: &[ToolDef]) -> String {
+    agent_contract_prompt_for_tools_with_persona(tools, None)
+}
+
+pub fn agent_contract_prompt_for_tools_with_persona(
+    tools: &[ToolDef],
+    persona: Option<crate::lora_router::SpecialistPersona>,
+) -> String {
     let mut lines = vec![
         "Agent contract:".to_string(),
         "- External model identity is `mivi`; do not expose internal worker names.".to_string(),
         "- Adopt the role and persona defined in 'System instructions' to answer the user's request directly.".to_string(),
     ];
+
+    if let Some(p) = persona {
+        lines.push(format!("- {}", p.system_prompt_directive()));
+    }
 
     if !tools.is_empty() {
         lines.push("- The calling agent supplies the authoritative instructions, tools, skills, memory, database/context, and retrieved facts.".to_string());

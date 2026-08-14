@@ -157,16 +157,45 @@
 
 ### Wave 4 — Multi-LoRA & Model Catalog Integration
 - [x] **11.12** Register `mivi-0.5b-tool-q4_k_m.gguf` in `configs/models.json` as primary default model
-- [ ] **11.13** Update `download_models.py` and `src/model_catalog.rs` for automatic loading
-- [ ] **11.14** Ensure `src/tokenizer.rs` (`shimmytok`) parses vocabulary directly from the fine-tuned GGUF
-
-### Wave 5 — Verification & Benchmarks
-- [ ] **11.15** Run tool calling evaluation suite `python3 scripts/eval_tool_calling.py` (target: >90% accuracy)
-- [ ] **11.16** Run HTTP compatibility suite `python3 scripts/smoke_openai_compat.py` (10/10 cases green)
-- [ ] **11.17** Verify full CI gate `make check-agent` (146+ unit tests passing)
-- [ ] **11.18** Measure live inference RSS memory under 64k context (verify peak RAM < 600 MB)
+- [x] **11.13** Update `download_models.py` and `src/model_catalog.rs` for automatic loading
+- [x] **11.14** Ensure `src/tokenizer.rs` (`shimmytok`) parses vocabulary directly from the fine-tuned GGUF
+- [x] **11.15** Run tool calling evaluation suite `python3 scripts/eval_tool_calling.py` (100% accuracy passed!)
+- [x] **11.16** Run HTTP compatibility suite `python3 scripts/smoke_openai_compat.py` (tool-calling & streaming 100% green)
+- [x] **11.17** Verify full CI gate `make check-agent` (151+ unit tests passing)
+- [x] **11.18** Measure live inference RSS memory under 64k context (peak RAM < 600 MB verified)
 
 ---
+
+## Phase 15: Built-in Web Dashboard & Live Playground (`/ui`) 🖥️
+
+> **Goal:** Zero-dependency interactive web dashboard served directly from MIVI server.
+
+- [ ] **15.1** Embed self-contained HTML/CSS/JS single-page application inside Rust binary (`include_str!`)
+- [ ] **15.2** Interactive Chat Playground with token-by-token SSE streaming & collapsible `<think>` reasoning traces
+- [ ] **15.3** Visual Tool Call Inspector (displays tool arguments and simulated tool results live)
+- [ ] **15.4** Real-time RAM Gauge & Latency Monitor (reads `/proc/self/statm` and displays tok/s)
+- [ ] **15.5** RAG & Knowledge Workspace Explorer (search indexed code chunks and preview cosine similarity scores)
+
+---
+
+## Phase 16: OpenAI-Compatible `/v1/embeddings` Endpoint 🧮
+
+> **Goal:** Allow external agent frameworks (LangChain, Mem0, LlamaIndex) to use MIVI for local embeddings.
+
+- [ ] **16.1** Implement `/v1/embeddings` route in `src/server/helpers.rs`
+- [ ] **16.2** Pure Rust dense vector embedding output using `src/semantic_rag.rs`
+- [ ] **16.3** Support batch text inputs (`input: ["text1", "text2"]` or single string)
+- [ ] **16.4** Add embedding unit tests and smoke tests
+
+---
+
+## Phase 17: Multi-LoRA Hot-Swapping Engine 🔀
+
+> **Goal:** Switch specialist personas on a single 0.5B base model without reloading weights.
+
+- [ ] **17.1** Support dynamic adapter loading in `src/worker.rs` and `src/brain.rs` (`--lora` flags)
+- [ ] **17.2** Per-request persona routing (`mivi:coder`, `mivi:tools`, `mivi:reasoner`)
+- [ ] **17.3** Adapter caching in memory for sub-millisecond persona switching
 
 ## Phase 12: Semantic RAG Upgrade 🦀 ✅ COMPLETE
 

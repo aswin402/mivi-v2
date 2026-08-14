@@ -6,6 +6,7 @@ pub mod cli;
 pub mod constants;
 pub mod context_compressor;
 pub mod logger;
+pub mod lora_router;
 pub mod model_catalog;
 pub mod model_process;
 pub mod native_brain;
