@@ -815,6 +815,14 @@ pub fn agent_reasoning_summary(
         return None;
     }
 
+    if !has_tool_involvement(req)
+        && route != "verified_tools"
+        && route != "tool_calls"
+        && route != "tool_text_fallback"
+    {
+        return None;
+    }
+
     let selection = select_tools_for_request(req);
     let selected = tool_names(&selection.selected);
     let blocked = blocked_tool_names(&selection.blocked);
@@ -1315,7 +1323,6 @@ pub async fn model_prompt_from_request(
             .unwrap_or_default();
     let router_class = state.router.classify_intent_nb(latest_user_prompt).0;
     let is_chat = router_class == "CHAT";
-    let is_code_or_multistep = router_class == "CODE" || router_class == "MULTI_STEP";
     let has_tools = req.tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
 
     // Limit memory count for simple chat to save prompt space and CPU
@@ -1323,8 +1330,7 @@ pub async fn model_prompt_from_request(
     let memories =
         crate::okf_memory::search_memories(&all_memories, latest_user_prompt, memory_limit);
 
-    let workspace_rag = if should_include_workspace_rag(latest_user_prompt) || is_code_or_multistep
-    {
+    let workspace_rag = if should_include_workspace_rag(latest_user_prompt) {
         state
             .orchestrator
             .rag
