@@ -36,10 +36,10 @@ def train_specialist(
     max_seq_length: int = 4096,
     lora_rank: int = 16,
     lora_alpha: int = 32,
-    batch_size: int = 4,
-    gradient_accumulation_steps: int = 4,
+    batch_size: int = 16,
+    gradient_accumulation_steps: int = 1,
     learning_rate: float = 2e-4,
-    max_steps: int = 250,
+    max_steps: int = 150,
 ):
     if specialist not in SPECIALIST_DATASETS:
         raise ValueError(f"Unknown specialist '{specialist}'. Available: {list(SPECIALIST_DATASETS.keys())}")
@@ -177,7 +177,7 @@ def main():
         choices=["reasoner", "tools", "coder", "debugger", "chat", "all"],
         help="Specialist persona to train"
     )
-    parser.add_argument("--steps", type=int, default=250, help="Max training steps per adapter")
+    parser.add_argument("--steps", type=int, default=150, help="Max training steps per adapter")
     parser.add_argument("--base-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Base model")
     args = parser.parse_args()
 
