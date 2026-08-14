@@ -132,20 +132,39 @@
 
 ---
 
-## Phase 11: Fine-Tuning Pipeline 🟡
+## Phase 11: Knowledge-Lean Sub-1B Fine-Tuning & 64k Context Engine 🟡 IN PROGRESS
 
-> **Goal:** Knowledge-lean fine-tune → 90%+ tool calling accuracy
-> **Duration:** 3 days (includes Colab time)
-> **Impact:** Tool calling 67% → 90%+, combined with grammar → ~100% valid JSON
+> **Goal:** Fine-tune sub-1B base model (Qwen2.5-0.5B / Qwen3-0.6B) with DeepSeek-R1 reasoning distillation, Multi-LoRA specialist adapters, and 64k context under 600 MB RAM
+> **Duration:** 2-3 days (includes Colab training)
+> **Impact:** 300-600 MB peak RAM + 64k context + >90%+ tool calling accuracy
 
-- [ ] **11.1** Update `prepare_tuning_dataset.py` — use Salesforce xLAM-60k (3-stage verified)
-- [ ] **11.2** Filter dataset: schema compliance + tool calling ONLY (exclude trivia/general knowledge)
-- [ ] **11.3** Format in Hermes XML with Qwen3 ChatML template
-- [ ] **11.4** Add MIVI-specific tool schemas (OpenCode, Continue.dev tools)
-- [ ] **11.5** Fine-tune Qwen3 1.7B on Colab with Unsloth QLoRA (rank=16, alpha=32, ~30 mins)
-- [ ] **11.6** Export: merge LoRA → GGUF Q2_K conversion
-- [ ] **11.7** Benchmark: tool accuracy, chat quality, code gen, latency
-- [ ] **11.8** Verify all tests pass with fine-tuned model
+### Wave 1 — Dataset Generation & Distillation Pipeline
+- [x] **11.1** Build `scripts/prepare_mivi_dataset.py` with Salesforce xLAM-60k + Glaive v2 + Magpie DeepSeek-R1 `<think>` traces
+- [x] **11.2** Filter dataset for knowledge-lean operations (schema adherence, syntax generation, grounded QA only)
+- [x] **11.3** Format dataset into Qwen ChatML with Hermes XML and OpenAI JSON tool call standards
+- [x] **11.4** Write automated dataset verification test suite in `scripts/test_prepare_mivi_dataset.py`
+
+### Wave 2 — Google Colab Unsloth QLoRA Training Pipeline
+- [x] **11.5** Create `notebooks/train_mivi_unsloth.ipynb` & `scripts/train_mivi_unsloth.py` for 4-bit QLoRA on free T4 GPU (<2.5 GB VRAM)
+- [x] **11.6** Add GRPO verifiable reward functions (valid JSON, balanced `<think>` tags, schema match, anti-hallucination)
+- [x] **11.7** Implement automated checkpointing and GGUF `Q4_K_M` / `Q3_K_M` export
+- [x] **11.8** Create `docs/COLAB_TRAINING_GUIDE.md` with step-by-step execution instructions
+
+### Wave 3 — 64k Context Optimization (SnapKV & YaRN Triad)
+- [x] **11.9** Add YaRN RoPE scaling configuration (factor 2.0x) for 64k context in `src/worker.rs`
+- [x] **11.10** Add 4-bit KV cache quantization flags (`-ctk q4_0 -ctv q4_0`) to `src/brain.rs` and `src/worker.rs`
+- [x] **11.11** Implement SnapKV attention pruning in `src/context_compressor.rs` (5% anchors, 15% salient clusters, 512-token rolling window)
+
+### Wave 4 — Multi-LoRA & Model Catalog Integration
+- [x] **11.12** Register `mivi-0.5b-tool-q4_k_m.gguf` in `configs/models.json` as primary default model
+- [ ] **11.13** Update `download_models.py` and `src/model_catalog.rs` for automatic loading
+- [ ] **11.14** Ensure `src/tokenizer.rs` (`shimmytok`) parses vocabulary directly from the fine-tuned GGUF
+
+### Wave 5 — Verification & Benchmarks
+- [ ] **11.15** Run tool calling evaluation suite `python3 scripts/eval_tool_calling.py` (target: >90% accuracy)
+- [ ] **11.16** Run HTTP compatibility suite `python3 scripts/smoke_openai_compat.py` (10/10 cases green)
+- [ ] **11.17** Verify full CI gate `make check-agent` (146+ unit tests passing)
+- [ ] **11.18** Measure live inference RSS memory under 64k context (verify peak RAM < 600 MB)
 
 ---
 

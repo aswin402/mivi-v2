@@ -24,7 +24,8 @@ cargo run --release -- model inspect <internal-id> # detail one catalog entry
 
 # Python script unit tests (run from scripts/)
 python3 -m unittest test_check_agent_compat.py test_smoke_openai_compat.py \
-    test_eval_agent_workflows.py test_score_eval.py test_eval_tool_calling.py
+    test_eval_agent_workflows.py test_score_eval.py test_eval_tool_calling.py \
+    test_prepare_mivi_dataset.py
 
 # One-command compatibility gate (this is what CI runs)
 make check-agent          # = scripts/check_agent_compat.py --live off

@@ -54,6 +54,7 @@ def build_plan(live=False, eval_live=False, base_url=DEFAULT_BASE_URL, trace_pat
                 'test_eval_agent_workflows.py',
                 'test_score_eval.py',
                 'test_eval_tool_calling.py',
+                'test_prepare_mivi_dataset.py',
             ),
             ROOT / 'scripts',
         ),

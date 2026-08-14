@@ -2,6 +2,52 @@
   "external_model": "mivi",
   "models": [
     {
+      "id": "mivi-0.5b-tool-reasoner",
+      "role": "reasoner",
+      "backend": "llama-cli",
+      "path": "models/mivi-0.5b-tool-q4_k_m.gguf",
+      "context_tokens": 8192,
+      "ram_mb_estimate": 460,
+      "enabled": true,
+      "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
+      "notes": "Fine-tuned MIVI 0.5B Knowledge-Lean Agent Reasoner (Q4_K_M)",
+      "chat_template": {
+        "system_prefix": "<|im_start|>system\n",
+        "system_suffix": "<|im_end|>\n",
+        "user_prefix": "<|im_start|>user\n",
+        "user_suffix": "<|im_end|>\n",
+        "assistant_prefix": "<|im_start|>assistant\n",
+        "assistant_suffix": "<|im_end|>\n",
+        "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
+        "tool_suffix": "<|im_end|>\n",
+        "assistant_start": "<|im_start|>assistant\n",
+        "stop_words": ["<|im_end|>","<|im_start|>"]
+      }
+    },
+    {
+      "id": "mivi-0.5b-tool-coder",
+      "role": "coder",
+      "backend": "llama-cli",
+      "path": "models/mivi-0.5b-tool-q4_k_m.gguf",
+      "context_tokens": 8192,
+      "ram_mb_estimate": 460,
+      "enabled": true,
+      "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
+      "notes": "Fine-tuned MIVI 0.5B Knowledge-Lean Coder & Tool Specialist (Q4_K_M)",
+      "chat_template": {
+        "system_prefix": "<|im_start|>system\n",
+        "system_suffix": "<|im_end|>\n",
+        "user_prefix": "<|im_start|>user\n",
+        "user_suffix": "<|im_end|>\n",
+        "assistant_prefix": "<|im_start|>assistant\n",
+        "assistant_suffix": "<|im_end|>\n",
+        "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
+        "tool_suffix": "<|im_end|>\n",
+        "assistant_start": "<|im_start|>assistant\n",
+        "stop_words": ["<|im_end|>","<|im_start|>"]
+      }
+    },
+    {
       "id": "qwen3-0.6b-reasoner",
       "role": "reasoner",
       "backend": "llama-cli",
