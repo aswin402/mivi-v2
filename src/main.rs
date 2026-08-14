@@ -76,6 +76,10 @@ async fn main() {
         .rag
         .index_directory(&cur_dir.display().to_string())
         .await;
+    orchestrator
+        .semantic_rag
+        .index_directory(&cur_dir.display().to_string())
+        .await;
 
     match mode {
         "audit" => {

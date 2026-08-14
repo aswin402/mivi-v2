@@ -21,6 +21,7 @@ pub struct AgentOrchestrator {
     pub cache: SemanticCache,
     pub dataset: DatasetLogger,
     pub rag: TurboVecRAG,
+    pub semantic_rag: crate::semantic_rag::SemanticRAG,
     pub router: NeedleRouter,
 }
 
@@ -72,6 +73,7 @@ impl AgentOrchestrator {
         let cache = SemanticCache::new();
         let dataset = DatasetLogger::new();
         let rag = TurboVecRAG::new();
+        let semantic_rag = crate::semantic_rag::SemanticRAG::new();
         let router = NeedleRouter::new();
         Self {
             brain,
@@ -79,6 +81,7 @@ impl AgentOrchestrator {
             cache,
             dataset,
             rag,
+            semantic_rag,
             router,
         }
     }

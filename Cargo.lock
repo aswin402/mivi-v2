@@ -1341,6 +1341,7 @@ dependencies = [
  "axum",
  "bytes",
  "candle-core",
+ "candle-nn",
  "candle-transformers",
  "colored",
  "futures",

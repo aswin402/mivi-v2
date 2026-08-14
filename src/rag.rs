@@ -40,6 +40,10 @@ fn expand_query_words(mut words: Vec<String>) -> Vec<String> {
     words
 }
 
+pub(crate) fn should_skip_path_public(path: &str) -> bool {
+    should_skip_path(path)
+}
+
 fn should_skip_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
     normalized.contains("/target/")
