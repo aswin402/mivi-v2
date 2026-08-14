@@ -2559,7 +2559,19 @@ pub async fn complete_chat_non_stream(
                 .await?;
                 (text, model, "reasoner")
             }
-            _ if is_direct_reasoner_intent(&intent) => {
+            _ if intent == "CODE" => {
+                let (text, model) = code_chat_with_params(
+                    &state.brain,
+                    &model_user_prompt,
+                    req.temperature,
+                    req.top_p,
+                    req.seed,
+                    resolved_max_tokens,
+                )
+                .await?;
+                (text, model, "coder")
+            }
+            _ => {
                 let (text, model) = reasoner_chat_with_params(
                     &state.brain,
                     &model_user_prompt,
@@ -2570,10 +2582,6 @@ pub async fn complete_chat_non_stream(
                 )
                 .await?;
                 (text, model, "direct_reasoner")
-            }
-            _ => {
-                let (_, res) = state.orchestrator.execute_plan(&user_prompt).await;
-                (res, MODEL_NAME.to_string(), "orchestrator")
             }
         }
     };
@@ -3494,7 +3502,7 @@ pub async fn handle_chat_completions(
                         .into_response();
                 }
             },
-            _ if is_direct_reasoner_intent(&intent) => {
+            _ => {
                 match reasoner_chat_with_params(
                     &state.brain,
                     &model_user_prompt,
@@ -3510,7 +3518,7 @@ pub async fn handle_chat_completions(
                         return (
                             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                             Json(serde_json::json!({
-                                "error": {
+                                    "error": {
                                     "type": "server_error",
                                     "message": err
                                 }
@@ -3519,10 +3527,6 @@ pub async fn handle_chat_completions(
                             .into_response();
                     }
                 }
-            }
-            _ => {
-                let (_, res) = state.orchestrator.execute_plan(&user_prompt).await;
-                (res, MODEL_NAME.to_string(), "orchestrator")
             }
         }
     };

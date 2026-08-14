@@ -378,43 +378,13 @@ impl NeedleRouter {
     /// falls back to querying the coder model if confidence is low.
     pub async fn classify_intent(
         &self,
-        brain: &crate::brain::EdgeBrain,
+        _brain: &crate::brain::EdgeBrain,
         prompt: &str,
     ) -> (&'static str, f64) {
-        let (best_class, confidence) = self.classify_intent_nb(prompt);
-
-        // In ultra-low-RAM mode, skip model fallback entirely to avoid
-        // loading the 491 MB model just for intent classification.
-        // The Naive Bayes classifier is good enough for routing.
-        let ultra_low = std::env::var("MIVI_ULTRA_LOW_RAM")
-            .map(|v| v == "1" || v == "true")
-            .unwrap_or(false);
-
-        if ultra_low {
-            tracing::debug!(
-                "[NeedleRouter] Ultra-low-RAM: using NB classification directly (class={}, conf={:.2})",
-                best_class, confidence
-            );
-            return (best_class, confidence.max(0.70));
-        }
-
-        if confidence < 0.70 {
-            tracing::info!(
-                "[NeedleRouter] Low confidence ({:.2}) for class {}. Falling back to Coder model router...",
-                confidence, best_class
-            );
-            if let Ok(model_intent) = self.classify_intent_model(brain, prompt).await {
-                tracing::info!(
-                    "[NeedleRouter] Coder model classified intent as: {}",
-                    model_intent
-                );
-                return (model_intent, 1.0);
-            }
-        }
-
-        (best_class, confidence)
+        self.classify_intent_nb(prompt)
     }
 
+    #[allow(dead_code)]
     async fn classify_intent_model(
         &self,
         brain: &crate::brain::EdgeBrain,
