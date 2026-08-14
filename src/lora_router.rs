@@ -44,12 +44,20 @@ impl SpecialistPersona {
     pub fn adapter_path(&self) -> Option<PathBuf> {
         let base_dir =
             std::env::var("MIVI_LORA_DIR").unwrap_or_else(|_| "models/loras".to_string());
-        let path = PathBuf::from(base_dir).join(format!("mivi-{}.bin", self.as_str()));
-        if path.exists() {
-            Some(path)
-        } else {
-            None
+        let candidates = [
+            PathBuf::from(&base_dir)
+                .join(format!("mivi-{}", self.as_str()))
+                .join("adapter_model.safetensors"),
+            PathBuf::from(&base_dir).join(format!("mivi-{}.bin", self.as_str())),
+            PathBuf::from(&base_dir).join(format!("mivi-{}.gguf", self.as_str())),
+            PathBuf::from(&base_dir).join(format!("mivi-{}-lora.gguf", self.as_str())),
+        ];
+        for path in candidates {
+            if path.exists() {
+                return Some(path);
+            }
         }
+        None
     }
 }
 
