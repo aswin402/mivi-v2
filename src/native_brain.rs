@@ -116,6 +116,14 @@ impl QuantizedModel {
                 .map_err(|e| format!("Phi3 forward error: {}", e)),
         }
     }
+
+    pub fn clear_kv_cache(&mut self) {
+        match self {
+            Self::Llama(m) => m.clear_kv_cache(),
+            Self::Qwen2(m) => m.clear_kv_cache(),
+            Self::Phi3(_) => (),
+        }
+    }
 }
 
 #[cfg(feature = "native")]
@@ -260,6 +268,7 @@ impl NativeBrain {
     ) -> Result<String, String> {
         let loaded = self.get_or_load(model_path)?;
         let mut model = loaded.model.lock().unwrap();
+        model.clear_kv_cache();
         let tokenizer = &loaded.tokenizer;
 
         let t = crate::server::active_chat_template();
@@ -498,6 +507,7 @@ impl NativeBrain {
     ) -> Result<String, String> {
         let loaded = self.get_or_load(model_path)?;
         let mut model = loaded.model.lock().unwrap();
+        model.clear_kv_cache();
         let tokenizer = &loaded.tokenizer;
 
         let tokens = tokenizer
@@ -715,6 +725,7 @@ impl NativeBrain {
         tokio::task::spawn_blocking(move || {
             let result = (|| -> Result<(), String> {
                 let mut model = loaded.model.lock().unwrap();
+                model.clear_kv_cache();
                 let tokenizer = &loaded.tokenizer;
 
                 let t = crate::server::active_chat_template();
