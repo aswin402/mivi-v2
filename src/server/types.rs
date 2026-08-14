@@ -524,6 +524,126 @@ pub struct CapabilityConfig {
     pub tool_error_category_priority: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AnthropicMessage {
+    pub role: String,
+    pub content: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AnthropicRequest {
+    pub model: Option<String>,
+    pub messages: Vec<AnthropicMessage>,
+    pub max_tokens: Option<u32>,
+    pub system: Option<serde_json::Value>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub stream: Option<bool>,
+    pub tools: Option<Vec<serde_json::Value>>,
+}
+
+pub fn anthropic_request_to_chat_request(req: AnthropicRequest) -> ChatCompletionRequest {
+    let mut messages = Vec::new();
+
+    // Extract system prompt if present
+    if let Some(sys) = req.system {
+        let sys_text = if let Some(s) = sys.as_str() {
+            s.to_string()
+        } else if let Some(arr) = sys.as_array() {
+            arr.iter()
+                .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            sys.to_string()
+        };
+        if !sys_text.is_empty() {
+            messages.push(ChatMessage {
+                role: "system".to_string(),
+                content: serde_json::Value::String(sys_text),
+                tool_call_id: None,
+                tool_calls: None,
+            });
+        }
+    }
+
+    for msg in req.messages {
+        let content_val = if let Some(text) = msg.content.as_str() {
+            serde_json::Value::String(text.to_string())
+        } else if let Some(arr) = msg.content.as_array() {
+            let texts: Vec<String> = arr
+                .iter()
+                .filter_map(|b| {
+                    if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                        Some(t.to_string())
+                    } else if b.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
+                        b.get("content").map(|c| c.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            serde_json::Value::String(texts.join("\n"))
+        } else {
+            msg.content.clone()
+        };
+
+        messages.push(ChatMessage {
+            role: msg.role,
+            content: content_val,
+            tool_call_id: None,
+            tool_calls: None,
+        });
+    }
+
+    let tools = req.tools.map(|raw_tools| {
+        raw_tools
+            .into_iter()
+            .filter_map(|t| {
+                let name = t.get("name")?.as_str()?.to_string();
+                let description = t
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .map(|d| d.to_string());
+                let parameters = t.get("input_schema").cloned();
+                Some(ToolDef {
+                    function: FunctionDef {
+                        name,
+                        description,
+                        parameters,
+                    },
+                    r#type: "function".to_string(),
+                })
+            })
+            .collect()
+    });
+
+    ChatCompletionRequest {
+        model: req.model.or_else(|| Some("mivi".to_string())),
+        messages,
+        stream: req.stream,
+        tools,
+        tool_choice: None,
+        temperature: req.temperature,
+        top_p: req.top_p,
+        max_tokens: req.max_tokens,
+        response_format: None,
+        logit_bias: None,
+        logprobs: None,
+        top_logprobs: None,
+        n: None,
+        seed: None,
+        service_tier: None,
+        stop: None,
+        presence_penalty: None,
+        frequency_penalty: None,
+        user: None,
+        parallel_tool_calls: None,
+        reasoning_effort: None,
+        stream_options: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,5 +671,35 @@ mod tests {
         assert_eq!(req.top_logprobs, Some(5));
         assert_eq!(req.n, Some(1));
         assert_eq!(req.service_tier.as_deref(), Some("auto"));
+    }
+
+    #[test]
+    fn test_anthropic_request_mapping() {
+        let anthropic_data = json!({
+            "model": "claude-3-5-sonnet",
+            "system": "You are a helpful coding assistant.",
+            "messages": [
+                {"role": "user", "content": "Write a Rust hello world"}
+            ],
+            "max_tokens": 1024,
+            "temperature": 0.2
+        });
+
+        let anthropic_req: AnthropicRequest = serde_json::from_value(anthropic_data).unwrap();
+        let chat_req = anthropic_request_to_chat_request(anthropic_req);
+
+        assert_eq!(chat_req.messages.len(), 2);
+        assert_eq!(chat_req.messages[0].role, "system");
+        assert_eq!(
+            chat_req.messages[0].content,
+            json!("You are a helpful coding assistant.")
+        );
+        assert_eq!(chat_req.messages[1].role, "user");
+        assert_eq!(
+            chat_req.messages[1].content,
+            json!("Write a Rust hello world")
+        );
+        assert_eq!(chat_req.max_tokens, Some(1024));
+        assert_eq!(chat_req.temperature, Some(0.2));
     }
 }

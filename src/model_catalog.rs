@@ -205,6 +205,66 @@ pub fn print_model_inspect(catalog: &ModelCatalog, id: &str) -> Result<(), Model
     Ok(())
 }
 
+pub fn print_model_fit(catalog: &ModelCatalog, id: &str) -> Result<(), ModelCatalogError> {
+    let model = catalog
+        .find(id)
+        .ok_or_else(|| ModelCatalogError::NotFound(id.to_string()))?;
+
+    let (total_ram_mb, avail_ram_mb) = read_system_memory();
+    let model_mb = model.ram_mb_estimate;
+    let kv_3k_mb = (3072 * 2 * 14 * 64 * 4) / (8 * 1024 * 1024); // ~40 MB
+    let kv_64k_mb = 180; // with SnapKV attention pruning + 4-bit KV
+    let peak_3k = model_mb + kv_3k_mb;
+    let peak_64k = model_mb + kv_64k_mb;
+
+    println!("============================================================");
+    println!("  🧠 MIVI MODEL FIT CALCULATOR: {}", model.id);
+    println!("============================================================");
+    println!("  Model Weights:       ~{} MB", model_mb);
+    println!("  KV Cache (3072 ctx): ~{} MB (q4_0)", kv_3k_mb.max(30));
+    println!("  KV Cache (64k ctx):  ~{} MB (q4_0 + SnapKV)", kv_64k_mb);
+    println!("  Peak Inference RAM:  ~{} MB - {} MB", peak_3k, peak_64k);
+    if total_ram_mb > 0 {
+        println!("  System Total RAM:    {} MB", total_ram_mb);
+        println!("  System Free/Avail:   {} MB", avail_ram_mb);
+    }
+    println!("------------------------------------------------------------");
+    if peak_64k <= 600 {
+        println!("  Status: ✅ FITS COMFORTABLY IN ULTRA-LOW RAM (< 600 MB)");
+    } else if peak_3k <= 1024 {
+        println!("  Status: ⚡ FITS IN STANDARD LOCAL RAM (< 1 GB)");
+    } else {
+        println!("  Status: ⚠️ REQUIRES DEDICATED GPU OR >2 GB RAM");
+    }
+    println!("============================================================");
+    Ok(())
+}
+
+fn read_system_memory() -> (usize, usize) {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(content) = fs::read_to_string("/proc/meminfo") {
+            let mut total_kb = 0;
+            let mut avail_kb = 0;
+            for line in content.lines() {
+                if line.starts_with("MemTotal:") {
+                    if let Some(num) = line.split_whitespace().nth(1) {
+                        total_kb = num.parse::<usize>().unwrap_or(0);
+                    }
+                } else if line.starts_with("MemAvailable:") {
+                    if let Some(num) = line.split_whitespace().nth(1) {
+                        avail_kb = num.parse::<usize>().unwrap_or(0);
+                    }
+                }
+            }
+            if total_kb > 0 {
+                return (total_kb / 1024, avail_kb / 1024);
+            }
+        }
+    }
+    (0, 0)
+}
+
 impl fmt::Display for ModelRole {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

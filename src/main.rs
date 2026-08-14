@@ -2,7 +2,7 @@ use mivi::audit::run_system_audit;
 use mivi::brain::EdgeBrain;
 use mivi::chat::run_chat_interactive;
 use mivi::cli::run_cli;
-use mivi::model_catalog::{print_model_inspect, print_model_list, ModelCatalog};
+use mivi::model_catalog::{print_model_fit, print_model_inspect, print_model_list, ModelCatalog};
 use mivi::orchestrator::AgentOrchestrator;
 use mivi::server::start_api_server;
 use std::env;
@@ -20,12 +20,18 @@ fn handle_model_command(args: &[String]) -> Result<(), String> {
                 .ok_or_else(|| "Usage: mivi model inspect <internal-id>".to_string())?;
             print_model_inspect(&catalog, id).map_err(|err| err.to_string())
         }
+        Some("fit") => {
+            let id = args
+                .get(1)
+                .ok_or_else(|| "Usage: mivi model fit <internal-id>".to_string())?;
+            print_model_fit(&catalog, id).map_err(|err| err.to_string())
+        }
         Some("help") | None => {
             print_model_usage();
             Ok(())
         }
         Some(other) => Err(format!(
-            "unknown model command '{other}'. Usage: mivi model <list|inspect>"
+            "unknown model command '{other}'. Usage: mivi model <list|inspect|fit>"
         )),
     }
 }
@@ -34,6 +40,7 @@ fn print_model_usage() {
     println!("Usage:");
     println!("  mivi model list");
     println!("  mivi model inspect <internal-id>");
+    println!("  mivi model fit <internal-id>");
     println!("\nAgents should call only the external OpenAI-compatible model name: mivi");
 }
 

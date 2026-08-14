@@ -29,6 +29,7 @@ DEFAULT_CASES = [
     "tool-error-loop",
     "unmatched-tool-result",
     "multi-tool-result-loop",
+    "anthropic-messages",
 ]
 
 
@@ -243,6 +244,14 @@ def payload_for(case):
             ],
             "tools": [webfetch_tool(), shell_tool()],
         }
+    if case == "anthropic-messages":
+        return {
+            "model": "mivi",
+            "messages": [
+                {"role": "user", "content": "What is your identity name?"}
+            ],
+            "max_tokens": 100,
+        }
     raise ValueError(f"unknown smoke case: {case}")
 
 
@@ -399,6 +408,14 @@ def score_case(case, result):
             reasons.append("multi-tool result missing shell summary")
         if not usage_is_valid(result.get("usage")):
             reasons.append("multi-tool result usage missing or invalid")
+    elif case == "anthropic-messages":
+        if result.get("type") != "message":
+            reasons.append("anthropic response type is not message")
+        content_blocks = result.get("content", [])
+        if not content_blocks or not any("mivi" in b.get("text", "").lower() for b in content_blocks):
+            reasons.append("anthropic response content missing mivi identity")
+        if not usage_is_valid(result.get("usage")):
+            reasons.append("anthropic response usage missing or invalid")
     else:
         reasons.append(f"unknown case {case}")
     return {"ok": not reasons, "reasons": reasons}
@@ -410,6 +427,9 @@ def run_case(base_url, case, timeout):
         return request_get_json(f"{base_url}/models", timeout)
     if case == "responses":
         raw = request_json(f"{base_url}/responses", payload_for(case), timeout)
+        return json.loads(raw)
+    if case == "anthropic-messages":
+        raw = request_json(f"{base_url}/messages", payload_for(case), timeout)
         return json.loads(raw)
     if case == "chat-stream-usage":
         return request_sse(f"{base_url}/chat/completions", payload_for(case), timeout)

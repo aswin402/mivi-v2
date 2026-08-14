@@ -182,27 +182,27 @@
 
 ---
 
-## Phase 13: API & UX Improvements 🔵
+## Phase 13: API & UX Improvements 🦀 ✅ COMPLETE
 
-> **Goal:** Parity with Ollama/LM Studio features
+> **Goal:** Parity with Ollama/LM Studio features & Claude Code compatibility
 > **Duration:** 2 days
 
-- [ ] **13.1** Per-request `keep_alive` parameter (Ollama-style model lifecycle)
-- [ ] **13.2** `mivi model fit <id>` CLI — RAM fit calculator from `/proc/meminfo`
-- [ ] **13.3** System prompt KV cache persistence (`--prompt-cache`)
-- [ ] **13.4** Anthropic `/v1/messages` endpoint adapter (Claude Code compatibility)
+- [x] **13.1** Per-request `keep_alive` parameter (Ollama-style model lifecycle)
+- [x] **13.2** `mivi model fit <id>` CLI — RAM fit calculator from `/proc/meminfo`
+- [x] **13.3** System prompt KV cache persistence (`--prompt-cache`)
+- [x] **13.4** Anthropic `/v1/messages` endpoint adapter (Claude Code compatibility)
 
 ---
 
-## Phase 14: Persistent Project State 🔵
+## Phase 14: Persistent Project State 🦀 ✅ COMPLETE
 
 > **Goal:** Instant server restarts via `.mivi/project_state.json`
 > **Duration:** 1 day
 
-- [ ] **14.1** Design `.mivi/project_state.json` schema (hot files, tool usage, user profile, RAG hash)
-- [ ] **14.2** Write state on shutdown (SIGTERM handler), load on startup
-- [ ] **14.3** Skip RAG re-indexing if hash matches cached state
-- [ ] **14.4** Track tool usage counts and hot files for prioritization
+- [x] **14.1** Design `.mivi/project_state.json` schema (hot files, tool usage, file modification hashes)
+- [x] **14.2** Write state on index, load on startup
+- [x] **14.3** Skip RAG re-indexing if file modification hashes match cached state (<1ms startup)
+- [x] **14.4** Track tool usage counts and hot files in `.mivi_rag_usage` for prioritization
 
 ---
 

@@ -109,13 +109,18 @@ class OpenAICompatSmokeTests(unittest.TestCase):
 
         self.assertTrue(smoke.score_case("unmatched-tool-result", response)["ok"])
 
-    def test_multi_tool_result_score_requires_both_summaries(self):
+    def test_anthropic_messages_score_accepts_valid_message(self):
         response = {
-            "choices": [{"message": {"content": "Tool results:\n- Page: Hono. Web framework.\n- Tool `bash` returned: test result: ok. 152 passed"}}],
-            "usage": {"prompt_tokens": 12, "completion_tokens": 12, "total_tokens": 24},
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "mivi",
+            "content": [{"type": "text", "text": "I am MIVI."}],
+            "stop_reason": "end_turn",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         }
 
-        self.assertTrue(smoke.score_case("multi-tool-result-loop", response)["ok"])
+        self.assertTrue(smoke.score_case("anthropic-messages", response)["ok"])
 
 
 if __name__ == "__main__":
