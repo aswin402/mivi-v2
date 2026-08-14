@@ -713,121 +713,17 @@ pub fn wrap_agent_prompt(agent_contract: &str, prompt: &str) -> String {
     }
 }
 
-fn get_example_value_for_param(name: &str, val_type: &str) -> serde_json::Value {
-    match val_type {
-        "boolean" => serde_json::Value::Bool(true),
-        "number" | "integer" => serde_json::Value::Number(123.into()),
-        "array" => serde_json::Value::Array(vec![serde_json::Value::String("example".to_string())]),
-        _ => {
-            let lower = name.to_lowercase();
-            if lower.contains("url") || lower.contains("uri") || lower.contains("link") {
-                serde_json::Value::String("https://...".to_string())
-            } else if lower.contains("cmd") || lower.contains("command") || lower.contains("run") {
-                serde_json::Value::String("npm test".to_string())
-            } else if lower.contains("path") || lower.contains("file") || lower.contains("dir") {
-                serde_json::Value::String("path/to/file".to_string())
-            } else if lower.contains("query") || lower.contains("search") || lower.contains("find")
-            {
-                serde_json::Value::String("search_query".to_string())
-            } else {
-                serde_json::Value::String("...".to_string())
-            }
-        }
-    }
-}
-
 pub fn build_function_list_block(tools: &[ToolDef]) -> String {
     if tools.is_empty() {
         return String::new();
     }
 
     let mut block = String::new();
-    let first_tool = &tools[0].function;
-    let tool_format = std::env::var("MIVI_TOOL_FORMAT").unwrap_or_else(|_| "openai".to_string());
-    let tool_format = tool_format.trim().to_ascii_lowercase();
-
-    let mut ex_args_obj = serde_json::Map::new();
-    if let Some(props) = first_tool
-        .parameters
-        .as_ref()
-        .and_then(|p| p.get("properties"))
-        .and_then(|props| props.as_object())
-    {
-        for (k, v) in props {
-            let val_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("string");
-            ex_args_obj.insert(k.clone(), get_example_value_for_param(k, val_type));
-        }
-    }
-    let ex_args = serde_json::Value::Object(ex_args_obj);
-    let ex_args_str = serde_json::to_string(&ex_args).unwrap_or_else(|_| "{}".to_string());
-
-    let example_response = if tool_format == "hermes" {
-        format!(
-            "<tool_call>{{\"name\": \"{name}\", \"arguments\": {ex_args_str}}}</tool_call>",
-            name = first_tool.name,
-            ex_args_str = ex_args_str
-        )
-    } else {
-        format!(
-            "{{\"tool_calls\": [{{\"id\": \"call_abc123\", \"type\": \"function\", \"function\": {{\"name\": \"{name}\", \"arguments\": {ex_args_str}}}}}]}}",
-            name = first_tool.name,
-            ex_args_str = ex_args_str
-        )
-    };
+    let tools_json = serde_json::to_string_pretty(tools).unwrap_or_else(|_| "[]".to_string());
 
     block.push_str(&format!(
-        "\nTool context broker selected {} tool(s).\nAvailable tools:\n",
-        tools.len()
-    ));
-
-    for tool in tools {
-        let f = &tool.function;
-        let required_fields: std::collections::HashSet<String> = f
-            .parameters
-            .as_ref()
-            .and_then(|params| params.get("required"))
-            .and_then(|req| req.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let param_keys = f
-            .parameters
-            .as_ref()
-            .and_then(|params| params.get("properties"))
-            .and_then(|properties| properties.as_object())
-            .map(|properties| {
-                let mut details = Vec::new();
-                for (name, prop) in properties {
-                    let p_type = prop
-                        .get("type")
-                        .and_then(|t| t.as_str())
-                        .unwrap_or("string");
-                    let is_required = required_fields.contains(name);
-                    let optional_marker = if is_required { "" } else { "?" };
-                    details.push(format!("{}{}: {}", name, optional_marker, p_type));
-                }
-                details.sort();
-                details.join(", ")
-            })
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "".to_string());
-
-        let desc_suffix = f
-            .description
-            .as_deref()
-            .map(|d| format!(" - {}", d))
-            .unwrap_or_default();
-
-        block.push_str(&format!("TOOL {}({}){}\n", f.name, param_keys, desc_suffix));
-    }
-
-    block.push_str(&format!(
-        "\nTo call a tool, respond ONLY with JSON matching this format:\n{}\n\n",
-        example_response
+        "\n<tools>\n{}\n</tools>\n\nTo call a tool, respond with <tool_call>{{\"name\": \"tool_name\", \"arguments\": {{...}}}}</tool_call> or {{\"tool_calls\": [...]}}.\n",
+        tools_json
     ));
 
     block
@@ -1995,65 +1891,24 @@ pub fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
 }
 
 /// Check if the request should proceed to the tool-calling generator or if it is simple chat.
-pub fn should_use_tool_path(req: &ChatCompletionRequest, latest_user_prompt: &str) -> bool {
+pub fn should_use_tool_path(req: &ChatCompletionRequest, _latest_user_prompt: &str) -> bool {
     if !has_tool_involvement(req) {
         return false;
     }
 
-    // Explicit tool_choice overrides
     if let Some(serde_json::Value::String(choice)) = &req.tool_choice {
-        if choice == "required" {
+        if choice == "none" {
+            return false;
+        }
+    }
+
+    if let Some(tools) = &req.tools {
+        if !tools.is_empty() {
             return true;
         }
     }
-    if matches!(req.tool_choice, Some(serde_json::Value::Object(_))) {
-        return true;
-    }
 
-    // Check if prompt mentions any part of the available tool names
-    let mut mentions_any_tool = false;
-    if let Some(tools) = &req.tools {
-        let user_lower = latest_user_prompt.to_lowercase();
-        for tool in tools {
-            let name_lower = tool.function.name.to_lowercase();
-            if user_lower.contains(&name_lower) {
-                mentions_any_tool = true;
-                break;
-            }
-            for sub in name_lower.split(|c| c == '_' || c == '-') {
-                if sub.len() >= 3 && user_lower.contains(sub) {
-                    mentions_any_tool = true;
-                    break;
-                }
-            }
-            if mentions_any_tool {
-                break;
-            }
-        }
-    }
-
-    if mentions_any_tool {
-        return true;
-    }
-
-    let intent = classify_agent_intent(latest_user_prompt);
-    let prompt_lower = latest_user_prompt.to_lowercase();
-    let is_simple_chat = matches!(intent, AgentIntent::Chat)
-        && latest_user_prompt.len() < 100
-        && !prompt_lower.contains("tool")
-        && !prompt_lower.contains("call")
-        && !prompt_lower.contains("run")
-        && !prompt_lower.contains("execute")
-        && !prompt_lower.contains("search")
-        && !prompt_lower.contains("read")
-        && !prompt_lower.contains("write")
-        && !prompt_lower.contains("file")
-        && !prompt_lower.contains("open")
-        && !prompt_lower.contains("play")
-        && !prompt_lower.contains("use")
-        && !prompt_lower.contains("http");
-
-    !is_simple_chat
+    false
 }
 
 // ──────────────────────────────────────────────
@@ -2860,12 +2715,25 @@ fn anthropic_response_from_chat(chat: ChatCompletionResponse) -> serde_json::Val
         }
     }
 
-    let input_tokens = chat.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
+    let input_tokens = chat
+        .usage
+        .as_ref()
+        .map(|u| u.prompt_tokens)
+        .filter(|&t| t > 0)
+        .unwrap_or(1);
     let output_tokens = chat
         .usage
         .as_ref()
         .map(|u| u.completion_tokens)
-        .unwrap_or(0);
+        .filter(|&t| t > 0)
+        .unwrap_or(1);
+
+    if content_blocks.is_empty() {
+        content_blocks.push(serde_json::json!({
+            "type": "text",
+            "text": "mivi"
+        }));
+    }
 
     serde_json::json!({
         "id": format!("msg_{}", chat.id),
@@ -4959,8 +4827,9 @@ mod tests {
         assert!(prompt.contains(
             "Current prompt exposes 1 selected callable tool schemas: agent_capabilities"
         ));
-        assert!(prompt.contains("TOOL agent_capabilities("));
-        assert!(!prompt.contains("TOOL read("));
+        assert!(prompt.contains("<tools>"));
+        assert!(prompt.contains("\"agent_capabilities\""));
+        assert!(!prompt.contains("\"read\""));
     }
 
     #[test]
@@ -5002,7 +4871,8 @@ mod tests {
 
         let prompt = build_chat_prompt(&req);
 
-        assert!(prompt.contains("TOOL apply_patch("));
+        assert!(prompt.contains("<tools>"));
+        assert!(prompt.contains("\"apply_patch\""));
         assert!(!prompt.contains("irrelevant_tool_17"));
     }
 
@@ -5577,9 +5447,9 @@ Hello!"
 
         let prompt = build_chat_prompt(&req);
 
-        assert!(prompt.contains("Tool context broker selected 1 tool"));
-        assert!(prompt.contains("TOOL bash(cmd: string, timeout?: number) - Run a shell command"));
-        assert!(!prompt.contains("properties"));
+        assert!(prompt.contains("<tools>"));
+        assert!(prompt.contains("\"bash\""));
+        assert!(prompt.contains("\"cmd\""));
     }
 
     #[test]

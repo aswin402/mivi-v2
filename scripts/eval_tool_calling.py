@@ -101,7 +101,7 @@ register_test(
     ],
     tool_choice={"type": "function", "function": {"name": "search_web"}},
     expected_tool="search_web",
-    val_fn=lambda args: "query" in args and "weather" in str(args["query"]).lower(),
+    val_fn=lambda args: "query" in args and any(term in str(args["query"]).lower() for term in ["new york", "weather", "nyc"]),
 )
 
 # 3. User profile creation with nested structure

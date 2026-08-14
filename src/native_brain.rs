@@ -364,8 +364,9 @@ impl NativeBrain {
             .map_err(|e| format!("Sampling error: {}", e))?;
 
         if let Some(ref mut g_state) = grammar_state {
-            let token_str = &loaded.vocab[next_token as usize];
-            let _ = g_state.accept_token(token_str);
+            if let Some(token_str) = loaded.vocab.get(next_token as usize) {
+                let _ = g_state.accept_token(token_str);
+            }
         }
 
         generated_tokens.push(next_token);
@@ -437,8 +438,9 @@ impl NativeBrain {
                 .map_err(|e| format!("Sampling error: {}", e))?;
 
             if let Some(ref mut g_state) = grammar_state {
-                let token_str = &loaded.vocab[next_token as usize];
-                let _ = g_state.accept_token(token_str);
+                if let Some(token_str) = loaded.vocab.get(next_token as usize) {
+                    let _ = g_state.accept_token(token_str);
+                }
             }
 
             generated_tokens.push(next_token);
@@ -558,8 +560,9 @@ impl NativeBrain {
             .map_err(|e| format!("Sampling error: {}", e))?;
 
         if let Some(ref mut g_state) = grammar_state {
-            let token_str = &loaded.vocab[next_token as usize];
-            let _ = g_state.accept_token(token_str);
+            if let Some(token_str) = loaded.vocab.get(next_token as usize) {
+                let _ = g_state.accept_token(token_str);
+            }
         }
 
         generated_tokens.push(next_token);
@@ -631,8 +634,9 @@ impl NativeBrain {
                 .map_err(|e| format!("Sampling error: {}", e))?;
 
             if let Some(ref mut g_state) = grammar_state {
-                let token_str = &loaded.vocab[next_token as usize];
-                let _ = g_state.accept_token(token_str);
+                if let Some(token_str) = loaded.vocab.get(next_token as usize) {
+                    let _ = g_state.accept_token(token_str);
+                }
             }
 
             generated_tokens.push(next_token);
@@ -791,8 +795,9 @@ impl NativeBrain {
                     .map_err(|e| format!("Sampling error: {}", e))?;
 
                 if let Some(ref mut g_state) = grammar_state {
-                    let token_str = &loaded.vocab[next_token as usize];
-                    let _ = g_state.accept_token(token_str);
+                    if let Some(token_str) = loaded.vocab.get(next_token as usize) {
+                        let _ = g_state.accept_token(token_str);
+                    }
                 }
 
                 generated_tokens.push(next_token);
@@ -908,8 +913,9 @@ impl NativeBrain {
                         .map_err(|e| format!("Sampling error: {}", e))?;
 
                     if let Some(ref mut g_state) = grammar_state {
-                        let token_str = &loaded.vocab[next_token as usize];
-                        let _ = g_state.accept_token(token_str);
+                        if let Some(token_str) = loaded.vocab.get(next_token as usize) {
+                            let _ = g_state.accept_token(token_str);
+                        }
                     }
 
                     generated_tokens.push(next_token);
