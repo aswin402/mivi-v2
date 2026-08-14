@@ -5,6 +5,17 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.13] - 2026-08-14
+
+### 🦀 Phase 11–14: Knowledge-Lean Sub-1B, Hybrid Semantic RAG & Claude Code Adapter (COMPLETE)
+
+#### Added
+* ⚡ **Knowledge-Lean Sub-1B Fine-Tuning Pipeline**: Built dataset generator (`scripts/prepare_mivi_dataset.py`) combining Hermes XML tool calls, OpenAI JSON calling, DeepSeek-R1 distilled `<think>` reasoning traces, compiler self-correction, and grounded QA. Created one-click Unsloth 4-bit QLoRA Colab notebook (`notebooks/train_mivi_unsloth.ipynb`) and guide (`docs/COLAB_TRAINING_GUIDE.md`) to train `mivi-0.5b-tool-q4_k_m.gguf` in ~15 minutes (< 2.5 GB VRAM).
+* 🔍 **Zero-Dependency Hybrid Semantic RAG**: Implemented `src/semantic_rag.rs` featuring dense vector embedding generation, L2 normalization, and hybrid cosine similarity scoring ($0.4 \times \text{Keyword} + 0.6 \times \text{Semantic}$) with zero external runtime dependencies.
+* 🔌 **Anthropic `/v1/messages` Compatibility Adapter**: Added complete Anthropic Messages API support (`/v1/messages`) in `src/server/helpers.rs`, enabling plug-and-play local AI inference with **Claude Code**, Cursor, and Anthropic-native developer tools.
+* 🧠 **RAM Fit Calculator CLI (`mivi model fit <id>`)**: Added real-time Linux `/proc/meminfo` RAM calculator displaying model weight footprints, 3072/64k KV cache sizes, and memory fit status.
+* 💾 **Persistent Project State (`.mivi/project_state.json`)**: Cached workspace file modification timestamps and pre-chunked indexes to enable instant sub-millisecond RAG startup without rescanning disk on restart.
+
 ## [v0.0.12] - 2026-08-13
 
 ### 🦀 Phase 9 & 10: Model Upgrade & Tokenizer Optimization (COMPLETE)
