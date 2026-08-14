@@ -54,42 +54,74 @@ def train_specialist(
     print(f"LoRA Rank:   {lora_rank} (Alpha: {lora_alpha})")
     print("=" * 60)
 
+    use_unsloth = False
     try:
         from unsloth import FastLanguageModel
+        use_unsloth = True
+        print("✅ Using Unsloth FastLanguageModel acceleration")
+    except Exception as e:
+        print(f"⚠️ Unsloth not available ({e}), falling back to standard PEFT + Transformers...")
+
+    try:
         from datasets import Dataset
         from trl import SFTTrainer
-        from transformers import TrainingArguments
-    except ImportError:
-        print("❌ Unsloth/Transformers dependencies not found.")
-        print("Run on Google Colab or install with:")
-        print("pip install \"unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git\"")
-        print("pip install trl peft accelerate bitsandbytes datasets transformers")
+        from transformers import TrainingArguments, AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        import torch
+    except Exception as e:
+        print(f"❌ Missing core training dependencies: {e}")
+        print("Install in Colab using: !pip install transformers trl peft accelerate bitsandbytes datasets")
         sys.exit(1)
 
-    # 1. Load Base Model in 4-bit
-    print("📥 Loading base model with 4-bit quantization...")
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=base_model,
-        max_seq_length=max_seq_length,
-        dtype=None,
-        load_in_4bit=True,
-    )
-
-    # 2. Add LoRA Adapters
-    print(f"🔧 Attaching LoRA adapter matrix for {specialist}...")
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=lora_rank,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj"
-        ],
-        lora_alpha=lora_alpha,
-        lora_dropout=0,
-        bias="none",
-        use_gradient_checkpointing="unsloth",
-        random_state=3407,
-    )
+    # 1. Load Base Model
+    if use_unsloth:
+        print("📥 Loading base model with 4-bit Unsloth quantization...")
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=base_model,
+            max_seq_length=max_seq_length,
+            dtype=None,
+            load_in_4bit=True,
+        )
+        print(f"🔧 Attaching LoRA adapter matrix for {specialist}...")
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=lora_rank,
+            target_modules=[
+                "q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj"
+            ],
+            lora_alpha=lora_alpha,
+            lora_dropout=0,
+            bias="none",
+            use_gradient_checkpointing="unsloth",
+            random_state=3407,
+        )
+    else:
+        print("📥 Loading base model with 4-bit standard BitsAndBytes...")
+        from peft import LoraConfig, get_peft_model
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            quantization_config=bnb_config,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        peft_config = LoraConfig(
+            r=lora_rank,
+            lora_alpha=lora_alpha,
+            target_modules=[
+                "q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj"
+            ],
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(model, peft_config)
 
     # 3. Load & Ingest Dataset
     print(f"📄 Loading dataset from {dataset_path}...")
