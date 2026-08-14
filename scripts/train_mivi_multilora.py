@@ -9,9 +9,17 @@ Trains lightweight LoRA specialist adapters (< 20 MB each) for Qwen2.5-0.5B:
 """
 
 import argparse
-import json
 import os
 import sys
+
+try:
+    import orjson as fast_json
+    def load_json(line):
+        return fast_json.loads(line)
+except ImportError:
+    import json as fast_json
+    def load_json(line):
+        return fast_json.loads(line)
 
 SPECIALIST_DATASETS = {
     "reasoner": "datasets/mivi_reasoner_dataset.jsonl",
@@ -86,7 +94,7 @@ def train_specialist(
     # 3. Load & Ingest Dataset
     print(f"📄 Loading dataset from {dataset_path}...")
     with open(dataset_path, "r", encoding="utf-8") as f:
-        data = [json.loads(line) for line in f]
+        data = [load_json(line) for line in f]
     dataset = Dataset.from_list(data)
     print(f"✅ Loaded {len(dataset)} training examples.")
 
