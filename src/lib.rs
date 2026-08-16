@@ -25,5 +25,7 @@ pub mod tokenizer;
 pub mod tool_filter;
 pub mod tool_output;
 pub mod trace;
+#[cfg(feature = "native")]
+pub mod vendor;
 pub mod verifier;
 pub mod worker;

@@ -66,7 +66,8 @@ fn find_tokenizer_path(model_path: &Path) -> Option<PathBuf> {
 #[cfg(feature = "native")]
 pub enum QuantizedModel {
     Llama(candle_transformers::models::quantized_llama::ModelWeights),
-    Qwen2(candle_transformers::models::quantized_qwen2::ModelWeights),
+    // Vendored copy with f16 embedding dequantization (see src/vendor/).
+    Qwen2(crate::vendor::quantized_qwen2::ModelWeights),
     Phi3(candle_transformers::models::quantized_phi3::ModelWeights),
 }
 
@@ -80,10 +81,9 @@ impl QuantizedModel {
     ) -> Result<Self, String> {
         match arch {
             "qwen2" => {
-                let model = candle_transformers::models::quantized_qwen2::ModelWeights::from_gguf(
-                    ct, reader, device,
-                )
-                .map_err(|e| format!("failed to load quantized qwen2: {}", e))?;
+                let model =
+                    crate::vendor::quantized_qwen2::ModelWeights::from_gguf(ct, reader, device)
+                        .map_err(|e| format!("failed to load quantized qwen2: {}", e))?;
                 Ok(Self::Qwen2(model))
             }
             "phi3" => {
