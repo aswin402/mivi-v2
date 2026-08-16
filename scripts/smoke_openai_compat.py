@@ -414,7 +414,12 @@ def score_case(case, result):
         content_blocks = result.get("content", [])
         if not content_blocks or not any("mivi" in b.get("text", "").lower() for b in content_blocks):
             reasons.append("anthropic response content missing mivi identity")
-        if not usage_is_valid(result.get("usage")):
+        # Anthropic usage uses input_tokens/output_tokens, not the OpenAI shape.
+        usage = result.get("usage") or {}
+        if not (
+            isinstance(usage.get("input_tokens"), int)
+            and isinstance(usage.get("output_tokens"), int)
+        ):
             reasons.append("anthropic response usage missing or invalid")
     else:
         reasons.append(f"unknown case {case}")

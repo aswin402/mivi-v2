@@ -117,7 +117,7 @@ class OpenAICompatSmokeTests(unittest.TestCase):
             "model": "mivi",
             "content": [{"type": "text", "text": "I am MIVI."}],
             "stop_reason": "end_turn",
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            "usage": {"input_tokens": 10, "output_tokens": 5},
         }
 
         self.assertTrue(smoke.score_case("anthropic-messages", response)["ok"])

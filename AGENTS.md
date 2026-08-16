@@ -97,9 +97,11 @@ There is a parallel `/v1/responses` endpoint (`handle_responses`) that maps Resp
 | `MIVI_CLI_TIMEOUT_SECS` | llama-cli subprocess timeout (default 180) |
 | `MIVI_TRACE` / `MIVI_TRACE_PATH` | enable JSONL request traces |
 | `MIVI_TOKENIZER_CMD` / `MIVI_TOKENIZER_MODEL` | tokenizer-backed usage counts (falls back to estimator) |
-| `MIVI_AGENT_REASONING_SUMMARY` | set to `0`/`false`/`off`/`no` to disable the `reasoning_content` summary (on by default) |
+| `MIVI_AGENT_REASONING_SUMMARY` | set to `0`/`false`/`off`/`no` to disable the `reasoning_content` summary (on by default for tool workflows; suppressed for pure chat) |
 | `MIVI_API_KEY` | Bearer Authorization key for API auth (disabled/public if unset) |
 | `MIVI_MAX_CONCURRENT_REQUESTS` | Max concurrent requests allowed to be handled by the server (default 2) |
+| `MIVI_MODEL_CACHE_MAX` | Max GGUF models kept in the native model cache, LRU-evicted (default 2; 1 in ultra-low-RAM) |
+| `MIVI_VERIFY_EXEC_TIMEOUT_SECS` / `MIVI_VERIFY_COMPILE_TIMEOUT_SECS` | Wall-clock caps on verifier code execution / compilation (defaults 15s / 60s) |
 | `MIVI_SMOKE_BASE_URL`, `MIVI_EVAL_SERVER_URL`, `MIVI_EVAL_TIMEOUT` | script-side URLs/timeouts |
 
 
