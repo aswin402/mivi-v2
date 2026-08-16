@@ -44,6 +44,35 @@ const KEYWORD_RULES: &[(&str, &[&str])] = &[
 
 const TRAINING_DATA: &[(&str, &str)] = &[
     // CHAT (35 examples)
+    // CHAT: conceptual/technical questions that contain code-ish keywords
+    ("i think that makes sense", "CHAT"),
+    ("remember that for later", "CHAT"),
+    ("it seems fine to me", "CHAT"),
+    ("what is an api", "CHAT"),
+    ("what is docker", "CHAT"),
+    ("explain how http works", "CHAT"),
+    ("what is a regex", "CHAT"),
+    ("tell me about rest", "CHAT"),
+    ("can you see my point", "CHAT"),
+    ("i see what you mean", "CHAT"),
+    ("test me on spanish vocabulary", "CHAT"),
+    ("quiz me on world capitals", "CHAT"),
+    ("what is the latest news", "CHAT"),
+    ("who wrote romeo and juliet", "CHAT"),
+    ("why is the sky blue", "CHAT"),
+    ("what does http stand for", "CHAT"),
+    ("is python good for beginners", "CHAT"),
+    ("should i learn rust or go", "CHAT"),
+    ("what is the difference between tcp and udp", "CHAT"),
+    ("explain the tcp handshake", "CHAT"),
+    ("average of 3 7 and 9", "CHAT"),
+    ("how many days in a leap year", "CHAT"),
+    ("what is 15 percent of 80", "CHAT"),
+    ("double the number 42", "CHAT"),
+    ("thanks that worked", "CHAT"),
+    ("ok got it", "CHAT"),
+    ("one more thing", "CHAT"),
+    ("actually never mind", "CHAT"),
     ("hello how are you", "CHAT"),
     ("what is the weather today", "CHAT"),
     ("tell me a joke", "CHAT"),
@@ -151,6 +180,16 @@ const TRAINING_DATA: &[(&str, &str)] = &[
     ),
     ("what object is at the top left of this photo", "VISION"),
     // CODE (30 examples)
+    ("add error handling to this function", "CODE"),
+    ("refactor this module to use async", "CODE"),
+    ("fix the failing unit test in parser", "CODE"),
+    ("write a sql query for active users", "CODE"),
+    ("make a cli tool in go", "CODE"),
+    ("optimize this loop", "CODE"),
+    ("convert this python script to rust", "CODE"),
+    ("create a react component for the form", "CODE"),
+    ("why does this rust borrow error happen", "CODE"),
+    ("debug this stack trace", "CODE"),
     ("write a python script", "CODE"),
     ("create a function that sorts", "CODE"),
     ("implement a fibonacci sequence", "CODE"),
@@ -197,6 +236,10 @@ const TRAINING_DATA: &[(&str, &str)] = &[
         "CODE",
     ),
     // MULTI_STEP (25 examples)
+    ("first summarize then translate the summary", "MULTI_STEP"),
+    ("read the config validate it then restart", "MULTI_STEP"),
+    ("for each file list its dependencies", "MULTI_STEP"),
+    ("check the logs then check the database", "MULTI_STEP"),
     ("first do this then that", "MULTI_STEP"),
     ("do step 1 and step 2", "MULTI_STEP"),
     ("then after that execute", "MULTI_STEP"),
@@ -332,6 +375,12 @@ impl NeedleRouter {
             return ("CHAT", 1.0);
         }
 
+        // Pure arithmetic is answered by the deterministic math fast path;
+        // route it as CHAT so it takes the lightweight pipeline.
+        if crate::math_eval::try_answer(prompt).is_some() {
+            return ("CHAT", 1.0);
+        }
+
         let tokens = tokenize(prompt);
 
         if tokens.len() < 3 {
@@ -436,12 +485,26 @@ fn keyword_classify(prompt: &str) -> &'static str {
     let p = prompt.to_lowercase();
     for &(class, patterns) in KEYWORD_RULES {
         for pat in patterns {
-            if p.contains(pat) {
+            if pat.contains(' ') {
+                // Multi-word phrases match as substrings.
+                if p.contains(pat) {
+                    return class;
+                }
+            } else if contains_word(&p, pat) {
+                // Single keywords must match a whole word so "see" does not
+                // fire on "seem" and "test" does not fire on "latest".
                 return class;
             }
         }
     }
     "CHAT"
+}
+
+/// Whole-word membership check for a lowercase haystack.
+fn contains_word(haystack: &str, word: &str) -> bool {
+    haystack
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|w| w == word)
 }
 
 fn tokenize(text: &str) -> Vec<String> {
@@ -517,6 +580,45 @@ mod tests {
             router.classify_intent_nb("process all files").0,
             "MULTI_STEP"
         );
+    }
+
+    #[test]
+    fn test_keyword_false_positives_route_to_chat() {
+        let router = NeedleRouter::new();
+        // Substring false positives must not fire.
+        assert_eq!(
+            router.classify_intent_nb("i seem to remember that").0,
+            "CHAT"
+        );
+        assert_eq!(
+            router.classify_intent_nb("the latest version is out").0,
+            "CHAT"
+        );
+        assert_eq!(
+            router.classify_intent_nb("what does estranged mean").0,
+            "CHAT"
+        );
+    }
+
+    #[test]
+    fn test_technical_questions_stay_chat() {
+        let router = NeedleRouter::new();
+        assert_eq!(router.classify_intent_nb("what is an api").0, "CHAT");
+        assert_eq!(router.classify_intent_nb("what is docker").0, "CHAT");
+        assert_eq!(
+            router.classify_intent_nb("test me on spanish vocabulary").0,
+            "CHAT"
+        );
+    }
+
+    #[test]
+    fn test_worded_math_routes_to_chat() {
+        let router = NeedleRouter::new();
+        assert_eq!(
+            router.classify_intent_nb("what is 15 percent of 80").0,
+            "CHAT"
+        );
+        assert_eq!(router.classify_intent_nb("2 + 2").0, "CHAT");
     }
 
     #[test]
