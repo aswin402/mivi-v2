@@ -567,6 +567,23 @@ pub fn anthropic_request_to_chat_request(req: AnthropicRequest) -> ChatCompletio
         }
     }
 
+    // Mirror the chat-completions path: when the caller supplies no system
+    // prompt, inject the default MIVI identity prompt so agents using the
+    // Anthropic surface get the same "external model is mivi" behavior.
+    if !messages.iter().any(|m| m.role == "system") {
+        messages.insert(
+            0,
+            ChatMessage {
+                role: "system".to_string(),
+                content: serde_json::Value::String(
+                    crate::constants::MIVI_CHAT_SYSTEM_PROMPT.to_string(),
+                ),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        );
+    }
+
     for msg in req.messages {
         let content_val = if let Some(text) = msg.content.as_str() {
             serde_json::Value::String(text.to_string())

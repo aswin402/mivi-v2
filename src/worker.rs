@@ -101,7 +101,7 @@ impl WorkerManager {
     }
 
     pub fn server_args(&self) -> Vec<String> {
-        let runtime_config = RuntimeConfig::from_env();
+        let runtime_config = RuntimeConfig::global();
         let mut args = vec![
             "-m".to_string(),
             self.config.model_path.display().to_string(),
@@ -118,7 +118,7 @@ impl WorkerManager {
             "-ctk".to_string(),
             runtime_config.kv_cache_type.clone(),
             "-ctv".to_string(),
-            runtime_config.kv_cache_type,
+            runtime_config.kv_cache_type.clone(),
             "-np".to_string(),
             "1".to_string(),
             "--sleep-idle-seconds".to_string(),
@@ -224,16 +224,55 @@ impl WorkerManager {
         temp: &str,
     ) -> Result<String, String> {
         let endpoint = self.ensure_text_worker().await?;
-        let (extracted_system, extracted_user) = crate::brain::split_prompt_system_user(prompt);
-        let final_system = if extracted_system.is_empty() {
-            system_prompt.to_string()
+
+        // Detect if the prompt is already formatted with chat template tokens.
+        let t = crate::server::active_chat_template();
+        let (final_system, final_user) = if !t.system_prefix.is_empty()
+            && prompt.trim_start().starts_with(t.system_prefix.trim())
+            && prompt.contains(t.assistant_start.trim())
+        {
+            // Pre-formatted: extract content from within template tokens.
+            // Strip the template markers to get raw system/user content for the worker API.
+            let sys_prefix = t.system_prefix.trim();
+            let sys_suffix = t.system_suffix.trim();
+            let usr_prefix = t.user_prefix.trim();
+            let usr_suffix = t.user_suffix.trim();
+
+            let mut system_text = String::new();
+            let mut user_text = String::new();
+
+            if let Some(sys_start) = prompt.find(sys_prefix) {
+                let after_sys = sys_start + sys_prefix.len();
+                if let Some(sys_end) = prompt[after_sys..].find(sys_suffix) {
+                    system_text = prompt[after_sys..after_sys + sys_end].trim().to_string();
+                }
+            }
+            if let Some(usr_start) = prompt.find(usr_prefix) {
+                let after_usr = usr_start + usr_prefix.len();
+                if let Some(usr_end) = prompt[after_usr..].find(usr_suffix) {
+                    user_text = prompt[after_usr..after_usr + usr_end].trim().to_string();
+                }
+            }
+            if system_text.is_empty() {
+                system_text = system_prompt.to_string();
+            }
+            if user_text.is_empty() {
+                user_text = prompt.to_string();
+            }
+            (system_text, user_text)
         } else {
-            extracted_system
-        };
-        let final_user = if extracted_user.is_empty() {
-            prompt.to_string()
-        } else {
-            extracted_user
+            let (extracted_system, extracted_user) = crate::brain::split_prompt_system_user(prompt);
+            let final_system = if extracted_system.is_empty() {
+                system_prompt.to_string()
+            } else {
+                extracted_system
+            };
+            let final_user = if extracted_user.is_empty() {
+                prompt.to_string()
+            } else {
+                extracted_user
+            };
+            (final_system, final_user)
         };
 
         let messages = parse_prompt_to_messages(&final_system, &final_user);

@@ -7,6 +7,7 @@ pub mod constants;
 pub mod context_compressor;
 pub mod logger;
 pub mod lora_router;
+pub mod math_eval;
 pub mod model_catalog;
 pub mod model_process;
 pub mod native_brain;

@@ -18,7 +18,7 @@ pub async fn handle_root() -> Json<serde_json::Value> {
 }
 
 pub async fn handle_health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let mode = crate::runtime::RuntimeConfig::from_env();
+    let mode = crate::runtime::RuntimeConfig::global();
     let worker_status = if mode.uses_worker() {
         match state.brain.text_worker.check_liveness().await {
             Ok(status) => status.to_string(),

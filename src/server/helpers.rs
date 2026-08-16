@@ -397,7 +397,7 @@ pub fn responses_response_from_chat(chat: ChatCompletionResponse) -> ResponsesRe
 // ──────────────────────────────────────────────
 
 pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
-    let config = RuntimeConfig::from_env();
+    let config = RuntimeConfig::global();
 
     // Check if total token count of messages exceeds 80% of max_input_tokens
     let total_tokens = req
@@ -543,6 +543,10 @@ pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
             }
             "tool" => {
                 let tool_content = msg.content.as_str().unwrap_or("");
+                // Clamp each tool result so long agent loops (file reads,
+                // command output) cannot inflate the prompt — and with it the
+                // spawn-mode KV allocation — without bound.
+                let tool_content = clamp_tool_result(tool_content);
                 let tool_id = msg.tool_call_id.as_deref().unwrap_or("unknown");
                 let resolved_prefix = t.tool_prefix.replace("{id}", tool_id);
                 prompt.push_str(&format!(
@@ -1315,7 +1319,7 @@ pub async fn model_prompt_from_request(
     latest_user_prompt: &str,
     state: &AppState,
 ) -> String {
-    let config = RuntimeConfig::from_env();
+    let config = RuntimeConfig::global();
     let compressed = compress_context(&req.messages, config.context);
     let all_memories =
         tokio::task::spawn_blocking(|| load_memory_dir(Path::new("memory")).unwrap_or_default())
@@ -2091,6 +2095,57 @@ pub async fn model_chat(
         .await
 }
 
+/// Cap a tool result to ~2000 chars (~500 tokens). Keeps the head, which
+/// carries the useful payload, and the tail, which usually holds errors.
+pub fn clamp_tool_result(content: &str) -> String {
+    const MAX_CHARS: usize = 2000;
+    const TAIL_CHARS: usize = 400;
+    let chars: Vec<char> = content.chars().collect();
+    if chars.len() <= MAX_CHARS {
+        return content.to_string();
+    }
+    let head: String = chars[..MAX_CHARS - TAIL_CHARS].iter().collect();
+    let tail: String = chars[chars.len() - TAIL_CHARS..].iter().collect();
+    format!(
+        "{}\n[…truncated {} chars…]\n{}",
+        head,
+        chars.len() - MAX_CHARS,
+        tail
+    )
+}
+
+/// Delete `mivi_grammar_*.gbnf` temp files older than one hour. Called once at
+/// server start; per-request grammar files are content-addressed and would
+/// otherwise accumulate in /tmp forever.
+pub fn sweep_stale_grammar_files() {
+    let temp_dir = std::env::temp_dir();
+    let Ok(entries) = std::fs::read_dir(&temp_dir) else {
+        return;
+    };
+    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("mivi_grammar_") || !name.ends_with(".gbnf") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if let Ok(modified) = meta.modified() {
+            if modified < cutoff {
+                if std::fs::remove_file(entry.path()).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+    }
+    if removed > 0 {
+        tracing::info!("[startup] Swept {} stale grammar temp files", removed);
+    }
+}
+
 pub fn append_tool_execution_summary(req: &ChatCompletionRequest, content: String) -> String {
     let mut tool_messages = Vec::new();
     for msg in &req.messages {
@@ -2134,7 +2189,14 @@ pub fn append_tool_execution_summary(req: &ChatCompletionRequest, content: Strin
             if lower_content.contains("timeout") || lower_content.contains("timed out") {
                 summary_parts.push(format!("- Tool `{}` returned error: timeout.", name));
             } else {
-                summary_parts.push(format!("- Tool `{}` returned: {}.", name, raw_content));
+                // One-line summary only: the full result stays in the message
+                // history the agent re-submits, so re-embedding it here would
+                // double-count large tool payloads.
+                summary_parts.push(format!(
+                    "- Tool `{}` returned: {}.",
+                    name,
+                    clamp_tool_result(&raw_content)
+                ));
             }
         } else {
             // Unmatched tool result
@@ -2180,7 +2242,7 @@ async fn query_model_for_tool_calls(
     brain: &EdgeBrain,
     req: &ChatCompletionRequest,
 ) -> Result<(Vec<ToolCallOut>, String), String> {
-    let runtime_config = RuntimeConfig::from_env();
+    let runtime_config = RuntimeConfig::global();
     if runtime_config.uses_worker() {
         let prompt = build_chat_prompt(req);
         let grammar_path = get_grammar_path(req);
@@ -2216,7 +2278,11 @@ async fn query_model_for_tool_calls(
     }
 
     let prompt = build_chat_prompt(req);
-    let raw = model_chat(brain, &prompt, req).await?;
+    // Cap max_tokens for tool generation: tool calls are short JSON,
+    // no need to generate 512+ tokens which spikes CPU/RAM on small models
+    let mut capped_req = req.clone();
+    capped_req.max_tokens = Some(capped_req.max_tokens.unwrap_or(256).min(256));
+    let raw = model_chat(brain, &prompt, &capped_req).await?;
     let parsed_calls = parse_tool_calls(&raw);
     Ok((parsed_calls, raw))
 }
@@ -2326,6 +2392,42 @@ pub async fn complete_chat_non_stream(
         return Ok(chat_error_response(now, err));
     }
 
+    // Deterministic arithmetic fast path: pure math prompts ("2+2",
+    // "17% of 3482") are answered exactly without loading the model. Only
+    // applies when the caller supplies no tools, the last message is a plain
+    // text user turn (no images / tool results to consider), and the whole
+    // prompt parses as arithmetic.
+    let math_eligible = req.tools.as_ref().map_or(true, |t| t.is_empty())
+        && req
+            .messages
+            .last()
+            .map_or(false, |m| m.role == "user" && m.content.is_string());
+    if math_eligible {
+        if let Some(answer) = crate::math_eval::try_answer(&latest_user_prompt_text(&req)) {
+            let final_text = apply_response_format(answer, &req)?;
+            return Ok(ChatCompletionResponse {
+                id: format!("chatcmpl-v2-{now}"),
+                object: "chat.completion".to_string(),
+                created: now,
+                model: MODEL_NAME.to_string(),
+                usage: Some(estimated_usage_for_text(&req, &final_text)),
+                choices: vec![ChoiceOut {
+                    index: 0,
+                    message: ChatMessageOut {
+                        role: "assistant".to_string(),
+                        content: final_text,
+                        refusal: None,
+                        reasoning_content: None,
+                        tool_calls: None,
+                    },
+                    logprobs: None,
+                    finish_reason: "stop".to_string(),
+                }],
+                system_fingerprint: Some("fp_mivi".to_string()),
+            });
+        }
+    }
+
     if let Some(last_msg) = req.messages.last() {
         if last_msg.role == "tool" {
             let final_text = append_tool_execution_summary(&req, String::new());
@@ -2415,52 +2517,24 @@ pub async fn complete_chat_non_stream(
 
     let (user_prompt, image_path) = extract_content(&req);
 
-    // Fast-path for simple greetings to save CPU/RAM and prevent model distraction
-    let cleaned_prompt = user_prompt.trim().to_ascii_lowercase();
-    let is_greeting = cleaned_prompt == "hi"
-        || cleaned_prompt == "hii"
-        || cleaned_prompt == "hello"
-        || cleaned_prompt == "hey"
-        || cleaned_prompt == "yo"
-        || cleaned_prompt == "sup"
-        || cleaned_prompt == "hello there"
-        || cleaned_prompt == "hi there";
-
-    if is_greeting && image_path.is_none() {
-        let greeting_text = "Hello! I am OpenZ, your local AI assistant. How can I help you today?";
-        return Ok(ChatCompletionResponse {
-            id: format!("chatcmpl-v2-{now}"),
-            object: "chat.completion".to_string(),
-            created: now,
-            model: MODEL_NAME.to_string(),
-            usage: Some(estimated_usage_for_text(&req, greeting_text)),
-            choices: vec![ChoiceOut {
-                index: 0,
-                message: ChatMessageOut {
-                    role: "assistant".to_string(),
-                    content: greeting_text.to_string(),
-                    refusal: None,
-                    reasoning_content: Some(
-                        "Fast-path greeting response (no model load)".to_string(),
-                    ),
-                    tool_calls: None,
-                },
-                logprobs: None,
-                finish_reason: "stop".to_string(),
-            }],
-            system_fingerprint: Some("fp_mivi".to_string()),
-        });
-    }
-
-    let model_user_prompt = model_prompt_from_request(&req, &user_prompt, &state).await;
     let (intent, _confidence) = state
         .router
         .classify_intent(&state.brain, &user_prompt)
         .await;
 
+    // Lightweight chat path: skip heavy retrieval for simple CHAT prompts,
+    // use build_chat_prompt which preserves the agent's context directly.
+    let model_user_prompt = if intent == "CHAT" && image_path.is_none() {
+        build_chat_prompt(&req)
+    } else {
+        model_prompt_from_request(&req, &user_prompt, &state).await
+    };
+
+    // MULTI_STEP now shares the 256-token cap: 512 tokens on a sub-1B model
+    // mostly produces hallucinated padding while burning CPU.
     let intent_max_tokens = if intent == "CHAT" {
         128
-    } else if intent == "CODE" || intent == "MULTI_STEP" {
+    } else if intent == "CODE" {
         512
     } else {
         256
@@ -2739,7 +2813,18 @@ pub async fn handle_responses_streaming(
     );
 
     let user_prompt = latest_user_prompt_text(&chat_req);
-    let model_user_prompt = model_prompt_from_request(&chat_req, &user_prompt, &state).await;
+
+    let (intent, _confidence) = state
+        .router
+        .classify_intent(&state.brain, &user_prompt)
+        .await;
+
+    // Lightweight chat path: skip heavy retrieval for CHAT prompts
+    let model_user_prompt = if intent == "CHAT" {
+        build_chat_prompt(&chat_req)
+    } else {
+        model_prompt_from_request(&chat_req, &user_prompt, &state).await
+    };
 
     let brain = state.brain.clone();
     let system_prompt = wrap_agent_prompt(MIVI_CHAT_SYSTEM_PROMPT, "");
@@ -2757,7 +2842,7 @@ pub async fn handle_responses_streaming(
 
     let cli_path = brain.llama_cli.to_str().unwrap_or("llama-cli").to_string();
     let model_path = brain.llama_path.to_str().unwrap_or("").to_string();
-    let runtime_config = RuntimeConfig::from_env();
+    let runtime_config = RuntimeConfig::global();
     let streaming_context = std::env::var("MIVI_REASONER_CONTEXT_SIZE")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -2771,14 +2856,11 @@ pub async fn handle_responses_streaming(
     let seed = chat_req.seed;
     let json_schema = extract_json_schema(&chat_req);
 
-    let (intent, _confidence) = state
-        .router
-        .classify_intent(&state.brain, &user_prompt)
-        .await;
-
+    // MULTI_STEP now shares the 256-token cap: 512 tokens on a sub-1B model
+    // mostly produces hallucinated padding while burning CPU.
     let intent_max_tokens = if intent == "CHAT" {
         128
-    } else if intent == "CODE" || intent == "MULTI_STEP" {
+    } else if intent == "CODE" {
         512
     } else {
         256
@@ -2789,7 +2871,7 @@ pub async fn handle_responses_streaming(
 
     tokio::spawn(async move {
         let run_native = if cfg!(feature = "native") {
-            let runtime_config = RuntimeConfig::from_env();
+            let runtime_config = RuntimeConfig::global();
             runtime_config.mode != crate::runtime::RuntimeMode::Spawn
         } else {
             false
@@ -3162,7 +3244,10 @@ pub async fn handle_chat_completions(
     let selected_tool_names = tool_names(&tool_selection.selected);
     let selected_tool_roles = selected_tool_roles(&tool_selection.selected);
     let blocked_tools = blocked_tool_names(&tool_selection.blocked);
-    let has_tools = should_use_tool_path(&req, &latest_user_prompt);
+    // Use already-computed tool_selection instead of calling should_use_tool_path
+    // (which internally calls select_tools_for_request again)
+    let has_tools = has_tool_involvement(&req)
+        && (!tool_selection.selected.is_empty() || tool_selection.intent.is_inventory());
     let _ = trace_event(
         &trace,
         serde_json::json!({
@@ -3296,21 +3381,90 @@ pub async fn handle_chat_completions(
     // ── Non-tool path (existing logic) ───────────────────────────────
     let (user_prompt, image_path) = extract_content(&req);
 
-    let model_user_prompt = model_prompt_from_request(&req, &user_prompt, &state).await;
+    // Deterministic arithmetic fast path: pure math prompts ("2+2",
+    // "17% of 3482") are answered exactly without loading the model. Only
+    // applies when the caller supplies no tools and the last message is a
+    // plain text user turn (no images / tool results to consider).
+    let math_eligible = req.tools.as_ref().map_or(true, |t| t.is_empty())
+        && image_path.is_none()
+        && req
+            .messages
+            .last()
+            .map_or(false, |m| m.role == "user" && m.content.is_string());
+    if math_eligible {
+        if let Some(answer) = crate::math_eval::try_answer(&user_prompt) {
+            let _ = trace_event(
+                &trace,
+                serde_json::json!({
+                    "kind": "final_response",
+                    "route": "math_fast_path",
+                    "finish_reason": "stop",
+                    "response_chars": answer.chars().count()
+                }),
+            );
+            if req.stream.unwrap_or(false) {
+                return stream_text_response(
+                    answer.clone(),
+                    now,
+                    None,
+                    include_usage.then(|| estimated_usage_for_text(&req, &answer)),
+                    permit,
+                )
+                .into_response();
+            }
+            return Json(ChatCompletionResponse {
+                id: format!("chatcmpl-v2-{}", now),
+                object: "chat.completion".to_string(),
+                created: now,
+                model: MODEL_NAME.to_string(),
+                usage: Some(estimated_usage_for_text(&req, &answer)),
+                choices: vec![ChoiceOut {
+                    index: 0,
+                    message: ChatMessageOut {
+                        role: "assistant".to_string(),
+                        content: answer,
+                        refusal: None,
+                        reasoning_content: None,
+                        tool_calls: None,
+                    },
+                    logprobs: None,
+                    finish_reason: "stop".to_string(),
+                }],
+                system_fingerprint: Some("fp_mivi".to_string()),
+            })
+            .into_response();
+        }
+    }
 
     let (intent, confidence) = state
         .router
         .classify_intent(&state.brain, &user_prompt)
         .await;
 
+    // MULTI_STEP now shares the 256-token cap: 512 tokens on a sub-1B model
+    // mostly produces hallucinated padding while burning CPU.
     let intent_max_tokens = if intent == "CHAT" {
         128
-    } else if intent == "CODE" || intent == "MULTI_STEP" {
+    } else if intent == "CODE" {
         512
     } else {
         256
     };
     let resolved_max_tokens = Some(req.max_tokens.unwrap_or(intent_max_tokens));
+
+    // Lightweight chat path: for simple CHAT-classified prompts,
+    // skip the heavy retrieval pipeline (memory loading, RAG, context compression)
+    // and use build_chat_prompt directly — which preserves the agent's system prompt,
+    // skills, database, and context as-is. This is what the agent intended.
+    let model_user_prompt = if intent == "CHAT" && image_path.is_none() && confidence >= 0.50 {
+        info!(
+            "[MIVI-V2] Lightweight chat path: skipping retrieval for CHAT intent (conf={:.2})",
+            confidence
+        );
+        build_chat_prompt(&req)
+    } else {
+        model_prompt_from_request(&req, &user_prompt, &state).await
+    };
 
     // Streaming path.
     if req.stream.unwrap_or(false) {
@@ -3770,7 +3924,7 @@ pub async fn handle_streaming(
 
     let cli_path = brain.llama_cli.to_str().unwrap_or("llama-cli").to_string();
     let model_path = brain.llama_path.to_str().unwrap_or("").to_string();
-    let runtime_config = RuntimeConfig::from_env();
+    let runtime_config = RuntimeConfig::global();
     let streaming_context = std::env::var("MIVI_REASONER_CONTEXT_SIZE")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -3803,27 +3957,23 @@ pub async fn handle_streaming(
     let fallback_user_prompt = user_prompt.clone();
     let grammar_content_for_worker = grammar_content.clone();
     let grammar_path_for_spawn = grammar_path.clone();
+    // Deterministic arithmetic fast path (see complete_chat_non_stream):
+    // pure math prompts stream the exact answer without a model call.
+    let math_answer = if req.tools.as_ref().map_or(true, |t| t.is_empty())
+        && req
+            .messages
+            .last()
+            .map_or(false, |m| m.role == "user" && m.content.is_string())
+    {
+        crate::math_eval::try_answer(&user_prompt)
+    } else {
+        None
+    };
     tokio::spawn(async move {
-        let cleaned_prompt = fallback_user_prompt.trim().to_ascii_lowercase();
-        let is_greeting = cleaned_prompt == "hi"
-            || cleaned_prompt == "hii"
-            || cleaned_prompt == "hello"
-            || cleaned_prompt == "hey"
-            || cleaned_prompt == "yo"
-            || cleaned_prompt == "sup"
-            || cleaned_prompt == "hello there"
-            || cleaned_prompt == "hi there";
-
-        if is_greeting {
-            let _ = tx
-                .send(
-                    "Hello! I am OpenZ, your local AI assistant. How can I help you today?"
-                        .to_string(),
-                )
-                .await;
+        if let Some(answer) = math_answer {
+            let _ = tx.send(answer).await;
             return;
         }
-
         let mut emitted = false;
         if uses_worker {
             match text_worker
@@ -4189,6 +4339,8 @@ pub async fn start_api_server(
         .map(|v| v == "1" || v == "true")
         .unwrap_or(false);
 
+    sweep_stale_grammar_files();
+
     let max_concurrent = if ultra_low {
         info!("[MIVI-V2] Ultra-low-RAM mode: forcing max concurrent requests to 1");
         1
@@ -4240,35 +4392,64 @@ pub async fn start_api_server(
     );
 
     if !ultra_low {
-        // Spawn warmup task in the background
+        // Pre-load model into NativeBrain cache during startup.
+        // This spreads the ~400MB model load over boot time instead of
+        // spiking RAM on the first user request.
         let warmup_brain = state.brain.clone();
         tokio::spawn(async move {
-            info!("[MIVI-V2 Warmup] Initializing model cache and pre-compiling kernels...");
+            info!("[MIVI-V2 Warmup] Pre-loading model into native engine cache...");
             let start = std::time::Instant::now();
-            let messages = serde_json::json!([
-                {"role": "user", "content": "warmup"}
-            ]);
-            let _ = warmup_brain
-                .text_worker
-                .query_chat_full(
-                    messages,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(1),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
+
+            #[cfg(feature = "native")]
+            {
+                let model_path = warmup_brain.llama_path.clone();
+                // Spawn on blocking thread since get_or_load does heavy I/O
+                let result = tokio::task::spawn_blocking(move || {
+                    match warmup_brain.native.get_or_load(&model_path) {
+                        Ok(_loaded) => {
+                            info!(
+                                "[MIVI-V2 Warmup] Native engine ready in {:.2}s. Model cached.",
+                                start.elapsed().as_secs_f32()
+                            );
+                        }
+                        Err(e) => {
+                            warn!("[MIVI-V2 Warmup] Failed to pre-load model: {}", e);
+                        }
+                    }
+                })
                 .await;
-            info!(
-                "[MIVI-V2 Warmup] Warmup completed in {:.2}s. Engine is hot and ready.",
-                start.elapsed().as_secs_f32()
-            );
+                if let Err(e) = result {
+                    warn!("[MIVI-V2 Warmup] Warmup task panicked: {}", e);
+                }
+            }
+
+            #[cfg(not(feature = "native"))]
+            {
+                let messages = serde_json::json!([
+                    {"role": "user", "content": "warmup"}
+                ]);
+                let _ = warmup_brain
+                    .text_worker
+                    .query_chat_full(
+                        messages,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        Some(1),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await;
+                info!(
+                    "[MIVI-V2 Warmup] Worker warmup completed in {:.2}s.",
+                    start.elapsed().as_secs_f32()
+                );
+            }
         });
     } else {
         info!("[MIVI-V2 Warmup] Skipping warmup in ultra-low-RAM mode to save memory");
@@ -5608,5 +5789,18 @@ Hello!"
         assert_eq!(val["total_tokens"], 30);
         assert_eq!(val["prompt_tokens_details"]["cached_tokens"], 0);
         assert_eq!(val["completion_tokens_details"]["reasoning_tokens"], 0);
+    }
+
+    #[test]
+    fn clamp_tool_result_keeps_head_and_tail() {
+        let short = "ok";
+        assert_eq!(clamp_tool_result(short), "ok");
+
+        let long: String = "h".repeat(3000);
+        let clamped = clamp_tool_result(&long);
+        assert!(clamped.len() < 2200);
+        assert!(clamped.contains("truncated"));
+        // Head preserved, truncation marker present, UTF-8 valid (no panic).
+        assert!(clamped.starts_with("hhh"));
     }
 }

@@ -387,7 +387,7 @@ impl EdgeBrain {
         let ultra_low_ram = env::var("MIVI_ULTRA_LOW_RAM")
             .map(|v| v == "1" || v == "true")
             .unwrap_or(false);
-        let runtime_config = RuntimeConfig::from_env();
+        let runtime_config = RuntimeConfig::global();
         let server_path = base_dir
             .join("bin")
             .join(format!("llama-server{}", exe_ext));
@@ -430,7 +430,7 @@ impl EdgeBrain {
         grammar_path: Option<String>,
         max_tokens: Option<u32>,
     ) -> Result<String, String> {
-        let runtime_config = RuntimeConfig::from_env();
+        let runtime_config = RuntimeConfig::global();
         if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
             let fut = self.text_worker.query_chat(prompt, system_prompt, temp);
             match fut.await {
@@ -444,33 +444,46 @@ impl EdgeBrain {
 
         if runtime_config.mode == crate::runtime::RuntimeMode::Spawn {
             let t = crate::server::active_chat_template();
-            let (extracted_system, extracted_user) = split_prompt_system_user(prompt);
-            let final_system = if extracted_system.is_empty() {
-                system_prompt.to_string()
-            } else {
-                extracted_system
-            };
-            let final_user = if extracted_user.is_empty() {
+
+            // Detect if the prompt is already fully formatted with chat template tokens.
+            // This happens when build_chat_prompt() was used upstream (lightweight chat path).
+            // In that case, pass it directly to llama-cli without re-wrapping to avoid
+            // double-formatting which produces garbled output.
+            let formatted_prompt = if !t.system_prefix.is_empty()
+                && prompt.trim_start().starts_with(t.system_prefix.trim())
+                && prompt.contains(t.assistant_start.trim())
+            {
+                // Already formatted — use as-is.
                 prompt.to_string()
             } else {
-                let trimmed = extracted_user.trim();
-                if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
-                    stripped.trim().to_string()
+                // Not formatted — apply chat template.
+                let (extracted_system, extracted_user) = split_prompt_system_user(prompt);
+                let final_system = if extracted_system.is_empty() {
+                    system_prompt.to_string()
                 } else {
-                    trimmed.to_string()
-                }
+                    extracted_system
+                };
+                let final_user = if extracted_user.is_empty() {
+                    prompt.to_string()
+                } else {
+                    let trimmed = extracted_user.trim();
+                    if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
+                        stripped.trim().to_string()
+                    } else {
+                        trimmed.to_string()
+                    }
+                };
+                format!(
+                    "{}{}{}{}{}{}{}",
+                    t.system_prefix,
+                    final_system,
+                    t.system_suffix,
+                    t.user_prefix,
+                    final_user,
+                    t.user_suffix,
+                    t.assistant_start
+                )
             };
-
-            let formatted_prompt = format!(
-                "{}{}{}{}{}{}{}",
-                t.system_prefix,
-                final_system,
-                t.system_suffix,
-                t.user_prefix,
-                final_user,
-                t.user_suffix,
-                t.assistant_start
-            );
 
             let raw_context = cli_context_size(
                 "MIVI_REASONER_CONTEXT_SIZE",
@@ -582,7 +595,7 @@ impl EdgeBrain {
         grammar_path: Option<String>,
         max_tokens: Option<u32>,
     ) -> Result<String, String> {
-        let runtime_config = RuntimeConfig::from_env();
+        let runtime_config = RuntimeConfig::global();
         if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
             let fut = self.text_worker.query_chat(prompt, system_prompt, temp);
             match fut.await {
@@ -595,33 +608,41 @@ impl EdgeBrain {
         }
 
         let t = crate::server::active_chat_template();
-        let (extracted_system, extracted_user) = split_prompt_system_user(prompt);
-        let final_system = if extracted_system.is_empty() {
-            system_prompt.to_string()
-        } else {
-            extracted_system
-        };
-        let final_user = if extracted_user.is_empty() {
+
+        // Detect if the prompt is already fully formatted with chat template tokens.
+        let formatted_prompt = if !t.system_prefix.is_empty()
+            && prompt.trim_start().starts_with(t.system_prefix.trim())
+            && prompt.contains(t.assistant_start.trim())
+        {
             prompt.to_string()
         } else {
-            let trimmed = extracted_user.trim();
-            if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
-                stripped.trim().to_string()
+            let (extracted_system, extracted_user) = split_prompt_system_user(prompt);
+            let final_system = if extracted_system.is_empty() {
+                system_prompt.to_string()
             } else {
-                trimmed.to_string()
-            }
+                extracted_system
+            };
+            let final_user = if extracted_user.is_empty() {
+                prompt.to_string()
+            } else {
+                let trimmed = extracted_user.trim();
+                if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
+                    stripped.trim().to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            };
+            format!(
+                "{}{}{}{}{}{}{}",
+                t.system_prefix,
+                final_system,
+                t.system_suffix,
+                t.user_prefix,
+                final_user,
+                t.user_suffix,
+                t.assistant_start
+            )
         };
-
-        let formatted_prompt = format!(
-            "{}{}{}{}{}{}{}",
-            t.system_prefix,
-            final_system,
-            t.system_suffix,
-            t.user_prefix,
-            final_user,
-            t.user_suffix,
-            t.assistant_start
-        );
 
         let eff_context_base = if self.ultra_low_ram && context_size == "8192" {
             4096
@@ -723,7 +744,7 @@ impl EdgeBrain {
         seed: Option<u64>,
         max_tokens: Option<u32>,
     ) -> Result<String, String> {
-        let runtime_config = RuntimeConfig::from_env();
+        let runtime_config = RuntimeConfig::global();
         let context_size = cli_context_size(
             "MIVI_REASONER_CONTEXT_SIZE",
             runtime_config.context.max_input_tokens,
@@ -758,7 +779,7 @@ impl EdgeBrain {
         seed: Option<u64>,
         max_tokens: Option<u32>,
     ) -> Result<String, String> {
-        let runtime_config = RuntimeConfig::from_env();
+        let runtime_config = RuntimeConfig::global();
         let context_size = cli_context_size(
             "MIVI_CODER_CONTEXT_SIZE",
             runtime_config.context.max_input_tokens,
@@ -815,7 +836,7 @@ impl EdgeBrain {
         json_schema: Option<String>,
         grammar_path: Option<String>,
     ) -> Result<String, String> {
-        let runtime_config = RuntimeConfig::from_env();
+        let runtime_config = RuntimeConfig::global();
 
         let run_native = if cfg!(feature = "native") {
             runtime_config.mode != crate::runtime::RuntimeMode::Spawn
