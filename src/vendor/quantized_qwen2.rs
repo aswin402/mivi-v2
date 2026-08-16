@@ -317,6 +317,32 @@ impl ModelWeights {
         }
     }
 
+    /// Retain only the first `pos` positions of the KV cache so that a
+    /// subsequent forward at index_pos = pos can continue from a shared
+    /// prompt prefix without re-prefilling it. Returns false when there is
+    /// no cache yet to truncate.
+    pub fn truncate_kv_cache(&mut self, pos: usize) -> bool {
+        let mut truncated = false;
+        for layer in self.layers.iter_mut() {
+            if let Some((k, v)) = &layer.kv_cache {
+                let seq = k.dims()[2];
+                if pos < seq {
+                    let (k, v) = match (k.narrow(2, 0, pos), v.narrow(2, 0, pos)) {
+                        (Ok(k), Ok(v)) => (k, v),
+                        _ => return false,
+                    };
+                    let (k, v) = match (k.contiguous(), v.contiguous()) {
+                        (Ok(k), Ok(v)) => (k, v),
+                        _ => return false,
+                    };
+                    layer.kv_cache = Some((k, v));
+                }
+                truncated = true;
+            }
+        }
+        truncated
+    }
+
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = if seq_len == 1 {

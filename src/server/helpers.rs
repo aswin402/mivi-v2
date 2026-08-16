@@ -488,16 +488,18 @@ pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
         ));
     }
 
-    // Conversation turns.
+    // Conversation turns. The tool block is appended to EVERY user turn:
+    // the tool-tuned model expects it next to the request, and identical
+    // rendering across turns keeps the prompt a stable prefix so the KV
+    // cache can be reused between agent turns.
     let has_tools = !prompt_tools.is_empty();
-    let last_user_pos = compressed_messages.iter().rposition(|m| m.role == "user");
-
     for (idx, msg) in compressed_messages.iter().enumerate() {
+        let _ = idx;
         match msg.role.as_str() {
             "user" => {
                 let text = extract_user_text(msg);
                 if !text.is_empty() {
-                    if has_tools && Some(idx) == last_user_pos {
+                    if has_tools {
                         let text_with_tools = format!("{}\n{}", text, func_block.trim());
                         prompt.push_str(&format!(
                             "{}{}{}",

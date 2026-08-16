@@ -128,6 +128,15 @@ impl QuantizedModel {
             Self::Phi3(_) => (),
         }
     }
+
+    /// Retain only the first `pos` KV entries (shared-prefix reuse).
+    /// Returns false for variants without truncation support.
+    pub fn truncate_kv_cache(&mut self, pos: usize) -> bool {
+        match self {
+            Self::Qwen2(m) => m.truncate_kv_cache(pos),
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "native")]
@@ -135,6 +144,10 @@ pub struct LoadedModel {
     pub model: Mutex<QuantizedModel>,
     pub tokenizer: Tokenizer,
     pub vocab: Vec<String>,
+    /// Token ids of the prompt whose KV entries are currently resident in
+    /// `model` (the shared-prefix cache). Must only be read/written while
+    /// holding the `model` lock so it stays consistent with the KV state.
+    pub cached_prefix: Mutex<Vec<u32>>,
 }
 
 #[cfg(feature = "native")]
@@ -206,6 +219,11 @@ impl ModelCache {
             }
         }
     }
+}
+
+/// Length of the common token prefix of two prompts.
+fn common_prefix_len(a: &[u32], b: &[u32]) -> usize {
+    a.iter().zip(b).take_while(|(x, y)| x == y).count()
 }
 
 #[cfg(feature = "native")]
@@ -309,6 +327,7 @@ impl NativeBrain {
 
         let loaded = Arc::new(LoadedModel {
             model: Mutex::new(model),
+            cached_prefix: Mutex::new(Vec::new()),
             tokenizer,
             vocab,
         });
@@ -344,7 +363,8 @@ impl NativeBrain {
     ) -> Result<String, String> {
         let loaded = self.get_or_load(model_path)?;
         let mut model = loaded.model.lock().unwrap();
-        model.clear_kv_cache();
+        // NOTE: KV cache is managed at the prefill site (shared-prefix reuse);
+        // do not clear it here.
         let tokenizer = &loaded.tokenizer;
 
         let t = crate::server::active_chat_template();
@@ -405,23 +425,49 @@ impl NativeBrain {
         };
         let mut logits_processor = LogitsProcessor::from_sampling(299792458, sampling);
 
-        let mut index_pos = 0;
+        let mut index_pos;
         // Incremental detokenizer: decoding only the delta per token keeps the
         // stop-word check O(1) instead of re-decoding the whole sequence (O(n^2)).
         let mut decode_stream = tokenizer.decode_stream(true);
         let mut full_text = String::new();
 
-        // Prefill
-        let input = Tensor::new(&token_ids[..], &device)
+        // Prefill with shared-prefix KV reuse: agent turns re-send the same
+        // system prompt + tool schemas, so the KV entries for that prefix are
+        // already resident — only the new suffix gets prefilled.
+        let cached_prefix = loaded.cached_prefix.lock().unwrap().clone();
+        let mut shared = common_prefix_len(&cached_prefix, &token_ids);
+        if shared == token_ids.len() && shared > 0 {
+            // Identical prompt: re-prefill the last token so we still get logits.
+            shared -= 1;
+        }
+        if shared > 0 {
+            if !model.truncate_kv_cache(shared) {
+                model.clear_kv_cache();
+                shared = 0;
+            }
+        } else {
+            model.clear_kv_cache();
+        }
+
+        let input = Tensor::new(&token_ids[shared..], &device)
             .map_err(|e| format!("Tensor creation error: {}", e))?
             .unsqueeze(0)
             .map_err(|e| format!("Tensor unsqueeze error: {}", e))?;
 
         let logits = model
-            .forward(&input, index_pos)
+            .forward(&input, shared)
             .map_err(|e| format!("Forward pass error: {}", e))?;
 
-        index_pos += token_ids.len();
+        index_pos = token_ids.len();
+        tracing::debug!(
+            "[NativeBrain] Prefill: {} tokens (reused {} prefix, {} new)",
+            token_ids.len(),
+            shared,
+            token_ids.len() - shared
+        );
+        // The KV now holds exactly this prompt; record it for the next query.
+        // Must be updated while still holding the model lock.
+        *loaded.cached_prefix.lock().unwrap() = token_ids.clone();
 
         let mut grammar_state = load_grammar_state(&grammar_path);
         let vocab_refs: Vec<&str> = loaded.vocab.iter().map(|s| s.as_str()).collect();
@@ -590,7 +636,8 @@ impl NativeBrain {
     ) -> Result<String, String> {
         let loaded = self.get_or_load(model_path)?;
         let mut model = loaded.model.lock().unwrap();
-        model.clear_kv_cache();
+        // NOTE: KV cache is managed at the prefill site (shared-prefix reuse);
+        // do not clear it here.
         let tokenizer = &loaded.tokenizer;
 
         let tokens = tokenizer
@@ -614,23 +661,49 @@ impl NativeBrain {
         };
         let mut logits_processor = LogitsProcessor::from_sampling(299792458, sampling);
 
-        let mut index_pos = 0;
+        let mut index_pos;
         // Incremental detokenizer: decoding only the delta per token keeps the
         // stop-word check O(1) instead of re-decoding the whole sequence (O(n^2)).
         let mut decode_stream = tokenizer.decode_stream(true);
         let mut full_text = String::new();
 
-        // Prefill
-        let input = Tensor::new(&token_ids[..], &device)
+        // Prefill with shared-prefix KV reuse: agent turns re-send the same
+        // system prompt + tool schemas, so the KV entries for that prefix are
+        // already resident — only the new suffix gets prefilled.
+        let cached_prefix = loaded.cached_prefix.lock().unwrap().clone();
+        let mut shared = common_prefix_len(&cached_prefix, &token_ids);
+        if shared == token_ids.len() && shared > 0 {
+            // Identical prompt: re-prefill the last token so we still get logits.
+            shared -= 1;
+        }
+        if shared > 0 {
+            if !model.truncate_kv_cache(shared) {
+                model.clear_kv_cache();
+                shared = 0;
+            }
+        } else {
+            model.clear_kv_cache();
+        }
+
+        let input = Tensor::new(&token_ids[shared..], &device)
             .map_err(|e| format!("Tensor creation error: {}", e))?
             .unsqueeze(0)
             .map_err(|e| format!("Tensor unsqueeze error: {}", e))?;
 
         let logits = model
-            .forward(&input, index_pos)
+            .forward(&input, shared)
             .map_err(|e| format!("Forward pass error: {}", e))?;
 
-        index_pos += token_ids.len();
+        index_pos = token_ids.len();
+        tracing::debug!(
+            "[NativeBrain] Prefill: {} tokens (reused {} prefix, {} new)",
+            token_ids.len(),
+            shared,
+            token_ids.len() - shared
+        );
+        // The KV now holds exactly this prompt; record it for the next query.
+        // Must be updated while still holding the model lock.
+        *loaded.cached_prefix.lock().unwrap() = token_ids.clone();
 
         let mut grammar_state = load_grammar_state(&grammar_path);
         let vocab_refs: Vec<&str> = loaded.vocab.iter().map(|s| s.as_str()).collect();
@@ -807,7 +880,7 @@ impl NativeBrain {
         tokio::task::spawn_blocking(move || {
             let result = (|| -> Result<(), String> {
                 let mut model = loaded.model.lock().unwrap();
-                model.clear_kv_cache();
+                // KV cache is managed at the prefill site (shared-prefix reuse).
                 let tokenizer = &loaded.tokenizer;
 
                 let t = crate::server::active_chat_template();
@@ -869,22 +942,48 @@ impl NativeBrain {
                 };
                 let mut logits_processor = LogitsProcessor::from_sampling(299792458, sampling);
 
-                let mut index_pos = 0;
+                let mut index_pos;
                 // Incremental detokenizer (see query() for rationale).
                 let mut decode_stream = tokenizer.decode_stream(true);
                 let mut full_text = String::new();
 
-                // Prefill
-                let input = Tensor::new(&token_ids[..], &device)
+                // Prefill with shared-prefix KV reuse: agent turns re-send the same
+                // system prompt + tool schemas, so the KV entries for that prefix are
+                // already resident — only the new suffix gets prefilled.
+                let cached_prefix = loaded.cached_prefix.lock().unwrap().clone();
+                let mut shared = common_prefix_len(&cached_prefix, &token_ids);
+                if shared == token_ids.len() && shared > 0 {
+                    // Identical prompt: re-prefill the last token so we still get logits.
+                    shared -= 1;
+                }
+                if shared > 0 {
+                    if !model.truncate_kv_cache(shared) {
+                        model.clear_kv_cache();
+                        shared = 0;
+                    }
+                } else {
+                    model.clear_kv_cache();
+                }
+
+                let input = Tensor::new(&token_ids[shared..], &device)
                     .map_err(|e| format!("Tensor creation error: {}", e))?
                     .unsqueeze(0)
                     .map_err(|e| format!("Tensor unsqueeze error: {}", e))?;
 
                 let logits = model
-                    .forward(&input, index_pos)
+                    .forward(&input, shared)
                     .map_err(|e| format!("Forward pass error: {}", e))?;
 
-                index_pos += token_ids.len();
+                index_pos = token_ids.len();
+                tracing::debug!(
+                    "[NativeBrain] Prefill: {} tokens (reused {} prefix, {} new)",
+                    token_ids.len(),
+                    shared,
+                    token_ids.len() - shared
+                );
+                // The KV now holds exactly this prompt; record it for the next query.
+                // Must be updated while still holding the model lock.
+                *loaded.cached_prefix.lock().unwrap() = token_ids.clone();
 
                 let mut grammar_state = load_grammar_state(&grammar_path);
                 let eos_token_id = tokenizer
