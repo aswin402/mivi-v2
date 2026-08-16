@@ -79,16 +79,15 @@ impl StabilityGuard {
     }
 }
 
-/// Scans ChatCompletionRequest history to detect loops or excessive turns.
-pub fn check_history_for_loops(
-    messages: &[crate::server::types::ChatMessage],
-) -> Result<(), String> {
-    if messages.len() > 30 {
-        return Err(
-            "Stability: conversation history length limit exceeded (>30 messages). Aborting."
-                .to_string(),
-        );
-    }
+/// Scans ChatCompletionRequest history to detect duplicate tool-call loops.
+///
+/// Returns Some(explanatory message) when the same tool has been called with
+/// identical arguments more than `MAX_DUPLICATE_CALLS` times — callers should
+/// surface that message as the assistant reply so the agent can change course,
+/// NOT as an error. History length itself is not limited here: the request
+/// handler enforces its own cap and the context compressor bounds prompt size.
+pub fn check_history_for_loops(messages: &[crate::server::types::ChatMessage]) -> Option<String> {
+    const MAX_DUPLICATE_CALLS: u32 = 2;
 
     let mut tool_call_counts: HashMap<u64, u32> = HashMap::new();
     for msg in messages {
@@ -102,9 +101,9 @@ pub fn check_history_for_loops(
 
                     let count = tool_call_counts.entry(hash).or_insert(0);
                     *count += 1;
-                    if *count >= 2 {
-                        return Err(format!(
-                            "Stability: loop detected — tool '{}' with arguments '{}' has been called {} times in history.",
+                    if *count > MAX_DUPLICATE_CALLS {
+                        return Some(format!(
+                            "Tool loop detected: '{}' with arguments '{}' was already called {} times with the same result. I will not repeat it. Please try a different tool, different arguments, or proceed with the information already gathered.",
                             tc.function.name, tc.function.arguments, *count
                         ));
                     }
@@ -112,7 +111,7 @@ pub fn check_history_for_loops(
             }
         }
     }
-    Ok(())
+    None
 }
 
 #[cfg(test)]
@@ -200,6 +199,43 @@ mod tests {
             },
         ];
 
-        assert!(check_history_for_loops(&messages).is_err());
+        assert!(check_history_for_loops(&messages).is_none());
+    }
+
+    #[test]
+    fn test_history_loop_detected_on_third_identical_call() {
+        let mut messages = Vec::new();
+        for i in 0..3 {
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: serde_json::Value::Null,
+                tool_calls: Some(vec![ToolCallIn {
+                    id: format!("call_{}", i),
+                    r#type: "function".to_string(),
+                    function: FunctionCallIn {
+                        name: "list_dir".to_string(),
+                        arguments: r#"{"path":"."}"#.to_string(),
+                    },
+                }]),
+                tool_call_id: None,
+            });
+        }
+        let reason = check_history_for_loops(&messages).expect("should detect loop");
+        assert!(reason.contains("list_dir"));
+    }
+
+    #[test]
+    fn test_long_history_without_loops_is_accepted() {
+        // 100-message agent sessions must not trip the guard.
+        let mut messages = Vec::new();
+        for i in 0..100 {
+            messages.push(ChatMessage {
+                role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
+                content: serde_json::json!(format!("turn {}", i)),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+        assert!(check_history_for_loops(&messages).is_none());
     }
 }

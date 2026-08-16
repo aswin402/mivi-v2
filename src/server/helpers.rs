@@ -2292,7 +2292,12 @@ pub async fn generate_tool_calls(
     brain: &EdgeBrain,
     req: &ChatCompletionRequest,
 ) -> Result<(Vec<ToolCallOut>, String), String> {
-    crate::stability::check_history_for_loops(&req.messages)?;
+    // Loop guard: when the agent has already repeated an identical tool
+    // call too many times, answer with an explanatory message instead of
+    // generating the same call again (or erroring) so the agent can recover.
+    if let Some(loop_reason) = crate::stability::check_history_for_loops(&req.messages) {
+        return Ok((Vec::new(), loop_reason));
+    }
 
     let trace = TraceConfig::from_env();
     let selection = select_tools_for_request(req);
