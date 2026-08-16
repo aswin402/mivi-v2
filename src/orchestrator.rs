@@ -73,7 +73,9 @@ impl AgentOrchestrator {
         let cache = SemanticCache::new();
         let dataset = DatasetLogger::new();
         let rag = TurboVecRAG::new();
-        let semantic_rag = crate::semantic_rag::SemanticRAG::new();
+        // Share the keyword RAG's chunk store instead of keeping a second
+        // full copy of the workspace index in memory.
+        let semantic_rag = crate::semantic_rag::SemanticRAG::with_keyword_rag(rag.clone());
         let router = NeedleRouter::new();
         Self {
             brain,

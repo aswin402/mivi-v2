@@ -15,6 +15,7 @@ pub struct RagChunk {
 pub struct TurboVecRAG {
     chunks: Arc<Mutex<Vec<RagChunk>>>,
     usage: Arc<Mutex<HashMap<String, u64>>>,
+    last_usage_flush: Arc<std::sync::Mutex<std::time::Instant>>,
 }
 
 fn expand_query_words(mut words: Vec<String>) -> Vec<String> {
@@ -118,6 +119,7 @@ impl TurboVecRAG {
         Self {
             chunks: Arc::new(Mutex::new(Vec::new())),
             usage,
+            last_usage_flush: Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         }
     }
 
@@ -340,8 +342,15 @@ impl TurboVecRAG {
             for (chunk, _) in &taken {
                 *usage_guard.entry(chunk.file_path.clone()).or_insert(0) += 1;
             }
-            if let Ok(json) = serde_json::to_string_pretty(&*usage_guard) {
-                let _ = fs::write(".mivi_rag_usage", json);
+            // Debounce the on-disk usage file: serialize at most once every
+            // 30s instead of on every search.
+            let mut last_flush = self.last_usage_flush.lock().unwrap();
+            let now = std::time::Instant::now();
+            if now.duration_since(*last_flush).as_secs() >= 30 {
+                if let Ok(json) = serde_json::to_string_pretty(&*usage_guard) {
+                    let _ = fs::write(".mivi_rag_usage", json);
+                }
+                *last_flush = now;
             }
         }
 
@@ -493,6 +502,12 @@ mod tests {
         let _ = fs::remove_file(".mivi_rag_usage");
 
         let rag = TurboVecRAG::new();
+        // Back-date the flush window so this search writes the usage file
+        // immediately (production flushes are debounced to every 30s).
+        {
+            let mut last_flush = rag.last_usage_flush.lock().unwrap();
+            *last_flush = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        }
         {
             let mut chunks = rag.chunks.lock().await;
             chunks.push(RagChunk {

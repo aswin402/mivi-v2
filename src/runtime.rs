@@ -21,10 +21,9 @@ impl RuntimeMode {
             "native" | "candle" => Self::Native,
             _ => {
                 #[cfg(feature = "native")]
-                let fallback = Self::Native;
+                return Self::Native;
                 #[cfg(not(feature = "native"))]
-                let fallback = Self::WorkerEco;
-                fallback
+                Self::WorkerEco
             }
         }
     }
@@ -79,7 +78,17 @@ impl RuntimeConfig {
         matches!(self.mode, RuntimeMode::WorkerEco | RuntimeMode::WorkerHot)
     }
 
+    /// Process-wide cached config. Env vars are read exactly once; per-request
+    /// callers should use this instead of `from_env()` (which remains available
+    /// for tests that mutate the environment).
+    pub fn global() -> &'static Self {
+        static GLOBAL: std::sync::OnceLock<RuntimeConfig> = std::sync::OnceLock::new();
+        GLOBAL.get_or_init(Self::from_env)
+    }
+
     pub fn from_env() -> Self {
+        // Default to Native mode: use our own candle-based inference engine.
+        // No external llama-cli or llama-server dependencies needed.
         #[cfg(feature = "native")]
         let default_mode = RuntimeMode::Native;
         #[cfg(not(feature = "native"))]
@@ -168,18 +177,16 @@ mod tests {
     }
 
     #[test]
-    fn default_config_uses_worker_eco_mode_and_low_resource_budget() {
+    fn default_config_uses_native_or_worker_eco_mode() {
         let _guard = env_lock();
         clear_runtime_env();
 
         let config = RuntimeConfig::from_env();
 
         #[cfg(feature = "native")]
-        let expected_mode = RuntimeMode::Native;
+        assert_eq!(config.mode, RuntimeMode::Native);
         #[cfg(not(feature = "native"))]
-        let expected_mode = RuntimeMode::WorkerEco;
-
-        assert_eq!(config.mode, expected_mode);
+        assert_eq!(config.mode, RuntimeMode::WorkerEco);
         assert_eq!(config.worker_idle_secs, 120);
         assert_eq!(config.ram_target_mb, 1000);
         assert_eq!(config.context.max_input_tokens, 8192);
@@ -221,11 +228,9 @@ mod tests {
         let config = RuntimeConfig::from_env();
 
         #[cfg(feature = "native")]
-        let expected_mode = RuntimeMode::Native;
+        assert_eq!(config.mode, RuntimeMode::Native);
         #[cfg(not(feature = "native"))]
-        let expected_mode = RuntimeMode::WorkerEco;
-
-        assert_eq!(config.mode, expected_mode);
+        assert_eq!(config.mode, RuntimeMode::WorkerEco);
         assert_eq!(config.worker_idle_secs, 120);
         assert_eq!(config.context.max_input_tokens, 8192);
 

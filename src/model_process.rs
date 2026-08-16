@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 /// Common args shared by all llama-cli invocations.
 fn base_args(cmd: &mut Command, model_path: &str, ngl: &str, ctx: &str, temp: &str) {
-    let runtime_config = crate::runtime::RuntimeConfig::from_env();
+    let runtime_config = crate::runtime::RuntimeConfig::global();
     cmd.arg("-m")
         .arg(model_path)
         .arg("-ngl")

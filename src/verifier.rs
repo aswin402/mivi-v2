@@ -20,6 +20,58 @@ fn unique_temp_stem() -> String {
     format!("temp_code_{}_{}_{}", std::process::id(), now, count)
 }
 
+const OUTPUT_CAP_BYTES: usize = 4096;
+
+fn timeout_secs_from_env(var: &str, default: u64) -> u64 {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(default)
+}
+
+fn compile_timeout_secs() -> u64 {
+    timeout_secs_from_env("MIVI_VERIFY_COMPILE_TIMEOUT_SECS", 60)
+}
+
+fn exec_timeout_secs() -> u64 {
+    timeout_secs_from_env("MIVI_VERIFY_EXEC_TIMEOUT_SECS", 15)
+}
+
+/// Run a command to completion with a wall-clock timeout. `kill_on_drop` is
+/// required so the child is killed when the timeout future is dropped.
+async fn timed_output(
+    cmd: &mut tokio::process::Command,
+    secs: u64,
+) -> std::io::Result<std::process::Output> {
+    match tokio::time::timeout(std::time::Duration::from_secs(secs), cmd.output()).await {
+        Ok(res) => res,
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("timed out after {}s", secs),
+        )),
+    }
+}
+
+/// Concatenated stdout+stderr capped to OUTPUT_CAP_BYTES so a runaway
+/// generation cannot flood prompts and traces.
+fn combined_output(out: &std::process::Output) -> String {
+    let mut s = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if s.len() > OUTPUT_CAP_BYTES {
+        let mut end = OUTPUT_CAP_BYTES;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+        s.push_str("\n[output truncated]");
+    }
+    s
+}
+
 impl CompilerVerifier {
     pub fn new(brain: EdgeBrain) -> Self {
         Self { brain }
@@ -91,100 +143,77 @@ impl CompilerVerifier {
 
         let result = if lang_lower == "rust" || lang_lower == "rs" {
             let out_bin = temp_dir.join(format!("{}_rust_bin", unique));
-            let compile_res = tokio::process::Command::new("rustc")
+            let mut compile_cmd = tokio::process::Command::new("rustc");
+            compile_cmd
                 .arg(&temp_file)
                 .arg("-o")
                 .arg(&out_bin)
-                .output()
-                .await;
+                .kill_on_drop(true);
+            let compile_res = timed_output(&mut compile_cmd, compile_timeout_secs()).await;
             let _ = tokio::fs::remove_file(&temp_file).await;
             match compile_res {
                 Ok(comp) if comp.status.success() => {
-                    let exec_res = tokio::process::Command::new(&out_bin).output().await;
+                    let mut exec_cmd = tokio::process::Command::new(&out_bin);
+                    exec_cmd.kill_on_drop(true);
+                    let exec_res = timed_output(&mut exec_cmd, exec_timeout_secs()).await;
                     let _ = tokio::fs::remove_file(&out_bin).await;
                     match exec_res {
-                        Ok(out) => (
-                            out.status.success(),
-                            format!(
-                                "{}{}",
-                                String::from_utf8_lossy(&out.stdout),
-                                String::from_utf8_lossy(&out.stderr)
-                            ),
-                        ),
+                        Ok(out) => (out.status.success(), combined_output(&out)),
                         Err(e) => (false, format!("Execution error: {}", e)),
                     }
                 }
                 Ok(comp) => (
                     false,
-                    format!(
-                        "Rust compile error: {}",
-                        String::from_utf8_lossy(&comp.stderr)
-                    ),
+                    format!("Rust compile error: {}", combined_output(&comp)),
                 ),
                 Err(e) => (false, format!("rustc not found: {}", e)),
             }
         } else if lang_lower == "cpp" || lang_lower == "c++" || lang_lower == "c" {
             let out_bin = temp_dir.join(format!("{}_cpp_bin", unique));
-            let compile_res = tokio::process::Command::new("g++")
+            let mut compile_cmd = tokio::process::Command::new("g++");
+            compile_cmd
                 .arg(&temp_file)
                 .arg("-o")
                 .arg(&out_bin)
-                .output()
-                .await;
+                .kill_on_drop(true);
+            let compile_res = timed_output(&mut compile_cmd, compile_timeout_secs()).await;
             let _ = tokio::fs::remove_file(&temp_file).await;
             match compile_res {
                 Ok(comp) if comp.status.success() => {
-                    let exec_res = tokio::process::Command::new(&out_bin).output().await;
+                    let mut exec_cmd = tokio::process::Command::new(&out_bin);
+                    exec_cmd.kill_on_drop(true);
+                    let exec_res = timed_output(&mut exec_cmd, exec_timeout_secs()).await;
                     let _ = tokio::fs::remove_file(&out_bin).await;
                     match exec_res {
-                        Ok(out) => (
-                            out.status.success(),
-                            format!(
-                                "{}{}",
-                                String::from_utf8_lossy(&out.stdout),
-                                String::from_utf8_lossy(&out.stderr)
-                            ),
-                        ),
+                        Ok(out) => (out.status.success(), combined_output(&out)),
                         Err(e) => (false, format!("Execution error: {}", e)),
                     }
                 }
                 Ok(comp) => (
                     false,
-                    format!(
-                        "C++ compile error: {}",
-                        String::from_utf8_lossy(&comp.stderr)
-                    ),
+                    format!("C++ compile error: {}", combined_output(&comp)),
                 ),
                 Err(e) => (false, format!("g++ not found: {}", e)),
             }
         } else {
-            let output = tokio::process::Command::new(cmd_name)
-                .arg(&temp_file)
-                .output()
-                .await;
+            let mut run_cmd = tokio::process::Command::new(cmd_name);
+            run_cmd.arg(&temp_file).kill_on_drop(true);
+            let output = timed_output(&mut run_cmd, exec_timeout_secs()).await;
             match output {
                 Ok(out) => {
                     let _ = tokio::fs::remove_file(&temp_file).await;
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    (out.status.success(), format!("{}{}", stdout, stderr))
+                    (out.status.success(), combined_output(&out))
                 }
-                Err(_) if cmd_name == "bun" => {
+                // Do not retry on timeout: a timed-out bun run would only time out
+                // again under node and double the wall-clock cost.
+                Err(ref e) if cmd_name == "bun" && e.kind() != std::io::ErrorKind::TimedOut => {
                     // Fallback to node for TypeScript/JavaScript if bun is not installed.
-                    let output = tokio::process::Command::new("node")
-                        .arg(&temp_file)
-                        .output()
-                        .await;
+                    let mut fallback_cmd = tokio::process::Command::new("node");
+                    fallback_cmd.arg(&temp_file).kill_on_drop(true);
+                    let output = timed_output(&mut fallback_cmd, exec_timeout_secs()).await;
                     let _ = tokio::fs::remove_file(&temp_file).await;
                     match output {
-                        Ok(out) => (
-                            out.status.success(),
-                            format!(
-                                "{}{}",
-                                String::from_utf8_lossy(&out.stdout),
-                                String::from_utf8_lossy(&out.stderr)
-                            ),
-                        ),
+                        Ok(out) => (out.status.success(), combined_output(&out)),
                         Err(e) => (false, format!("Failed to run command node: {}", e)),
                     }
                 }
@@ -337,6 +366,58 @@ mod tests {
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[tokio::test]
+    async fn infinite_loop_generation_times_out_instead_of_hanging() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        env::set_var("MIVI_VERIFY_EXEC_TIMEOUT_SECS", "2");
+
+        let verifier = CompilerVerifier::new(EdgeBrain::new());
+        let start = std::time::Instant::now();
+        let (success, output) = verifier
+            .run_local_code("while True:\n    pass\n", "python")
+            .await;
+
+        env::remove_var("MIVI_VERIFY_EXEC_TIMEOUT_SECS");
+
+        assert!(!success, "infinite loop must not report success");
+        assert!(
+            output.contains("timed out"),
+            "expected timeout message, got: {}",
+            output
+        );
+        assert!(
+            start.elapsed().as_secs() < 10,
+            "timeout took too long: {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn combined_output_caps_runaway_output() {
+        let mut cmd = tokio::process::Command::new("python3");
+        cmd.arg("-c").arg("print('x' * 100000)").kill_on_drop(true);
+        let out = cmd.output().await.expect("python3 should run");
+        assert!(out.status.success());
+        let capped = combined_output(&out);
+        assert!(capped.len() <= OUTPUT_CAP_BYTES + 100, "cap exceeded");
+        assert!(capped.contains("[output truncated]"));
+    }
+
+    #[tokio::test]
+    async fn combined_output_caps_on_utf8_boundary() {
+        let mut cmd = tokio::process::Command::new("python3");
+        // 4999 ASCII bytes + multi-byte chars pushes the cap mid-character.
+        cmd.arg("-c")
+            .arg("import sys; sys.stdout.write('a' * 4999 + 'é' * 100)")
+            .kill_on_drop(true);
+        let out = cmd.output().await.expect("python3 should run");
+        assert!(out.status.success());
+        let capped = combined_output(&out);
+        assert!(capped.contains("[output truncated]"));
+        // The truncated string must still be valid UTF-8 (no panic).
+        assert!(!capped.is_empty());
+    }
 
     #[tokio::test]
     async fn typescript_falls_back_to_node_when_bun_is_missing() {

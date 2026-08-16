@@ -121,6 +121,10 @@ impl QuantizedModel {
         match self {
             Self::Llama(m) => m.clear_kv_cache(),
             Self::Qwen2(m) => m.clear_kv_cache(),
+            // Phi3 exposes no clear in candle, but its `forward_attn` resets the
+            // KV cache whenever index_pos == 0 and every MIVI query starts its
+            // prefill at index_pos 0, so the cache is effectively cleared per
+            // request. Do not load Phi3 outside this invariant.
             Self::Phi3(_) => (),
         }
     }
@@ -158,9 +162,69 @@ fn load_grammar_state(grammar_path: &Option<String>) -> Option<schoolmarm::Gramm
 }
 
 #[cfg(feature = "native")]
+/// LRU cache of loaded models. Without eviction every distinct GGUF path
+/// (reasoner, coder, vision) stayed resident forever; without recency
+/// tracking the wrong model would be dropped.
+pub struct ModelCache {
+    map: HashMap<PathBuf, Arc<LoadedModel>>,
+    /// Front = least recently used.
+    order: std::collections::VecDeque<PathBuf>,
+    max_entries: usize,
+}
+
+#[cfg(feature = "native")]
+impl ModelCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            map: HashMap::new(),
+            order: std::collections::VecDeque::new(),
+            max_entries: max_entries.max(1),
+        }
+    }
+
+    fn get(&mut self, path: &Path) -> Option<Arc<LoadedModel>> {
+        let loaded = self.map.get(path)?.clone();
+        if let Some(pos) = self.order.iter().position(|p| p == path) {
+            self.order.remove(pos);
+        }
+        self.order.push_back(path.to_path_buf());
+        Some(loaded)
+    }
+
+    fn insert(&mut self, path: PathBuf, loaded: Arc<LoadedModel>) {
+        if self.map.contains_key(&path) {
+            return;
+        }
+        self.map.insert(path.clone(), loaded);
+        self.order.push_back(path);
+        while self.map.len() > self.max_entries {
+            let Some(lru) = self.order.pop_front() else {
+                break;
+            };
+            if self.map.remove(&lru).is_some() {
+                info!("[NativeBrain] Evicted cached model {:?} (LRU)", lru);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "native")]
+fn model_cache_max_entries() -> usize {
+    let ultra_low = std::env::var("MIVI_ULTRA_LOW_RAM")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
+    let default = if ultra_low { 1 } else { 2 };
+    std::env::var("MIVI_MODEL_CACHE_MAX")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(default)
+}
+
+#[cfg(feature = "native")]
 #[derive(Clone)]
 pub struct NativeBrain {
-    pub models: Arc<Mutex<HashMap<PathBuf, Arc<LoadedModel>>>>,
+    pub models: Arc<Mutex<ModelCache>>,
 }
 
 #[cfg(feature = "native")]
@@ -185,21 +249,21 @@ impl NativeBrain {
         );
 
         Self {
-            models: Arc::new(Mutex::new(HashMap::new())),
+            models: Arc::new(Mutex::new(ModelCache::new(model_cache_max_entries()))),
         }
     }
 
     pub fn get_or_load(&self, model_path: &Path) -> Result<Arc<LoadedModel>, String> {
-        let ultra_low = std::env::var("MIVI_ULTRA_LOW_RAM")
-            .map(|v| v == "1" || v == "true")
-            .unwrap_or(false);
-
-        let mut cache = self.models.lock().unwrap();
         let canonical_path = model_path.to_path_buf();
 
-        if let Some(loaded) = cache.get(&canonical_path) {
-            return Ok(loaded.clone());
+        {
+            let mut cache = self.models.lock().unwrap();
+            if let Some(loaded) = cache.get(&canonical_path) {
+                return Ok(loaded);
+            }
         }
+        // The GGUF load below runs WITHOUT the cache lock so inference on an
+        // already-cached model is never blocked behind a multi-second load.
 
         info!("[NativeBrain] Loading model GGUF: {:?}", model_path);
         let tokenizer_path = find_tokenizer_path(model_path)
@@ -249,11 +313,23 @@ impl NativeBrain {
             vocab,
         });
 
-        if ultra_low {
-            info!("[NativeBrain] Ultra-low-RAM mode active: model will not be cached in memory");
-        } else {
+        {
+            let mut cache = self.models.lock().unwrap();
+            if let Some(existing) = cache.get(&canonical_path) {
+                // Another thread loaded the same model while we held no lock.
+                return Ok(existing);
+            }
             cache.insert(canonical_path, loaded.clone());
         }
+
+        // The GGUF load reads the file into heap buffers that are freed once
+        // the quantized weights are built; glibc keeps those pages resident.
+        // Return them to the OS so steady-state RSS matches the model size.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            libc::malloc_trim(0);
+        }
+
         Ok(loaded)
     }
 
@@ -272,33 +348,41 @@ impl NativeBrain {
         let tokenizer = &loaded.tokenizer;
 
         let t = crate::server::active_chat_template();
-        let (extracted_system, extracted_user) = crate::brain::split_prompt_system_user(prompt);
-        let final_system = if extracted_system.is_empty() {
-            system_prompt.to_string()
-        } else {
-            extracted_system
-        };
-        let final_user = if extracted_user.is_empty() {
+
+        // Detect if the prompt is already formatted with chat template tokens.
+        let formatted_prompt = if !t.system_prefix.is_empty()
+            && prompt.trim_start().starts_with(t.system_prefix.trim())
+            && prompt.contains(t.assistant_start.trim())
+        {
             prompt.to_string()
         } else {
-            let trimmed = extracted_user.trim();
-            if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
-                stripped.trim().to_string()
+            let (extracted_system, extracted_user) = crate::brain::split_prompt_system_user(prompt);
+            let final_system = if extracted_system.is_empty() {
+                system_prompt.to_string()
             } else {
-                trimmed.to_string()
-            }
+                extracted_system
+            };
+            let final_user = if extracted_user.is_empty() {
+                prompt.to_string()
+            } else {
+                let trimmed = extracted_user.trim();
+                if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
+                    stripped.trim().to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            };
+            format!(
+                "{}{}{}{}{}{}{}",
+                t.system_prefix,
+                final_system,
+                t.system_suffix,
+                t.user_prefix,
+                final_user,
+                t.user_suffix,
+                t.assistant_start
+            )
         };
-
-        let formatted_prompt = format!(
-            "{}{}{}{}{}{}{}",
-            t.system_prefix,
-            final_system,
-            t.system_suffix,
-            t.user_prefix,
-            final_user,
-            t.user_suffix,
-            t.assistant_start
-        );
 
         let tokens = tokenizer
             .encode(formatted_prompt, true)
@@ -321,8 +405,11 @@ impl NativeBrain {
         };
         let mut logits_processor = LogitsProcessor::from_sampling(299792458, sampling);
 
-        let mut generated_tokens = Vec::new();
         let mut index_pos = 0;
+        // Incremental detokenizer: decoding only the delta per token keeps the
+        // stop-word check O(1) instead of re-decoding the whole sequence (O(n^2)).
+        let mut decode_stream = tokenizer.decode_stream(true);
+        let mut full_text = String::new();
 
         // Prefill
         let input = Tensor::new(&token_ids[..], &device)
@@ -391,7 +478,12 @@ impl NativeBrain {
             }
         }
 
-        generated_tokens.push(next_token);
+        if let Some(delta) = decode_stream
+            .step(next_token)
+            .map_err(|e| format!("Decode stream error: {}", e))?
+        {
+            full_text.push_str(&delta);
+        }
 
         let timeout_secs = if std::env::var("MIVI_ULTRA_LOW_RAM")
             .map(|v| v == "1" || v == "true")
@@ -463,29 +555,20 @@ impl NativeBrain {
                 }
             }
 
-            generated_tokens.push(next_token);
+            if let Some(delta) = decode_stream
+                .step(next_token)
+                .map_err(|e| format!("Decode stream error: {}", e))?
+            {
+                full_text.push_str(&delta);
+            }
 
-            // Check if current decoded text ends with any of the stop words (every 4 tokens to avoid expensive per-token decoding)
-            if generated_tokens.len() % 4 == 0 {
-                let current_text = tokenizer
-                    .decode(&generated_tokens, true)
-                    .unwrap_or_default();
-                let mut matched_stop = false;
-                for stop in &t.stop_words {
-                    if current_text.ends_with(stop) {
-                        matched_stop = true;
-                        break;
-                    }
-                }
-                if matched_stop {
-                    break;
-                }
+            // Cheap per-token stop-word check on the incrementally built text.
+            if t.stop_words.iter().any(|stop| full_text.ends_with(stop)) {
+                break;
             }
         }
 
-        let decoded = tokenizer
-            .decode(&generated_tokens, true)
-            .map_err(|e| format!("Decoding error: {}", e))?;
+        let decoded = full_text;
 
         let mut cleaned = decoded;
         for stop in &t.stop_words {
@@ -531,8 +614,11 @@ impl NativeBrain {
         };
         let mut logits_processor = LogitsProcessor::from_sampling(299792458, sampling);
 
-        let mut generated_tokens = Vec::new();
         let mut index_pos = 0;
+        // Incremental detokenizer: decoding only the delta per token keeps the
+        // stop-word check O(1) instead of re-decoding the whole sequence (O(n^2)).
+        let mut decode_stream = tokenizer.decode_stream(true);
+        let mut full_text = String::new();
 
         // Prefill
         let input = Tensor::new(&token_ids[..], &device)
@@ -600,7 +686,12 @@ impl NativeBrain {
             }
         }
 
-        generated_tokens.push(next_token);
+        if let Some(delta) = decode_stream
+            .step(next_token)
+            .map_err(|e| format!("Decode stream error: {}", e))?
+        {
+            full_text.push_str(&delta);
+        }
 
         let timeout_secs = if std::env::var("MIVI_ULTRA_LOW_RAM")
             .map(|v| v == "1" || v == "true")
@@ -672,29 +763,20 @@ impl NativeBrain {
                 }
             }
 
-            generated_tokens.push(next_token);
+            if let Some(delta) = decode_stream
+                .step(next_token)
+                .map_err(|e| format!("Decode stream error: {}", e))?
+            {
+                full_text.push_str(&delta);
+            }
 
-            // Check if current decoded text ends with any of the stop words (every 4 tokens to avoid expensive per-token decoding)
-            if generated_tokens.len() % 4 == 0 {
-                let current_text = tokenizer
-                    .decode(&generated_tokens, true)
-                    .unwrap_or_default();
-                let mut matched_stop = false;
-                for stop in &t.stop_words {
-                    if current_text.ends_with(stop) {
-                        matched_stop = true;
-                        break;
-                    }
-                }
-                if matched_stop {
-                    break;
-                }
+            // Cheap per-token stop-word check on the incrementally built text.
+            if t.stop_words.iter().any(|stop| full_text.ends_with(stop)) {
+                break;
             }
         }
 
-        let decoded = tokenizer
-            .decode(&generated_tokens, true)
-            .map_err(|e| format!("Decoding error: {}", e))?;
+        let decoded = full_text;
 
         let mut cleaned = decoded;
         for stop in &t.stop_words {
@@ -729,34 +811,42 @@ impl NativeBrain {
                 let tokenizer = &loaded.tokenizer;
 
                 let t = crate::server::active_chat_template();
-                let (extracted_system, extracted_user) =
-                    crate::brain::split_prompt_system_user(&prompt);
-                let final_system = if extracted_system.is_empty() {
-                    system_prompt.to_string()
-                } else {
-                    extracted_system
-                };
-                let final_user = if extracted_user.is_empty() {
+
+                // Detect if the prompt is already formatted with chat template tokens.
+                let formatted_prompt = if !t.system_prefix.is_empty()
+                    && prompt.trim_start().starts_with(t.system_prefix.trim())
+                    && prompt.contains(t.assistant_start.trim())
+                {
                     prompt.to_string()
                 } else {
-                    let trimmed = extracted_user.trim();
-                    if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
-                        stripped.trim().to_string()
+                    let (extracted_system, extracted_user) =
+                        crate::brain::split_prompt_system_user(&prompt);
+                    let final_system = if extracted_system.is_empty() {
+                        system_prompt.to_string()
                     } else {
-                        trimmed.to_string()
-                    }
+                        extracted_system
+                    };
+                    let final_user = if extracted_user.is_empty() {
+                        prompt.to_string()
+                    } else {
+                        let trimmed = extracted_user.trim();
+                        if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
+                            stripped.trim().to_string()
+                        } else {
+                            trimmed.to_string()
+                        }
+                    };
+                    format!(
+                        "{}{}{}{}{}{}{}",
+                        t.system_prefix,
+                        final_system,
+                        t.system_suffix,
+                        t.user_prefix,
+                        final_user,
+                        t.user_suffix,
+                        t.assistant_start
+                    )
                 };
-
-                let formatted_prompt = format!(
-                    "{}{}{}{}{}{}{}",
-                    t.system_prefix,
-                    final_system,
-                    t.system_suffix,
-                    t.user_prefix,
-                    final_user,
-                    t.user_suffix,
-                    t.assistant_start
-                );
 
                 let tokens = tokenizer
                     .encode(formatted_prompt, true)
@@ -779,8 +869,10 @@ impl NativeBrain {
                 };
                 let mut logits_processor = LogitsProcessor::from_sampling(299792458, sampling);
 
-                let mut generated_tokens = Vec::new();
                 let mut index_pos = 0;
+                // Incremental detokenizer (see query() for rationale).
+                let mut decode_stream = tokenizer.decode_stream(true);
+                let mut full_text = String::new();
 
                 // Prefill
                 let input = Tensor::new(&token_ids[..], &device)
@@ -837,46 +929,35 @@ impl NativeBrain {
                     }
                 }
 
-                generated_tokens.push(next_token);
-
-                let mut decoded_len = 0;
                 let mut skipping_think = false;
 
-                // Helper closure to handle decoding a chunk and yielding/filtering thinking
-                let mut process_and_send =
-                    |generated_tokens: &[u32], skipping_think: &mut bool| -> Result<bool, String> {
-                        let current_text = tokenizer
-                            .decode(generated_tokens, true)
-                            .map_err(|e| format!("Decoding error: {}", e))?;
-
-                        if current_text.len() > decoded_len {
-                            let new_chunk = &current_text[decoded_len..];
-                            decoded_len = current_text.len();
-
-                            // We use the stream-skipping helper for thinking blocks
-                            let mut filtered_chunk = String::new();
-                            for line in new_chunk.split_inclusive('\n') {
-                                if let Some(clean) =
-                                    crate::model_process::strip_thinking_from_stream_line(
-                                        line,
-                                        skipping_think,
-                                    )
-                                {
-                                    filtered_chunk.push_str(&clean);
-                                }
-                            }
-
-                            if !filtered_chunk.is_empty() {
-                                if tx.blocking_send(filtered_chunk).is_err() {
-                                    return Ok(false); // receiver closed
-                                }
-                            }
+                // Send an incremental delta through the thinking-block filter.
+                // Returns false when the receiver has been closed.
+                let send_delta = |delta: &str, skipping_think: &mut bool| -> bool {
+                    let mut filtered_chunk = String::new();
+                    for line in delta.split_inclusive('\n') {
+                        if let Some(clean) = crate::model_process::strip_thinking_from_stream_line(
+                            line,
+                            skipping_think,
+                        ) {
+                            filtered_chunk.push_str(&clean);
                         }
-                        Ok(true)
-                    };
+                    }
+                    if !filtered_chunk.is_empty() {
+                        tx.blocking_send(filtered_chunk).is_ok()
+                    } else {
+                        true
+                    }
+                };
 
-                if !process_and_send(&generated_tokens, &mut skipping_think)? {
-                    return Ok(());
+                if let Some(delta) = decode_stream
+                    .step(next_token)
+                    .map_err(|e| format!("Decode stream error: {}", e))?
+                {
+                    full_text.push_str(&delta);
+                    if !send_delta(&delta, &mut skipping_think) {
+                        return Ok(());
+                    }
                 }
 
                 let timeout_secs = if std::env::var("MIVI_ULTRA_LOW_RAM")
@@ -955,25 +1036,18 @@ impl NativeBrain {
                         }
                     }
 
-                    generated_tokens.push(next_token);
-
-                    // Check if current decoded text ends with any of the stop words
-                    let current_text = tokenizer
-                        .decode(&generated_tokens, true)
-                        .map_err(|e| format!("Decoding error: {}", e))?;
-                    let mut matched_stop = false;
-                    for stop in &t.stop_words {
-                        if current_text.ends_with(stop) {
-                            matched_stop = true;
+                    if let Some(delta) = decode_stream
+                        .step(next_token)
+                        .map_err(|e| format!("Decode stream error: {}", e))?
+                    {
+                        full_text.push_str(&delta);
+                        // Cheap per-token stop-word check on accumulated text.
+                        if t.stop_words.iter().any(|stop| full_text.ends_with(stop)) {
                             break;
                         }
-                    }
-                    if matched_stop {
-                        break;
-                    }
-
-                    if !process_and_send(&generated_tokens, &mut skipping_think)? {
-                        break;
+                        if !send_delta(&delta, &mut skipping_think) {
+                            break;
+                        }
                     }
                 }
                 Ok(())

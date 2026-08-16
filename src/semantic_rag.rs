@@ -17,6 +17,10 @@ pub struct SemanticChunk {
 pub struct SemanticRAG {
     chunks: Arc<Mutex<Vec<SemanticChunk>>>,
     keyword_fallback: crate::rag::TurboVecRAG,
+    /// When false the keyword fallback is shared with the orchestrator's
+    /// TurboVecRAG and must not be re-indexed here (that would duplicate the
+    /// whole workspace chunk store in RAM).
+    owns_keyword: bool,
 }
 
 impl Default for SemanticRAG {
@@ -30,13 +34,24 @@ impl SemanticRAG {
         Self {
             chunks: Arc::new(Mutex::new(Vec::new())),
             keyword_fallback: crate::rag::TurboVecRAG::new(),
+            owns_keyword: true,
+        }
+    }
+
+    /// Build a SemanticRAG that reuses an existing keyword index.
+    pub fn with_keyword_rag(keyword_fallback: crate::rag::TurboVecRAG) -> Self {
+        Self {
+            chunks: Arc::new(Mutex::new(Vec::new())),
+            keyword_fallback,
+            owns_keyword: false,
         }
     }
 
     /// Index a workspace directory for both semantic and keyword retrieval
     pub async fn index_directory(&self, root_dir: &str) {
-        // Also index in keyword fallback
-        self.keyword_fallback.index_directory(root_dir).await;
+        if self.owns_keyword {
+            self.keyword_fallback.index_directory(root_dir).await;
+        }
 
         let path = Path::new(root_dir);
         if !path.exists() {
