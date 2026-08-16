@@ -289,9 +289,18 @@ impl NativeBrain {
         info!("[NativeBrain] Using tokenizer: {:?}", tokenizer_path);
 
         let device = Device::Cpu;
-        let mut file = File::open(model_path).map_err(|e| format!("failed to open GGUF: {}", e))?;
+        let file = File::open(model_path).map_err(|e| format!("failed to open GGUF: {}", e))?;
 
-        let content = candle_core::quantized::gguf_file::Content::read(&mut file)
+        // Read the GGUF through a read-only memory mapping instead of
+        // buffered file reads: the kernel backs the mapping with the page
+        // cache (reclaimable under memory pressure) rather than anonymous
+        // heap, which lowers the load-time RSS peak and OOM risk.
+        // SAFETY: mapping a read-only file that nothing mutates concurrently.
+        let mmap = unsafe { memmap2::Mmap::map(&file) }
+            .map_err(|e| format!("failed to mmap GGUF: {}", e))?;
+        let mut cursor = std::io::Cursor::new(&mmap[..]);
+
+        let content = candle_core::quantized::gguf_file::Content::read(&mut cursor)
             .map_err(|e| format!("failed to read GGUF content: {}", e))?;
 
         let arch = content
@@ -302,7 +311,10 @@ impl NativeBrain {
             .unwrap_or_else(|| "llama".to_string());
         info!("[NativeBrain] GGUF Model Architecture detected: {}", arch);
 
-        let model = QuantizedModel::from_gguf(&arch, content, &mut file, &device)?;
+        let model = QuantizedModel::from_gguf(&arch, content, &mut cursor, &device)?;
+
+        drop(cursor);
+        drop(mmap);
 
         #[cfg(target_os = "linux")]
         {
