@@ -441,6 +441,21 @@ impl EdgeBrain {
         max_tokens: Option<u32>,
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::global();
+        if runtime_config.mode == crate::runtime::RuntimeMode::Spawn {
+            return self
+                .run_cli_spawn(
+                    model_path,
+                    prompt,
+                    system_prompt,
+                    temp,
+                    context_size,
+                    top_p,
+                    seed,
+                    grammar_path,
+                    max_tokens,
+                )
+                .await;
+        }
         if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
             let fut = self.text_worker.query_chat(prompt, system_prompt, temp);
             match fut.await {
@@ -478,8 +493,11 @@ impl EdgeBrain {
     ) -> Result<String, String> {
         let runtime_config = RuntimeConfig::global();
         if runtime_config.uses_worker() && model_path == self.llama_path.as_path() {
-            let fut = self.text_worker.query_chat(prompt, system_prompt, temp);
-            match fut.await {
+            match self
+                .text_worker
+                .query_chat(prompt, system_prompt, temp)
+                .await
+            {
                 Ok(response) => return Ok(response),
                 Err(err) => warn!(
                     "[MIVI-V2 Worker] Falling back to llama-cli after worker error: {}",
@@ -487,7 +505,33 @@ impl EdgeBrain {
                 ),
             }
         }
+        self.run_cli_spawn(
+            model_path,
+            prompt,
+            system_prompt,
+            temp,
+            context_size,
+            top_p,
+            seed,
+            grammar_path,
+            max_tokens,
+        )
+        .await
+    }
 
+    async fn run_cli_spawn(
+        &self,
+        model_path: &Path,
+        prompt: &str,
+        system_prompt: &str,
+        temp: &str,
+        context_size: &str,
+        top_p: Option<f32>,
+        seed: Option<u64>,
+        grammar_path: Option<String>,
+        max_tokens: Option<u32>,
+    ) -> Result<String, String> {
+        let runtime_config = RuntimeConfig::global();
         let t = crate::server::active_chat_template();
 
         // Detect if the prompt is already fully formatted with chat template tokens.
@@ -716,6 +760,7 @@ impl EdgeBrain {
     ) -> Result<String, String> {
         #[cfg(feature = "native")]
         {
+            let runtime_config = RuntimeConfig::global();
             let temp_str = temp.unwrap_or(0.2).to_string();
             let max = max_tokens.unwrap_or(256) as usize;
 
@@ -740,6 +785,26 @@ impl EdgeBrain {
                     prompt_with_hints
                         .push_str("\n\nIMPORTANT: You MUST respond with ONLY a valid JSON object.");
                 }
+            }
+
+            if runtime_config.mode == crate::runtime::RuntimeMode::Spawn {
+                let context_size = cli_context_size(
+                    "MIVI_REASONER_CONTEXT_SIZE",
+                    runtime_config.context.max_input_tokens,
+                );
+                return self
+                    .run_cli_spawn(
+                        &self.llama_path,
+                        &prompt_with_hints,
+                        "",
+                        &temp_str,
+                        &context_size,
+                        top_p,
+                        seed,
+                        grammar_path,
+                        max_tokens,
+                    )
+                    .await;
             }
 
             return self.native.query_raw_prompt(
