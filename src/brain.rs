@@ -262,6 +262,26 @@ fn model_path_from_env(var: &str, default: PathBuf) -> PathBuf {
     env::var(var).map(PathBuf::from).unwrap_or(default)
 }
 
+fn catalog_model_path(
+    base_dir: &Path,
+    role: crate::model_catalog::ModelRole,
+    fallback: PathBuf,
+) -> PathBuf {
+    let Some(catalog) = crate::model_catalog::ModelCatalog::load_default().ok() else {
+        return fallback;
+    };
+    let Some(path) = catalog.default_enabled_path(role) else {
+        return fallback;
+    };
+
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        path
+    } else {
+        base_dir.join(path)
+    }
+}
+
 fn cli_context_size(var: &str, default_tokens: usize) -> String {
     env::var(var)
         .ok()
@@ -339,62 +359,27 @@ impl EdgeBrain {
 
         let models_dir = base_dir.join("models");
 
-        // Note: q2_k quantization is not supported by Candle's GGUF loader (dtype 20).
-        // Stick with q4_k_m which is the smallest supported quantization.
-        let default_reasoner = if cfg!(feature = "native") {
-            if models_dir
-                .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
-                .exists()
-            {
-                "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-            } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
-                "Qwen3-1.7B-Q2_K.gguf"
-            } else {
-                "Llama-3.2-1B-Instruct-IQ3_M.gguf"
-            }
+        // Prefer enabled catalog entries. Keep backend-specific fallbacks for
+        // installations with an incomplete or unavailable catalog.
+        let fallback_reasoner = if cfg!(feature = "native") {
+            models_dir.join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
         } else {
-            if models_dir.join("qwen3-0.6b-q4_k_m.gguf").exists() {
-                "qwen3-0.6b-q4_k_m.gguf"
-            } else if models_dir
-                .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
-                .exists()
-            {
-                "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-            } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
-                "Qwen3-1.7B-Q2_K.gguf"
-            } else {
-                "Llama-3.2-1B-Instruct-IQ3_M.gguf"
-            }
+            models_dir.join("qwen3-0.6b-q4_k_m.gguf")
         };
-        let default_coder = if cfg!(feature = "native") {
-            if models_dir
-                .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
-                .exists()
-            {
-                "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-            } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
-                "Qwen3-1.7B-Q2_K.gguf"
-            } else {
-                "Llama-3.2-1B-Instruct-IQ3_M.gguf"
-            }
-        } else {
-            if models_dir.join("qwen3-0.6b-q4_k_m.gguf").exists() {
-                "qwen3-0.6b-q4_k_m.gguf"
-            } else if models_dir
-                .join("qwen2.5-0.5b-instruct-q4_k_m.gguf")
-                .exists()
-            {
-                "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-            } else if models_dir.join("Qwen3-1.7B-Q2_K.gguf").exists() {
-                "Qwen3-1.7B-Q2_K.gguf"
-            } else {
-                "Llama-3.2-1B-Instruct-IQ3_M.gguf"
-            }
-        };
+        let fallback_coder = fallback_reasoner.clone();
+        let default_reasoner = catalog_model_path(
+            &base_dir,
+            crate::model_catalog::ModelRole::Reasoner,
+            fallback_reasoner,
+        );
+        let default_coder = catalog_model_path(
+            &base_dir,
+            crate::model_catalog::ModelRole::Coder,
+            fallback_coder,
+        );
 
-        let llama_path =
-            model_path_from_env("MIVI_REASONER_MODEL", models_dir.join(default_reasoner));
-        let qwen_path = model_path_from_env("MIVI_CODER_MODEL", models_dir.join(default_coder));
+        let llama_path = model_path_from_env("MIVI_REASONER_MODEL", default_reasoner);
+        let qwen_path = model_path_from_env("MIVI_CODER_MODEL", default_coder);
         let minicpm_path = model_path_from_env(
             "MIVI_VISION_MODEL",
             models_dir.join("MiniCPM-V-4.6-Q4_K_M.gguf"),
@@ -415,6 +400,12 @@ impl EdgeBrain {
             llama_path.clone(),
             &runtime_config,
         )));
+
+        info!(
+            "[MIVI-V2 Models] reasoner={} coder={}",
+            llama_path.display(),
+            qwen_path.display()
+        );
 
         if ultra_low_ram {
             info!("[AIRLLM/COLIBRI MODE] Ultra-Low-RAM mmap streaming active (< 40 MB RAM target)");
