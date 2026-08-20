@@ -208,7 +208,7 @@ fn parameter_score(prompt: &str, parameters: &serde_json::Value) -> f32 {
 }
 
 #[allow(dead_code)]
-fn has_tool_intent(prompt: &str, tools: &[ToolDef]) -> bool {
+pub fn has_tool_intent(prompt: &str, tools: &[ToolDef]) -> bool {
     let text = prompt.to_ascii_lowercase();
 
     // 1. Explicit tool name matching: if the user mentions any of the tool names in their prompt
@@ -241,6 +241,14 @@ fn has_tool_intent(prompt: &str, tools: &[ToolDef]) -> bool {
         "yarn test",
         "cargo test",
         "pytest",
+        "stop the",
+        "cancel the",
+        "delete the",
+        "remove the",
+        "start the",
+        "restart the",
+        "schedule the",
+        "create the",
     ];
 
     intent_phrases.iter().any(|phrase| text.contains(phrase))

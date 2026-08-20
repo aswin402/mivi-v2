@@ -215,12 +215,17 @@ fn extract_math_query(prompt: &str) -> Option<String> {
     }
 
     for prefix in [
+        "what is the result of ",
+        "what's the result of ",
+        "whats the result of ",
         "calculate ",
         "compute ",
         "evaluate ",
         "what is ",
         "what's ",
+        "whats ",
         "how much is ",
+        "how much is the ",
         "solve ",
         "= ",
     ] {
@@ -230,7 +235,7 @@ fn extract_math_query(prompt: &str) -> Option<String> {
         }
     }
     // Reject prompts containing any non-arithmetic words ("prove", "explain", ...).
-    let cleaned = text.trim_end_matches('?').trim();
+    let cleaned = text.trim_end_matches(['?', '.', '!', ' ']).trim();
     if cleaned.is_empty() {
         return None;
     }
@@ -272,6 +277,8 @@ mod tests {
         assert_eq!(try_answer("7-10"), Some("-3".to_string()));
         // Float noise from binary arithmetic must not leak into answers.
         assert_eq!(try_answer("0.1 + 0.2"), Some("0.3".to_string()));
+        assert_eq!(try_answer("whats 4*12"), Some("48".to_string()));
+        assert_eq!(try_answer("whats 4*22."), Some("88".to_string()));
     }
 
     #[test]

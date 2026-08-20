@@ -266,6 +266,11 @@ impl NativeBrain {
             features
         );
 
+        let runtime_config = crate::runtime::RuntimeConfig::global();
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(runtime_config.threads)
+            .build_global();
+
         Self {
             models: Arc::new(Mutex::new(ModelCache::new(model_cache_max_entries()))),
         }
@@ -381,11 +386,7 @@ impl NativeBrain {
 
         let t = crate::server::active_chat_template();
 
-        // Detect if the prompt is already formatted with chat template tokens.
-        let formatted_prompt = if !t.system_prefix.is_empty()
-            && prompt.trim_start().starts_with(t.system_prefix.trim())
-            && prompt.contains(t.assistant_start.trim())
-        {
+        let formatted_prompt = if crate::brain::is_prompt_preformatted(prompt) {
             prompt.to_string()
         } else {
             let (extracted_system, extracted_user) = crate::brain::split_prompt_system_user(prompt);
@@ -896,12 +897,7 @@ impl NativeBrain {
                 let tokenizer = &loaded.tokenizer;
 
                 let t = crate::server::active_chat_template();
-
-                // Detect if the prompt is already formatted with chat template tokens.
-                let formatted_prompt = if !t.system_prefix.is_empty()
-                    && prompt.trim_start().starts_with(t.system_prefix.trim())
-                    && prompt.contains(t.assistant_start.trim())
-                {
+                let formatted_prompt = if crate::brain::is_prompt_preformatted(&prompt) {
                     prompt.to_string()
                 } else {
                     let (extracted_system, extracted_user) =
@@ -998,9 +994,21 @@ impl NativeBrain {
                 *loaded.cached_prefix.lock().unwrap() = token_ids.clone();
 
                 let mut grammar_state = load_grammar_state(&grammar_path);
-                let eos_token_id = tokenizer
-                    .token_to_id("<|im_end|>")
-                    .or_else(|| tokenizer.token_to_id("<|endoftext|>"));
+                let mut eos_token_ids: Vec<u32> = [
+                    "<|im_end|>",
+                    "<|endoftext|>",
+                    "<|im_start|>",
+                    "</s>",
+                    "<eos>",
+                ]
+                .iter()
+                .filter_map(|t| tokenizer.token_to_id(t))
+                .collect();
+                for known_id in [151645, 151643, 151644, 2, 0] {
+                    if !eos_token_ids.contains(&known_id) {
+                        eos_token_ids.push(known_id);
+                    }
+                }
 
                 let vocab_refs: Vec<&str> = loaded.vocab.iter().map(|s| s.as_str()).collect();
 
@@ -1012,7 +1020,7 @@ impl NativeBrain {
                 if let Some(ref mut g_state) = grammar_state {
                     let mut mask = g_state.allowed_tokens(&vocab_refs);
                     if g_state.is_accepting() {
-                        if let Some(eos_id) = eos_token_id {
+                        for &eos_id in &eos_token_ids {
                             if (eos_id as usize) < mask.len() {
                                 mask[eos_id as usize] = true;
                             }
@@ -1040,34 +1048,17 @@ impl NativeBrain {
                     }
                 }
 
-                let mut skipping_think = false;
-
-                // Send an incremental delta through the thinking-block filter.
-                // Returns false when the receiver has been closed.
-                let send_delta = |delta: &str, skipping_think: &mut bool| -> bool {
-                    let mut filtered_chunk = String::new();
-                    for line in delta.split_inclusive('\n') {
-                        if let Some(clean) = crate::model_process::strip_thinking_from_stream_line(
-                            line,
-                            skipping_think,
-                        ) {
-                            filtered_chunk.push_str(&clean);
-                        }
-                    }
-                    if !filtered_chunk.is_empty() {
-                        tx.blocking_send(filtered_chunk).is_ok()
-                    } else {
-                        true
-                    }
-                };
+                let mut filter = crate::model_process::StreamThinkFilter::new(t.stop_words.clone());
 
                 if let Some(delta) = decode_stream
                     .step(next_token)
                     .map_err(|e| format!("Decode stream error: {}", e))?
                 {
                     full_text.push_str(&delta);
-                    if !send_delta(&delta, &mut skipping_think) {
-                        return Ok(());
+                    if let Some(chunk) = filter.push(&delta) {
+                        if tx.blocking_send(chunk).is_err() {
+                            return Ok(());
+                        }
                     }
                 }
 
@@ -1094,10 +1085,8 @@ impl NativeBrain {
                         break;
                     }
 
-                    if let Some(eos_id) = eos_token_id {
-                        if next_token == eos_id {
-                            break;
-                        }
+                    if eos_token_ids.contains(&next_token) {
+                        break;
                     }
 
                     // Single token forward
@@ -1119,7 +1108,7 @@ impl NativeBrain {
                     if let Some(ref mut g_state) = grammar_state {
                         let mut mask = g_state.allowed_tokens(&vocab_refs);
                         if g_state.is_accepting() {
-                            if let Some(eos_id) = eos_token_id {
+                            for &eos_id in &eos_token_ids {
                                 if (eos_id as usize) < mask.len() {
                                     mask[eos_id as usize] = true;
                                 }
@@ -1156,10 +1145,16 @@ impl NativeBrain {
                         if t.stop_words.iter().any(|stop| full_text.ends_with(stop)) {
                             break;
                         }
-                        if !send_delta(&delta, &mut skipping_think) {
-                            break;
+                        if let Some(chunk) = filter.push(&delta) {
+                            if tx.blocking_send(chunk).is_err() {
+                                break;
+                            }
                         }
                     }
+                }
+
+                if let Some(final_chunk) = filter.flush() {
+                    let _ = tx.blocking_send(final_chunk);
                 }
                 Ok(())
             })();

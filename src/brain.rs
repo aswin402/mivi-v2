@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use crate::prompt_file::write_prompt_file;
 use crate::runtime::RuntimeConfig;
 use crate::worker::{WorkerConfig, WorkerManager};
@@ -68,9 +69,27 @@ fn reasoning_directive(prompt: &str) -> &'static str {
     }
 }
 
+pub fn is_prompt_preformatted(prompt: &str) -> bool {
+    let trimmed = prompt.trim_start();
+    if trimmed.contains("<|im_start|>") && trimmed.contains("<|im_start|>assistant") {
+        return true;
+    }
+    let t = crate::server::active_chat_template();
+    if !t.system_prefix.is_empty() && !t.assistant_start.is_empty() {
+        let sys = t.system_prefix.trim();
+        let asst = t.assistant_start.trim();
+        if trimmed.contains(sys) && trimmed.contains(asst) {
+            return true;
+        }
+    }
+    false
+}
+
 fn apply_reasoning_directive(prompt: &str) -> String {
     let trimmed = prompt.trim_start();
     if trimmed.starts_with("/think") || trimmed.starts_with("/no_think") {
+        prompt.to_string()
+    } else if is_prompt_preformatted(prompt) {
         prompt.to_string()
     } else {
         let is_qwen = if let Ok(catalog) = crate::model_catalog::ModelCatalog::load_default() {
@@ -442,136 +461,7 @@ impl EdgeBrain {
             }
         }
 
-        if runtime_config.mode == crate::runtime::RuntimeMode::Spawn {
-            let t = crate::server::active_chat_template();
-
-            // Detect if the prompt is already fully formatted with chat template tokens.
-            // This happens when build_chat_prompt() was used upstream (lightweight chat path).
-            // In that case, pass it directly to llama-cli without re-wrapping to avoid
-            // double-formatting which produces garbled output.
-            let formatted_prompt = if !t.system_prefix.is_empty()
-                && prompt.trim_start().starts_with(t.system_prefix.trim())
-                && prompt.contains(t.assistant_start.trim())
-            {
-                // Already formatted — use as-is.
-                prompt.to_string()
-            } else {
-                // Not formatted — apply chat template.
-                let (extracted_system, extracted_user) = split_prompt_system_user(prompt);
-                let final_system = if extracted_system.is_empty() {
-                    system_prompt.to_string()
-                } else {
-                    extracted_system
-                };
-                let final_user = if extracted_user.is_empty() {
-                    prompt.to_string()
-                } else {
-                    let trimmed = extracted_user.trim();
-                    if let Some(stripped) = trimmed.strip_prefix("Current user request:") {
-                        stripped.trim().to_string()
-                    } else {
-                        trimmed.to_string()
-                    }
-                };
-                format!(
-                    "{}{}{}{}{}{}{}",
-                    t.system_prefix,
-                    final_system,
-                    t.system_suffix,
-                    t.user_prefix,
-                    final_user,
-                    t.user_suffix,
-                    t.assistant_start
-                )
-            };
-
-            let raw_context = cli_context_size(
-                "MIVI_REASONER_CONTEXT_SIZE",
-                runtime_config.context.max_input_tokens,
-            );
-            let eff_context_base =
-                if self.ultra_low_ram && raw_context.parse::<usize>().unwrap_or(3072) > 3072 {
-                    3072
-                } else {
-                    raw_context.parse::<usize>().unwrap_or(3072)
-                };
-            let prompt_tokens = (formatted_prompt.len() / 3) + 256;
-            let final_context = if prompt_tokens > eff_context_base {
-                ((prompt_tokens + 1023) / 1024) * 1024
-            } else {
-                eff_context_base
-            };
-            let final_context_str = final_context.to_string();
-            let ngl_val = if self.ultra_low_ram { "0" } else { "999" };
-
-            let prompt_file = write_prompt_file(&formatted_prompt).await?;
-            let mut cmd = tokio::process::Command::new(&self.llama_cli);
-            cmd.arg("-m").arg(model_path);
-            cmd.arg("-ngl").arg(ngl_val);
-            cmd.arg("-c").arg(&final_context_str);
-            cmd.arg("-fa").arg("on");
-            cmd.arg("-ctk").arg(&runtime_config.kv_cache_type);
-            cmd.arg("-ctv").arg(&runtime_config.kv_cache_type);
-
-            if let Some(ref draft_path) = runtime_config.draft_model {
-                if std::path::Path::new(draft_path).exists() {
-                    cmd.arg("--model-draft").arg(draft_path);
-                    cmd.arg("--gpu-layers-draft").arg(ngl_val);
-                }
-            }
-
-            cmd.arg("-f").arg(&prompt_file);
-            cmd.arg("--temp").arg(temp);
-            cmd.arg("--simple-io");
-            cmd.arg("--no-display-prompt");
-            cmd.arg("-st");
-            cmd.arg("-t").arg(runtime_config.threads.to_string());
-            cmd.arg("-tb").arg(runtime_config.threads.to_string());
-
-            if let Some(mt) = max_tokens {
-                cmd.arg("-n").arg(mt.to_string());
-            }
-
-            if self.ultra_low_ram {
-                cmd.arg("--mmap");
-            }
-            if let Some(tp) = top_p {
-                cmd.arg("--top-p").arg(tp.to_string());
-            }
-            if let Some(sd) = seed {
-                cmd.arg("--seed").arg(sd.to_string());
-            }
-            if let Some(ref path) = grammar_path {
-                if std::path::Path::new(path).exists() {
-                    cmd.arg("--grammar-file").arg(path);
-                }
-            }
-
-            let output = match command_output_with_timeout(cmd, cli_timeout()).await {
-                Ok(output) => output,
-                Err(e) => {
-                    let _ = std::fs::remove_file(&prompt_file);
-                    return Err(e);
-                }
-            };
-            let _ = std::fs::remove_file(&prompt_file);
-
-            #[cfg(target_os = "linux")]
-            if self.ultra_low_ram {
-                if let Ok(file) = std::fs::File::open(model_path) {
-                    use std::os::unix::io::AsRawFd;
-                    let fd = file.as_raw_fd();
-                    unsafe {
-                        libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
-                    }
-                }
-            }
-
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            return Ok(clean_llama_cli_response(&stdout));
-        }
-
-        let max_val = max_tokens.unwrap_or(512) as usize;
+        let max_val = max_tokens.unwrap_or(256) as usize;
         self.native.query(
             model_path,
             prompt,
@@ -610,10 +500,7 @@ impl EdgeBrain {
         let t = crate::server::active_chat_template();
 
         // Detect if the prompt is already fully formatted with chat template tokens.
-        let formatted_prompt = if !t.system_prefix.is_empty()
-            && prompt.trim_start().starts_with(t.system_prefix.trim())
-            && prompt.contains(t.assistant_start.trim())
-        {
+        let formatted_prompt = if is_prompt_preformatted(prompt) {
             prompt.to_string()
         } else {
             let (extracted_system, extracted_user) = split_prompt_system_user(prompt);
@@ -836,55 +723,46 @@ impl EdgeBrain {
         json_schema: Option<String>,
         grammar_path: Option<String>,
     ) -> Result<String, String> {
-        let runtime_config = RuntimeConfig::global();
+        #[cfg(feature = "native")]
+        {
+            let temp_str = temp.unwrap_or(0.2).to_string();
+            let max = max_tokens.unwrap_or(256) as usize;
 
-        let run_native = if cfg!(feature = "native") {
-            runtime_config.mode != crate::runtime::RuntimeMode::Spawn
-        } else {
-            false
-        };
-
-        if run_native {
-            #[cfg(feature = "native")]
-            {
-                let temp_str = temp.unwrap_or(0.2).to_string();
-                let max = max_tokens.unwrap_or(512) as usize;
-
-                let mut prompt_with_hints = prompt.to_string();
-                if let Some(ref schema) = json_schema {
-                    prompt_with_hints.push_str(&format!(
-                        "\n\nIMPORTANT: You MUST respond ONLY with a JSON object matching this schema:\n{}",
-                        schema
-                    ));
-                } else if let Some(ref path) = grammar_path {
-                    if path.contains("openai_tool_call") {
-                        prompt_with_hints.push_str(
-                            "\n\nIMPORTANT: You MUST respond with ONLY a JSON object in this exact format:\n\
-                            {\"tool_calls\": [{\"id\": \"call_abc123\", \"type\": \"function\", \"function\": {\"name\": \"function_name\", \"arguments\": \"{\\\"arg_name\\\": \\\"value\\\"}\"}}]}"
-                        );
-                    } else if path.contains("hermes_tool_call") {
-                        prompt_with_hints.push_str(
-                            "\n\nIMPORTANT: You MUST respond with ONLY a tool call in this exact format:\n\
-                            <tool_call>{\"name\": \"function_name\", \"arguments\": {\"arg_name\": \"value\"}}</tool_call>"
-                        );
-                    } else if path.contains("json_object") {
-                        prompt_with_hints.push_str(
-                            "\n\nIMPORTANT: You MUST respond with ONLY a valid JSON object.",
-                        );
-                    }
+            let mut prompt_with_hints = prompt.to_string();
+            if let Some(ref schema) = json_schema {
+                prompt_with_hints.push_str(&format!(
+                    "\n\nIMPORTANT: You MUST respond ONLY with a JSON object matching this schema:\n{}",
+                    schema
+                ));
+            } else if let Some(ref path) = grammar_path {
+                if path.contains("openai_tool_call") {
+                    prompt_with_hints.push_str(
+                        "\n\nIMPORTANT: You MUST respond with ONLY a JSON object in this exact format:\n\
+                        {\"tool_calls\": [{\"id\": \"call_abc123\", \"type\": \"function\", \"function\": {\"name\": \"function_name\", \"arguments\": \"{\\\"arg_name\\\": \\\"value\\\"}\"}}]}"
+                    );
+                } else if path.contains("hermes_tool_call") {
+                    prompt_with_hints.push_str(
+                        "\n\nIMPORTANT: You MUST respond with ONLY a tool call in this exact format:\n\
+                        <tool_call>{\"name\": \"function_name\", \"arguments\": {\"arg_name\": \"value\"}}</tool_call>"
+                    );
+                } else if path.contains("json_object") {
+                    prompt_with_hints
+                        .push_str("\n\nIMPORTANT: You MUST respond with ONLY a valid JSON object.");
                 }
-
-                return self.native.query_raw_prompt(
-                    &self.llama_path,
-                    &prompt_with_hints,
-                    &temp_str,
-                    max,
-                    grammar_path,
-                );
             }
+
+            return self.native.query_raw_prompt(
+                &self.llama_path,
+                &prompt_with_hints,
+                &temp_str,
+                max,
+                grammar_path,
+            );
         }
 
+        #[cfg(not(feature = "native"))]
         {
+            let runtime_config = RuntimeConfig::global();
             let raw_context = cli_context_size(
                 "MIVI_REASONER_CONTEXT_SIZE",
                 runtime_config.context.max_input_tokens,
@@ -921,23 +799,20 @@ impl EdgeBrain {
             }
 
             cmd.arg("-f").arg(&prompt_file);
+            let temp_str = temp.unwrap_or(0.2).to_string();
+            cmd.arg("--temp").arg(&temp_str);
             cmd.arg("-t").arg(runtime_config.threads.to_string());
             cmd.arg("-tb").arg(runtime_config.threads.to_string());
 
-            let temp_str = temp.unwrap_or(0.2).to_string();
-            cmd.arg("--temp").arg(&temp_str);
+            if let Some(mt) = max_tokens {
+                cmd.arg("-n").arg(mt.to_string());
+            }
 
             if let Some(tp) = top_p {
                 cmd.arg("--top-p").arg(tp.to_string());
             }
-            if let Some(mt) = max_tokens {
-                cmd.arg("-n").arg(mt.to_string());
-            }
             if let Some(sd) = seed {
                 cmd.arg("--seed").arg(sd.to_string());
-            }
-            if let Some(ref schema) = json_schema {
-                cmd.arg("--json-schema").arg(schema);
             }
             if let Some(ref path) = grammar_path {
                 if std::path::Path::new(path).exists() {

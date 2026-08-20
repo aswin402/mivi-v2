@@ -227,10 +227,7 @@ impl WorkerManager {
 
         // Detect if the prompt is already formatted with chat template tokens.
         let t = crate::server::active_chat_template();
-        let (final_system, final_user) = if !t.system_prefix.is_empty()
-            && prompt.trim_start().starts_with(t.system_prefix.trim())
-            && prompt.contains(t.assistant_start.trim())
-        {
+        let (final_system, final_user) = if crate::brain::is_prompt_preformatted(prompt) {
             // Pre-formatted: extract content from within template tokens.
             // Strip the template markers to get raw system/user content for the worker API.
             let sys_prefix = t.system_prefix.trim();

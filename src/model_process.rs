@@ -45,6 +45,123 @@ fn find_marker_case_insensitive(text: &str, markers: &[&str]) -> Option<(usize, 
         .min_by_key(|(index, _)| *index)
 }
 
+const THINK_START_TAGS: &[&str] = &["<think>", "[start thinking]", "[think]"];
+const THINK_END_TAGS: &[&str] = &["</think>", "[end thinking]", "[/think]"];
+
+#[derive(Debug, Clone)]
+pub struct StreamThinkFilter {
+    buffer: String,
+    inside_think: bool,
+    active_stop_words: Vec<String>,
+}
+
+impl StreamThinkFilter {
+    pub fn new(stop_words: Vec<String>) -> Self {
+        Self {
+            buffer: String::new(),
+            inside_think: false,
+            active_stop_words: stop_words,
+        }
+    }
+
+    pub fn push(&mut self, delta: &str) -> Option<String> {
+        self.buffer.push_str(delta);
+
+        let mut ready_to_emit = String::new();
+
+        loop {
+            if self.inside_think {
+                let lower = self.buffer.to_ascii_lowercase();
+                let mut found_end = None;
+                for tag in THINK_END_TAGS {
+                    if let Some(pos) = lower.find(tag) {
+                        found_end = Some((pos, tag.len()));
+                        break;
+                    }
+                }
+                if let Some((pos, len)) = found_end {
+                    self.buffer.drain(..pos + len);
+                    self.inside_think = false;
+                    continue;
+                }
+                if self.buffer.len() > 30 {
+                    let keep_len = 16.min(self.buffer.len());
+                    let drain_len = self.buffer.len() - keep_len;
+                    self.buffer.drain(..drain_len);
+                }
+                break;
+            } else {
+                let lower = self.buffer.to_ascii_lowercase();
+                let mut start_marker = None;
+                for tag in THINK_START_TAGS {
+                    if let Some(pos) = lower.find(tag) {
+                        start_marker = Some((pos, tag.len()));
+                        break;
+                    }
+                }
+
+                if let Some((pos, len)) = start_marker {
+                    let before = self.buffer[..pos].to_string();
+                    self.buffer.drain(..pos + len);
+                    self.inside_think = true;
+                    ready_to_emit.push_str(&before);
+                    continue;
+                }
+
+                // Check if buffer ends with a prefix of any start tag (e.g. "<", "<th", "[", "[st")
+                let max_match = THINK_START_TAGS
+                    .iter()
+                    .filter_map(|tag| (1..tag.len()).filter(|&l| lower.ends_with(&tag[..l])).max())
+                    .max()
+                    .unwrap_or(0);
+
+                if max_match > 0 {
+                    let safe_len = self.buffer.len().saturating_sub(max_match);
+                    let emit_part = self.buffer[..safe_len].to_string();
+                    self.buffer.drain(..safe_len);
+                    ready_to_emit.push_str(&emit_part);
+                    break;
+                } else {
+                    ready_to_emit.push_str(&self.buffer);
+                    self.buffer.clear();
+                    break;
+                }
+            }
+        }
+
+        for stop in &self.active_stop_words {
+            if !stop.is_empty() {
+                ready_to_emit = ready_to_emit.replace(stop, "");
+            }
+        }
+
+        if ready_to_emit.is_empty() {
+            None
+        } else {
+            Some(ready_to_emit)
+        }
+    }
+
+    pub fn flush(&mut self) -> Option<String> {
+        if self.inside_think {
+            self.buffer.clear();
+            None
+        } else {
+            let mut out = std::mem::take(&mut self.buffer);
+            for stop in &self.active_stop_words {
+                if !stop.is_empty() {
+                    out = out.replace(stop, "");
+                }
+            }
+            if out.is_empty() {
+                None
+            } else {
+                Some(out)
+            }
+        }
+    }
+}
+
 pub(crate) fn strip_thinking_from_stream_line(
     line: &str,
     skipping_think: &mut bool,

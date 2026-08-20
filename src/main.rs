@@ -65,6 +65,9 @@ async fn main() {
     // to limit Candle/native inference CPU usage and prevent laptop lags
     let runtime_config = mivi::runtime::RuntimeConfig::global();
     std::env::set_var("RAYON_NUM_THREADS", runtime_config.threads.to_string());
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(runtime_config.threads)
+        .build_global();
 
     let args: Vec<String> = env::args().collect();
     let mode = args.get(1).map(|s| s.as_str()).unwrap_or("serve");

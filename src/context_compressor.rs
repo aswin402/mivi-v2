@@ -320,10 +320,15 @@ pub fn compress_request_messages(
         return compressed;
     }
 
-    // 1. Keep all system messages
+    // 1. Keep system messages, but bound them to the system slice. OpenZ
+    // agents can send very large instruction envelopes that must not reach
+    // tokenization or native inference unbounded.
     for msg in messages {
         if msg.role == "system" {
-            compressed.push(msg.clone());
+            let mut bounded = msg.clone();
+            let text = message_text(msg);
+            bounded.content = serde_json::json!(truncate_chars(&text, budget.system_tokens * 4));
+            compressed.push(bounded);
         }
     }
 
@@ -442,6 +447,26 @@ mod tests {
             .tool_observations
             .iter()
             .any(|turn| turn.contains("No such file")));
+    }
+
+    #[test]
+    fn bounds_large_system_messages_to_context_budget() {
+        let messages = vec![
+            msg("system", &"system instruction ".repeat(10_000)),
+            msg("user", "hii"),
+        ];
+        let budget = ContextBudget::from_max_input_tokens(1024);
+
+        let compressed = compress_request_messages(&messages, budget);
+        let system = compressed
+            .iter()
+            .find(|message| message.role == "system")
+            .expect("system message should be preserved");
+
+        assert!(
+            message_text(system).chars().count() <= budget.system_tokens * 4,
+            "system message exceeded the configured context slice"
+        );
     }
 
     #[test]

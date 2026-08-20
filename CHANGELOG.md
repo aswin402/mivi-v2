@@ -5,6 +5,18 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.14] - 2026-08-20
+
+### Fixed
+
+* Bound oversized OpenZ system prompts before tokenization and native inference, preventing long stalls and memory spikes from unbounded agent instruction envelopes.
+* Prevented OpenAI-compatible tool catalogs from forcing tool generation for ordinary chat requests.
+* Preserved explicit tool/action routing for web research, inventory requests, and actions such as stopping or removing scheduled jobs.
+
+### Added
+
+* Added a laptop-friendly justfile launcher with low-RAM server, traced server, normal server, test, build, and compatibility-check recipes.
+
 ## [v0.0.13] - 2026-08-14
 
 ### 🦀 Phase 11–14: Knowledge-Lean Sub-1B, Hybrid Semantic RAG & Claude Code Adapter (COMPLETE)

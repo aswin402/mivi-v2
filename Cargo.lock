@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "mivi"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "axum",
  "bytes",
@@ -1348,6 +1348,7 @@ dependencies = [
  "inquire",
  "libc",
  "memmap2",
+ "rayon",
  "regex",
  "reqwest",
  "schoolmarm",

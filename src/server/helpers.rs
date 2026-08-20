@@ -34,7 +34,7 @@ use crate::orchestrator::AgentOrchestrator;
 use crate::retrieval::{build_retrieval_pack_with_sources, should_include_workspace_rag};
 use crate::router::NeedleRouter;
 use crate::runtime::RuntimeConfig;
-use crate::tool_filter::filter_tools;
+use crate::tool_filter::{filter_tools, has_tool_intent};
 use crate::trace::{preview as trace_preview, trace_event, TraceConfig};
 
 use crate::server::types::*;
@@ -692,7 +692,6 @@ pub fn agent_contract_prompt_for_tools_with_persona(
     let mut lines = vec![
         "Agent contract:".to_string(),
         "- External model identity is `mivi`; do not expose internal worker names.".to_string(),
-        "- Adopt the role and persona defined in 'System instructions' to answer the user's request directly.".to_string(),
     ];
 
     if let Some(p) = persona {
@@ -703,7 +702,8 @@ pub fn agent_contract_prompt_for_tools_with_persona(
         lines.push("- The calling agent supplies the authoritative instructions, tools, skills, memory, database/context, and retrieved facts.".to_string());
         lines.push("- Use only capabilities present in the current request or context; do not invent agent features.".to_string());
         lines.push("- Prefer available introspection/inventory tools for capability questions; otherwise summarize received tool schemas.".to_string());
-        lines.push("- For tool use, choose the smallest relevant tool set and return valid tool-call JSON when a tool is required.".to_string());
+        lines.push("- For tool use, choose the smallest relevant tool set and return valid tool-call JSON only when a tool is required.".to_string());
+        lines.push("- For conversational messages, greetings, or questions that do not need tools, respond directly in plain text without making tool calls.".to_string());
 
         let mut names = tool_names(tools);
         names.sort_unstable();
@@ -723,6 +723,7 @@ pub fn agent_contract_prompt_for_tools_with_persona(
         ));
     } else {
         lines.push("- Current prompt exposes no selected callable tool schemas.".to_string());
+        lines.push("- Respond directly in natural, helpful plain text.".to_string());
     }
 
     lines.join("\n")
@@ -745,7 +746,7 @@ pub fn build_function_list_block(tools: &[ToolDef]) -> String {
     let tools_json = serde_json::to_string_pretty(tools).unwrap_or_else(|_| "[]".to_string());
 
     block.push_str(&format!(
-        "\n<tools>\n{}\n</tools>\n\nTo call a tool, respond with <tool_call>{{\"name\": \"tool_name\", \"arguments\": {{...}}}}</tool_call> or {{\"tool_calls\": [...]}}.\n",
+        "\n# Tools\n\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{}\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call>\n\nIf no tool call is needed, answer the user directly in plain text.\n",
         tools_json
     ));
 
@@ -821,11 +822,7 @@ pub fn agent_reasoning_summary(
         return None;
     }
 
-    if !has_tool_involvement(req)
-        && route != "verified_tools"
-        && route != "tool_calls"
-        && route != "tool_text_fallback"
-    {
+    if route != "verified_tools" && route != "tool_calls" && route != "tool_text_fallback" {
         return None;
     }
 
@@ -1919,9 +1916,14 @@ pub fn has_tool_involvement(req: &ChatCompletionRequest) -> bool {
     }
 }
 
-/// Check if the request should proceed to the tool-calling generator or if it is simple chat.
-pub fn should_use_tool_path(req: &ChatCompletionRequest, _latest_user_prompt: &str) -> bool {
-    if !has_tool_involvement(req) {
+/// Decide whether tool generation is justified by the request, rather than
+/// merely by the presence of an OpenAI-compatible tools catalog.
+pub fn should_generate_tool_calls(
+    req: &ChatCompletionRequest,
+    latest_user_prompt: &str,
+    selection: &ToolSelection,
+) -> bool {
+    if !has_tool_involvement(req) || selection.selected.is_empty() {
         return false;
     }
 
@@ -1934,14 +1936,24 @@ pub fn should_use_tool_path(req: &ChatCompletionRequest, _latest_user_prompt: &s
         }
     }
 
-    if let Some(tools) = &req.tools {
-        if !tools.is_empty() {
-            let selection = select_tools_for_request(req);
-            return !selection.selected.is_empty() || selection.intent.is_inventory();
-        }
+    if matches!(req.tool_choice, Some(serde_json::Value::Object(_))) {
+        return true;
     }
 
-    false
+    if selection.intent == AgentIntent::ToolCall || selection.intent.is_inventory() {
+        return true;
+    }
+
+    req.tools
+        .as_deref()
+        .map(|tools| has_tool_intent(latest_user_prompt, tools))
+        .unwrap_or(false)
+}
+
+/// Check if the request should proceed to the tool-calling generator or if it is simple chat.
+pub fn should_use_tool_path(req: &ChatCompletionRequest, latest_user_prompt: &str) -> bool {
+    let selection = select_tools_for_request(req);
+    should_generate_tool_calls(req, latest_user_prompt, &selection)
 }
 
 // ──────────────────────────────────────────────
@@ -2404,11 +2416,10 @@ pub async fn complete_chat_non_stream(
     // applies when the caller supplies no tools, the last message is a plain
     // text user turn (no images / tool results to consider), and the whole
     // prompt parses as arithmetic.
-    let math_eligible = req.tools.as_ref().map_or(true, |t| t.is_empty())
-        && req
-            .messages
-            .last()
-            .map_or(false, |m| m.role == "user" && m.content.is_string());
+    let math_eligible = req
+        .messages
+        .last()
+        .map_or(false, |m| m.role == "user" && m.content.is_string());
     if math_eligible {
         if let Some(answer) = crate::math_eval::try_answer(&latest_user_prompt_text(&req)) {
             let final_text = apply_response_format(answer, &req)?;
@@ -2836,16 +2847,20 @@ pub async fn handle_responses_streaming(
     let brain = state.brain.clone();
     let system_prompt = wrap_agent_prompt(MIVI_CHAT_SYSTEM_PROMPT, "");
     let t = active_chat_template();
-    let formatted = format!(
-        "{}{}{}{}{}{}{}",
-        t.system_prefix,
-        system_prompt,
-        t.system_suffix,
-        t.user_prefix,
-        model_user_prompt,
-        t.user_suffix,
-        t.assistant_start
-    );
+    let formatted = if crate::brain::is_prompt_preformatted(&model_user_prompt) {
+        model_user_prompt.clone()
+    } else {
+        format!(
+            "{}{}{}{}{}{}{}",
+            t.system_prefix,
+            system_prompt,
+            t.system_suffix,
+            t.user_prefix,
+            model_user_prompt,
+            t.user_suffix,
+            t.assistant_start
+        )
+    };
 
     let cli_path = brain.llama_cli.to_str().unwrap_or("llama-cli").to_string();
     let model_path = brain.llama_path.to_str().unwrap_or("").to_string();
@@ -3247,14 +3262,67 @@ pub async fn handle_chat_completions(
         }
     }
 
+    // Deterministic arithmetic fast path: pure math prompts ("2+2",
+    // "17% of 3482", "whats 4*12") are answered exactly without loading the model.
+    // Checked before tool calling so agent requests with math don't trigger tool calls.
+    let (user_prompt, image_path) = extract_content(&req);
+    let math_eligible = image_path.is_none()
+        && req
+            .messages
+            .last()
+            .map_or(false, |m| m.role == "user" && m.content.is_string());
+    if math_eligible {
+        if let Some(answer) = crate::math_eval::try_answer(&user_prompt) {
+            let _ = trace_event(
+                &trace,
+                serde_json::json!({
+                    "kind": "final_response",
+                    "route": "math_fast_path",
+                    "finish_reason": "stop",
+                    "response_chars": answer.chars().count()
+                }),
+            );
+            if req.stream.unwrap_or(false) {
+                return stream_text_response(
+                    answer.clone(),
+                    now,
+                    None,
+                    include_usage.then(|| estimated_usage_for_text(&req, &answer)),
+                    permit,
+                )
+                .into_response();
+            }
+            return Json(ChatCompletionResponse {
+                id: format!("chatcmpl-v2-{}", now),
+                object: "chat.completion".to_string(),
+                created: now,
+                model: MODEL_NAME.to_string(),
+                usage: Some(estimated_usage_for_text(&req, &answer)),
+                choices: vec![ChoiceOut {
+                    index: 0,
+                    message: ChatMessageOut {
+                        role: "assistant".to_string(),
+                        content: answer,
+                        refusal: None,
+                        reasoning_content: None,
+                        tool_calls: None,
+                    },
+                    logprobs: None,
+                    finish_reason: "stop".to_string(),
+                }],
+                system_fingerprint: Some("fp_mivi".to_string()),
+            })
+            .into_response();
+        }
+    }
+
     let tool_selection = select_tools_for_request(&req);
     let selected_tool_names = tool_names(&tool_selection.selected);
     let selected_tool_roles = selected_tool_roles(&tool_selection.selected);
     let blocked_tools = blocked_tool_names(&tool_selection.blocked);
     // Use already-computed tool_selection instead of calling should_use_tool_path
     // (which internally calls select_tools_for_request again)
-    let has_tools = has_tool_involvement(&req)
-        && (!tool_selection.selected.is_empty() || tool_selection.intent.is_inventory());
+    let has_tools = should_generate_tool_calls(&req, &latest_user_prompt, &tool_selection);
     let _ = trace_event(
         &trace,
         serde_json::json!({
@@ -3386,63 +3454,6 @@ pub async fn handle_chat_completions(
     }
 
     // ── Non-tool path (existing logic) ───────────────────────────────
-    let (user_prompt, image_path) = extract_content(&req);
-
-    // Deterministic arithmetic fast path: pure math prompts ("2+2",
-    // "17% of 3482") are answered exactly without loading the model. Only
-    // applies when the caller supplies no tools and the last message is a
-    // plain text user turn (no images / tool results to consider).
-    let math_eligible = req.tools.as_ref().map_or(true, |t| t.is_empty())
-        && image_path.is_none()
-        && req
-            .messages
-            .last()
-            .map_or(false, |m| m.role == "user" && m.content.is_string());
-    if math_eligible {
-        if let Some(answer) = crate::math_eval::try_answer(&user_prompt) {
-            let _ = trace_event(
-                &trace,
-                serde_json::json!({
-                    "kind": "final_response",
-                    "route": "math_fast_path",
-                    "finish_reason": "stop",
-                    "response_chars": answer.chars().count()
-                }),
-            );
-            if req.stream.unwrap_or(false) {
-                return stream_text_response(
-                    answer.clone(),
-                    now,
-                    None,
-                    include_usage.then(|| estimated_usage_for_text(&req, &answer)),
-                    permit,
-                )
-                .into_response();
-            }
-            return Json(ChatCompletionResponse {
-                id: format!("chatcmpl-v2-{}", now),
-                object: "chat.completion".to_string(),
-                created: now,
-                model: MODEL_NAME.to_string(),
-                usage: Some(estimated_usage_for_text(&req, &answer)),
-                choices: vec![ChoiceOut {
-                    index: 0,
-                    message: ChatMessageOut {
-                        role: "assistant".to_string(),
-                        content: answer,
-                        refusal: None,
-                        reasoning_content: None,
-                        tool_calls: None,
-                    },
-                    logprobs: None,
-                    finish_reason: "stop".to_string(),
-                }],
-                system_fingerprint: Some("fp_mivi".to_string()),
-            })
-            .into_response();
-        }
-    }
-
     let (intent, confidence) = state
         .router
         .classify_intent(&state.brain, &user_prompt)
@@ -3893,6 +3904,29 @@ pub fn stream_text_response(
     Sse::new(mapped_stream)
 }
 
+fn worker_stream_content_delta(value: &serde_json::Value) -> Option<&str> {
+    value
+        .get("content")
+        .and_then(|content| content.as_str())
+        .or_else(|| {
+            value
+                .get("choices")
+                .and_then(|choices| choices.as_array())
+                .and_then(|choices| choices.first())
+                .and_then(|choice| choice.get("delta"))
+                .and_then(|delta| delta.get("content"))
+                .and_then(|content| content.as_str())
+        })
+        .or_else(|| {
+            value
+                .get("choices")
+                .and_then(|choices| choices.as_array())
+                .and_then(|choices| choices.first())
+                .and_then(|choice| choice.get("text"))
+                .and_then(|text| text.as_str())
+        })
+}
+
 // ──────────────────────────────────────────────
 // SSE streaming handler
 // ──────────────────────────────────────────────
@@ -3918,16 +3952,20 @@ pub async fn handle_streaming(
     let brain = state.brain.clone();
     let system_prompt = wrap_agent_prompt(MIVI_CHAT_SYSTEM_PROMPT, "");
     let t = active_chat_template();
-    let formatted = format!(
-        "{}{}{}{}{}{}{}",
-        t.system_prefix,
-        system_prompt,
-        t.system_suffix,
-        t.user_prefix,
-        user_prompt,
-        t.user_suffix,
-        t.assistant_start
-    );
+    let formatted = if crate::brain::is_prompt_preformatted(&user_prompt) {
+        user_prompt.clone()
+    } else {
+        format!(
+            "{}{}{}{}{}{}{}",
+            t.system_prefix,
+            system_prompt,
+            t.system_suffix,
+            t.user_prefix,
+            user_prompt,
+            t.user_suffix,
+            t.assistant_start
+        )
+    };
 
     let cli_path = brain.llama_cli.to_str().unwrap_or("llama-cli").to_string();
     let model_path = brain.llama_path.to_str().unwrap_or("").to_string();
@@ -3966,13 +4004,12 @@ pub async fn handle_streaming(
     let grammar_path_for_spawn = grammar_path.clone();
     // Deterministic arithmetic fast path (see complete_chat_non_stream):
     // pure math prompts stream the exact answer without a model call.
-    let math_answer = if req.tools.as_ref().map_or(true, |t| t.is_empty())
-        && req
-            .messages
-            .last()
-            .map_or(false, |m| m.role == "user" && m.content.is_string())
+    let math_answer = if req
+        .messages
+        .last()
+        .map_or(false, |m| m.role == "user" && m.content.is_string())
     {
-        crate::math_eval::try_answer(&user_prompt)
+        crate::math_eval::try_answer(&latest_user_prompt_text(&req))
     } else {
         None
     };
@@ -4027,9 +4064,7 @@ pub async fn handle_streaming(
                                     }
                                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(data)
                                     {
-                                        if let Some(token) =
-                                            val.get("content").and_then(|c| c.as_str())
-                                        {
+                                        if let Some(token) = worker_stream_content_delta(&val) {
                                             if !token.is_empty() {
                                                 emitted = true;
                                                 if tx.send(token.to_string()).await.is_err() {
@@ -4042,12 +4077,17 @@ pub async fn handle_streaming(
                             }
                         }
                     }
-                    return;
+                    if emitted {
+                        return;
+                    }
                 }
                 Err(err) => {
                     error!("Failed to query completion stream from worker: {}", err);
                 }
             }
+        }
+
+        if !emitted {
             let run_native = if cfg!(feature = "native") {
                 runtime_config.mode != crate::runtime::RuntimeMode::Spawn
             } else {
@@ -4059,7 +4099,7 @@ pub async fn handle_streaming(
                 {
                     match brain.native.query_stream(
                         std::path::Path::new(&model_path),
-                        &fallback_user_prompt,
+                        &formatted,
                         &system_prompt,
                         &temp_str,
                         req_max_tokens.unwrap_or(512) as usize,
@@ -4108,7 +4148,11 @@ pub async fn handle_streaming(
         }
 
         if !emitted {
-            let fallback_prompt = wrap_agent_prompt(MIVI_CHAT_SYSTEM_PROMPT, &fallback_user_prompt);
+            let fallback_prompt = if crate::brain::is_prompt_preformatted(&fallback_user_prompt) {
+                fallback_user_prompt
+            } else {
+                wrap_agent_prompt(MIVI_CHAT_SYSTEM_PROMPT, &fallback_user_prompt)
+            };
             if let Ok(fallback) = brain
                 .query_reasoner(&fallback_prompt, MIVI_CHAT_SYSTEM_PROMPT)
                 .await
@@ -4122,13 +4166,7 @@ pub async fn handle_streaming(
     });
 
     let reasoning_chunk = futures::stream::iter(
-        reasoning_summary_enabled()
-            .then(|| {
-                format!(
-                    "Classified request as chat; route streaming; using agent-provided instructions and context; prompt: {}.",
-                    trace_preview(&user_prompt, 96)
-                )
-            })
+        agent_reasoning_summary(req, &user_prompt, "streaming")
             .into_iter()
             .map({
                 let id = id.clone();
@@ -4210,7 +4248,7 @@ pub async fn handle_streaming(
     let done_marker =
         futures::stream::once(async { Ok::<_, Infallible>(Event::default().data("[DONE]")) });
 
-    let include_preamble = !uses_worker;
+    let include_preamble = true;
     let preamble_stream = futures::stream::iter(include_preamble.then({
         let id = id.clone();
         move || {
@@ -4989,6 +5027,49 @@ mod tests {
     }
 
     #[test]
+    pub fn auto_tools_do_not_force_generation_for_general_chat() {
+        let mut req = tool_request("hey whats new", None);
+        req.tools = Some(vec![
+            server_tool("schedule_job", "Schedule a recurring job"),
+            server_tool("create_subagent", "Create a subagent"),
+        ]);
+
+        assert!(!should_use_tool_path(&req, "hey whats new"));
+    }
+
+    #[test]
+    pub fn chat_intent_does_not_call_selected_auto_tools() {
+        let req = tool_request("hey whats new", None);
+        let selection = ToolSelection {
+            intent: AgentIntent::Chat,
+            selected: vec![server_tool("schedule_job", "Schedule a recurring job")],
+            blocked: Vec::new(),
+        };
+
+        assert!(!should_generate_tool_calls(
+            &req,
+            "hey whats new",
+            &selection
+        ));
+    }
+
+    #[test]
+    pub fn explicit_stop_request_can_call_selected_tool() {
+        let req = tool_request("stop the cron job", None);
+        let selection = ToolSelection {
+            intent: AgentIntent::Chat,
+            selected: vec![server_tool("remove_job", "Remove a scheduled job")],
+            blocked: Vec::new(),
+        };
+
+        assert!(should_generate_tool_calls(
+            &req,
+            "stop the cron job",
+            &selection
+        ));
+    }
+
+    #[test]
     pub fn code_capability_question_does_not_enter_tool_generation() {
         let mut req = tool_request("so is u can write codes", None);
         req.tools = Some(vec![server_tool("write", "Write a file to the workspace")]);
@@ -5693,6 +5774,40 @@ Hello!"
         ];
 
         assert!(has_tool_involvement(&req));
+    }
+
+    #[test]
+    pub fn worker_stream_content_delta_reads_llama_completion_content() {
+        let chunk = json!({"content":"hello"});
+
+        assert_eq!(worker_stream_content_delta(&chunk), Some("hello"));
+    }
+
+    #[test]
+    pub fn worker_stream_content_delta_reads_openai_delta_content() {
+        let chunk = json!({
+            "choices": [{
+                "index": 0,
+                "delta": {"content": "hello"},
+                "finish_reason": null
+            }]
+        });
+
+        assert_eq!(worker_stream_content_delta(&chunk), Some("hello"));
+    }
+
+    #[test]
+    pub fn text_stream_chunks_start_with_assistant_role() {
+        let chunks = text_stream_chunks(
+            "chatcmpl-test".to_string(),
+            123,
+            None,
+            "hello".to_string(),
+            None,
+        );
+
+        assert_eq!(chunks[0]["choices"][0]["delta"]["role"], "assistant");
+        assert_eq!(chunks[0]["choices"][0]["delta"]["content"], "");
     }
 
     #[test]
