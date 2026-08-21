@@ -67,6 +67,8 @@ fn should_use_rag_context(request: &str) -> bool {
     .any(|needle| req_lower.contains(needle))
 }
 
+const PLANNER_SYSTEM_PROMPT: &str = "You are the Orchestrator Brain. Break down the user's request into the MINIMAL number of necessary executable coding steps (1 to 3 steps max).\nRespond ONLY with a valid JSON array of step objects inside a ```json ... ``` block.\nEach step object must have keys:\n- 'step': integer\n- 'description': string description of what to write\n- 'language': string ('python', 'javascript', 'typescript', 'rust', or 'cpp')";
+
 impl AgentOrchestrator {
     pub fn new(brain: EdgeBrain) -> Self {
         let verifier = CompilerVerifier::new(brain.clone());
@@ -170,7 +172,7 @@ impl AgentOrchestrator {
 
         let steps = if is_complex {
             println!("[SAKANA FUGU ROUTER] Complex task detected -> Engaging configured reasoner planner...");
-            let system_prompt = "You are the Orchestrator Brain. Break down the user's request into the MINIMAL number of necessary executable coding steps (1 to 3 steps max).\nRespond ONLY with a valid JSON array of step objects inside a ```json ... ``` block.\nEach step object must have keys:\n- 'step': integer\n- 'description': string description of what to write\n- 'language': string ('python' or 'javascript')";
+            let system_prompt = PLANNER_SYSTEM_PROMPT;
 
             let plan_opt =
                 if let Ok(raw_plan) = self.brain.query_reasoner(request, system_prompt).await {
@@ -275,6 +277,17 @@ mod tests {
             detect_default_language("Write a python script that prints ok"),
             "python"
         );
+    }
+
+    #[test]
+    fn planner_prompt_advertises_all_verifier_languages() {
+        for lang in ["python", "javascript", "typescript", "rust", "cpp"] {
+            assert!(
+                PLANNER_SYSTEM_PROMPT.contains(lang),
+                "planner prompt missing language: {}",
+                lang
+            );
+        }
     }
     #[test]
     fn standalone_code_prompt_does_not_use_rag_context() {
