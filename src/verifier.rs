@@ -2,7 +2,16 @@ use crate::brain::EdgeBrain;
 use regex::Regex;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static CODE_BLOCK_RE: OnceLock<Regex> = OnceLock::new();
+
+fn code_block_regex() -> &'static Regex {
+    CODE_BLOCK_RE.get_or_init(|| {
+        Regex::new(r"(?s)```(?:\w+)?\n?(.*?)\n?```").expect("code-block regex must compile")
+    })
+}
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -97,7 +106,7 @@ impl CompilerVerifier {
     }
 
     pub fn extract_code_block(&self, text: &str) -> String {
-        let re = Regex::new(r"(?s)```(?:\w+)?\n?(.*?)\n?```").unwrap();
+        let re = code_block_regex();
         if let Some(caps) = re.captures(text) {
             caps.get(1).map_or("", |m| m.as_str()).trim().to_string()
         } else {
