@@ -150,7 +150,7 @@ impl AgentOrchestrator {
         }
 
         // --- Code execution path (existing logic) ---
-        if let Some(cached) = self.cache.get(request).await {
+        if let Some(cached) = self.cache.get_exact(request).await {
             crate::trace::trace_state_transition("planning", "complete");
             println!("[Orchestrator] Exact cache hit (< 0.001s)!");
             return (true, cached);
