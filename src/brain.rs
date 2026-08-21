@@ -575,11 +575,15 @@ impl EdgeBrain {
             )
         };
 
-        let eff_context_base = if self.ultra_low_ram && context_size == "8192" {
-            4096
-        } else {
-            context_size.parse::<usize>().unwrap_or(3072)
-        };
+        let parsed_context = context_size
+            .parse::<usize>()
+            .unwrap_or(crate::constants::DEFAULT_CONTEXT_TOKENS);
+        let eff_context_base =
+            if self.ultra_low_ram && parsed_context == crate::constants::DEFAULT_CONTEXT_TOKENS {
+                parsed_context / 2
+            } else {
+                parsed_context
+            };
         let prompt_tokens = (formatted_prompt.len() / 3) + 256;
         let final_context = if prompt_tokens > eff_context_base {
             ((prompt_tokens + 1023) / 1024) * 1024
