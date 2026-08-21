@@ -4342,25 +4342,39 @@ pub async fn handle_streaming(
     Sse::new(stream)
 }
 
-fn get_client_identifier(req: &axum::http::Request<axum::body::Body>) -> String {
-    if let Some(forwarded) = req.headers().get("x-forwarded-for") {
-        if let Ok(s) = forwarded.to_str() {
-            if let Some(first_ip) = s.split(',').next() {
-                return first_ip.trim().to_string();
+fn get_client_identifier(
+    req: &axum::http::Request<axum::body::Body>,
+    peer: Option<std::net::SocketAddr>,
+) -> String {
+    // Proxy headers are trusted ONLY when the operator opts in; otherwise any
+    // client could rotate X-Forwarded-For to dodge the limiter.
+    let trust_proxy = std::env::var("MIVI_TRUST_PROXY_HEADERS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if trust_proxy {
+        if let Some(forwarded) = req.headers().get("x-forwarded-for") {
+            if let Ok(s) = forwarded.to_str() {
+                if let Some(first_ip) = s.split(',').next() {
+                    let ip = first_ip.trim();
+                    if !ip.is_empty() {
+                        return ip.to_string();
+                    }
+                }
+            }
+        }
+        if let Some(real_ip) = req.headers().get("x-real-ip") {
+            if let Ok(s) = real_ip.to_str() {
+                let ip = s.trim();
+                if !ip.is_empty() {
+                    return ip.to_string();
+                }
             }
         }
     }
 
-    if let Some(real_ip) = req.headers().get("x-real-ip") {
-        if let Ok(s) = real_ip.to_str() {
-            return s.trim().to_string();
-        }
-    }
-
-    if let Some(auth) = req.headers().get("authorization") {
-        if let Ok(s) = auth.to_str() {
-            return s.to_string();
-        }
+    if let Some(addr) = peer {
+        return addr.ip().to_string();
     }
 
     "generic_client".to_string()
@@ -4368,10 +4382,11 @@ fn get_client_identifier(req: &axum::http::Request<axum::body::Body>) -> String 
 
 async fn rate_limit_middleware(
     State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, axum::http::StatusCode> {
-    let client_id = get_client_identifier(&req);
+    let client_id = get_client_identifier(&req, Some(peer));
     if let Err(msg) = state.rate_limiter.check_rate_limit(client_id) {
         let error_json = serde_json::json!({
             "error": {
@@ -4590,7 +4605,11 @@ pub async fn start_api_server(
         info!("[MIVI-V2 Warmup] Skipping warmup in ultra-low-RAM mode to save memory");
     }
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -5741,6 +5760,7 @@ Hello!"
 
     #[test]
     pub fn test_rate_limiter_allows_under_limit_and_blocks_over_limit() {
+        let _guard = crate::server::types::rate_limit_env_lock().lock().unwrap();
         let limiter = crate::server::types::RateLimiter::new();
         let client = "test_client_1".to_string();
 

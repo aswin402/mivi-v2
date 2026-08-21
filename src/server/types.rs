@@ -385,6 +385,10 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
+    /// Hard ceiling on simultaneously tracked identities so header-spoofing
+    /// floods cannot grow the map without bound.
+    pub const MAX_TRACKED_CLIENTS: usize = 4096;
+
     pub fn new() -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
@@ -392,14 +396,32 @@ impl RateLimiter {
     }
 
     pub fn check_rate_limit(&self, client_id: String) -> Result<(), String> {
+        let max_requests = std::env::var("MIVI_RATE_LIMIT_PER_MIN")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(60);
+
         let mut reqs = self.requests.lock().unwrap();
         let now = Instant::now();
+        let cutoff = now - Duration::from_secs(60);
+
+        // Cap tracked identities BEFORE inserting a new one.
+        if !reqs.contains_key(&client_id) && reqs.len() >= Self::MAX_TRACKED_CLIENTS {
+            // First drop everyone whose window fully expired.
+            reqs.retain(|_, v| v.iter().any(|&t| t > cutoff));
+            // Still full: evict arbitrary entries (HashMap iteration order).
+            while reqs.len() >= Self::MAX_TRACKED_CLIENTS {
+                match reqs.keys().next().cloned() {
+                    Some(k) => {
+                        reqs.remove(&k);
+                    }
+                    None => break,
+                }
+            }
+        }
+
         let times = reqs.entry(client_id).or_default();
-
-        let window = Duration::from_secs(60);
-        let max_requests = 60;
-
-        let cutoff = now - window;
         times.retain(|&t| t > cutoff);
 
         if times.len() >= max_requests {
@@ -662,6 +684,12 @@ pub fn anthropic_request_to_chat_request(req: AnthropicRequest) -> ChatCompletio
 }
 
 #[cfg(test)]
+pub(crate) fn rate_limit_env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -718,5 +746,37 @@ mod tests {
         );
         assert_eq!(chat_req.max_tokens, Some(1024));
         assert_eq!(chat_req.temperature, Some(0.2));
+    }
+
+    #[test]
+    fn rate_limiter_blocks_after_configured_limit() {
+        let _guard = rate_limit_env_lock().lock().unwrap();
+        std::env::set_var("MIVI_RATE_LIMIT_PER_MIN", "2");
+
+        let rl = RateLimiter::new();
+        assert!(rl.check_rate_limit("client-x".to_string()).is_ok());
+        assert!(rl.check_rate_limit("client-x".to_string()).is_ok());
+        assert!(rl.check_rate_limit("client-x".to_string()).is_err());
+
+        std::env::remove_var("MIVI_RATE_LIMIT_PER_MIN");
+    }
+
+    #[test]
+    fn rate_limiter_tracks_clients_independently() {
+        let rl = RateLimiter::new();
+        assert!(rl.check_rate_limit("a".to_string()).is_ok());
+        assert!(rl.check_rate_limit("b".to_string()).is_ok());
+    }
+
+    #[test]
+    fn rate_limiter_caps_tracked_clients_against_spoof_flood() {
+        let rl = RateLimiter::new();
+        for i in 0..(RateLimiter::MAX_TRACKED_CLIENTS + 200) {
+            let _ = rl.check_rate_limit(format!("spoof-{i}"));
+        }
+        assert!(
+            rl.requests.lock().unwrap().len() <= RateLimiter::MAX_TRACKED_CLIENTS + 1,
+            "map grew past the hard cap"
+        );
     }
 }
