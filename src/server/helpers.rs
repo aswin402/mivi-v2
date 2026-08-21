@@ -4437,6 +4437,17 @@ async fn auth_middleware(
     Ok(next.run(req).await)
 }
 
+/// Resolve the bind host. Defaults to loopback so the API (which executes
+/// model-generated code) is never exposed to the network by accident.
+/// Set MIVI_HOST=0.0.0.0 to listen on all interfaces deliberately.
+fn resolve_bind_host() -> String {
+    std::env::var("MIVI_HOST")
+        .ok()
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string())
+}
+
 pub async fn start_api_server(
     brain: EdgeBrain,
     orchestrator: AgentOrchestrator,
@@ -4485,7 +4496,12 @@ pub async fn start_api_server(
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)) // limit payload to 16MB
         .with_state(state.clone());
 
-    let addr = format!("0.0.0.0:{}", port);
+    let port = std::env::var("MIVI_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .filter(|_| port == 8000) // only override the built-in default
+        .unwrap_or(port);
+    let addr = format!("{}:{}", resolve_bind_host(), port);
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
         error!(
             "❌ Failed to bind to {}: {}. Is the port already in use?",
@@ -6041,5 +6057,26 @@ Hello!"
         assert!(clamped.contains("truncated"));
         // Head preserved, truncation marker present, UTF-8 valid (no panic).
         assert!(clamped.starts_with("hhh"));
+    }
+
+    #[test]
+    fn bind_host_defaults_to_loopback_and_honors_env() {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let _guard = LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap();
+
+        std::env::remove_var("MIVI_HOST");
+        assert_eq!(resolve_bind_host(), "127.0.0.1");
+
+        std::env::set_var("MIVI_HOST", "0.0.0.0");
+        assert_eq!(resolve_bind_host(), "0.0.0.0");
+
+        // Whitespace-only values fall back to the safe default.
+        std::env::set_var("MIVI_HOST", "   ");
+        assert_eq!(resolve_bind_host(), "127.0.0.1");
+
+        std::env::remove_var("MIVI_HOST");
     }
 }
