@@ -4407,6 +4407,18 @@ async fn timeout_middleware(
     }
 }
 
+/// Length-checked XOR-fold comparison. Not literally branch-free, but removes
+/// the early-exit-on-first-mismatch byte leak of `==`.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
 async fn auth_middleware(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
@@ -4417,7 +4429,7 @@ async fn auth_middleware(
                 if let Ok(auth_str) = auth_header.to_str() {
                     if auth_str.starts_with("Bearer ") {
                         let token = &auth_str["Bearer ".len()..];
-                        if token == expected_key {
+                        if constant_time_eq(token, &expected_key) {
                             return Ok(next.run(req).await);
                         }
                     }
@@ -6078,5 +6090,15 @@ Hello!"
         assert_eq!(resolve_bind_host(), "127.0.0.1");
 
         std::env::remove_var("MIVI_HOST");
+    }
+
+    #[test]
+    fn constant_time_eq_matches_only_equal_strings() {
+        assert!(constant_time_eq("secret", "secret"));
+        assert!(!constant_time_eq("secret", "secreT"));
+        assert!(!constant_time_eq("secret", "secret "));
+        assert!(!constant_time_eq("short", "shorter"));
+        assert!(constant_time_eq("", ""));
+        assert!(!constant_time_eq("", "x"));
     }
 }
