@@ -421,13 +421,17 @@ mod tests {
     #[test]
     fn print_default_catalog() {
         let cat = ModelCatalog::load_default().expect("catalog load failed");
-        println!(
-            "Default Reasoner: {:?}",
-            cat.default_enabled_path(ModelRole::Reasoner)
+        assert_eq!(
+            cat.default_enabled_path(ModelRole::Reasoner),
+            Some("models/qwen2.5-0.5b-instruct-q4_k_m.gguf")
         );
-        println!(
-            "Default Coder: {:?}",
-            cat.default_enabled_path(ModelRole::Coder)
+        assert_eq!(
+            cat.default_enabled_path(ModelRole::Coder),
+            Some("models/qwen2.5-0.5b-instruct-q4_k_m.gguf")
+        );
+        assert_eq!(
+            cat.default_enabled_path(ModelRole::Tool),
+            Some("models/mivi-0.5b-tool-q4_k_m.gguf")
         );
     }
 }

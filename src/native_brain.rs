@@ -219,6 +219,11 @@ impl ModelCache {
             }
         }
     }
+
+    fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
 }
 
 /// Length of the common token prefix of two prompts.
@@ -283,6 +288,17 @@ impl NativeBrain {
             let mut cache = self.models.lock().unwrap();
             if let Some(loaded) = cache.get(&canonical_path) {
                 return Ok(loaded);
+            }
+            // With a one-entry cache, release the previous model before
+            // constructing the replacement. Otherwise both models coexist
+            // during loading and the temporary RSS peak can exceed 1 GB.
+            if cache.max_entries == 1 && !cache.map.is_empty() {
+                info!("[NativeBrain] Releasing cached model before single-slot load");
+                cache.clear();
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    libc::malloc_trim(0);
+                }
             }
         }
         // The GGUF load below runs WITHOUT the cache lock so inference on an

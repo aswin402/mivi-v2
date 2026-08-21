@@ -156,9 +156,15 @@ pub fn filter_tools(prompt: &str, tools: &[ToolDef], max_tools: usize) -> Vec<To
             .then_with(|| left_idx.cmp(right_idx))
     });
 
+    let limit = if is_action_request(prompt) {
+        max_tools.min(1)
+    } else {
+        max_tools
+    };
+
     scored
         .into_iter()
-        .take(max_tools)
+        .take(limit)
         .map(|(_, _, tool)| tool)
         .collect()
 }
@@ -252,11 +258,34 @@ pub fn has_tool_intent(prompt: &str, tools: &[ToolDef]) -> bool {
     ];
 
     intent_phrases.iter().any(|phrase| text.contains(phrase))
+        || is_action_request(prompt)
         || (tokens.contains("use") && text.contains('_'))
         || (tokens.contains("search") && tokens.contains("workspace"))
         || (tokens.contains("read") && tokens.contains("file"))
         || (tokens.contains("edit") && tokens.contains("file"))
         || task_tags(prompt).contains("shell")
+}
+
+fn is_action_request(prompt: &str) -> bool {
+    let tokens = token_set(prompt);
+    let action_verbs = [
+        "cancel", "create", "delete", "execute", "remove", "restart", "schedule", "start", "stop",
+        "update",
+    ];
+    let action_objects = [
+        "file",
+        "job",
+        "process",
+        "server",
+        "task",
+        "workflow",
+        "subagent",
+        "appointment",
+        "event",
+    ];
+
+    action_verbs.iter().any(|verb| tokens.contains(*verb))
+        && action_objects.iter().any(|object| tokens.contains(*object))
 }
 
 fn token_set(text: &str) -> HashSet<String> {
@@ -406,6 +435,20 @@ mod tests {
         assert!(!names
             .iter()
             .any(|name| name.starts_with("irrelevant_tool_")));
+    }
+
+    #[test]
+    fn action_request_exposes_only_best_matching_action_tool() {
+        let tools = vec![
+            tool("remove_job", "Remove or stop an existing scheduled job"),
+            tool("schedule_job", "Create or update a scheduled job"),
+            tool("read", "Read a file from the workspace"),
+        ];
+
+        let filtered = filter_tools("Stop scheduled job 1", &tools, 8);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].function.name, "remove_job");
     }
 
     #[test]

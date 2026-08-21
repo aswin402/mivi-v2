@@ -1612,8 +1612,30 @@ fn validate_value_against_schema(
                     if let Some(prop_schema) = properties.get(prop_name) {
                         validate_value_against_schema(prop_val, prop_schema)
                             .map_err(|e| format!("In property '{}': {}", prop_name, e))?;
+                    } else if schema_obj
+                        .get("additionalProperties")
+                        .and_then(|value| value.as_bool())
+                        == Some(false)
+                    {
+                        return Err(format!("Unknown property '{}'", prop_name));
                     }
                 }
+            }
+        }
+    }
+
+    if let Some(format) = schema_obj.get("format").and_then(|value| value.as_str()) {
+        if let Some(text) = value.as_str() {
+            let valid = match format {
+                "uri" | "url" => {
+                    let lower = text.to_ascii_lowercase();
+                    (lower.starts_with("http://") || lower.starts_with("https://"))
+                        && !text.trim().is_empty()
+                }
+                _ => true,
+            };
+            if !valid {
+                return Err(format!("String does not match format '{}'", format));
             }
         }
     }
@@ -1657,6 +1679,19 @@ pub fn validate_tool_call_arguments(call: &ToolCallOut, tool: &ToolDef) -> Resul
     }
 
     if let Some(ref schema) = tool.function.parameters {
+        if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+            for (name, property_schema) in properties {
+                let is_string =
+                    property_schema.get("type").and_then(|value| value.as_str()) == Some("string");
+                if is_string {
+                    if let Some(value) = args_obj.get(name).and_then(|value| value.as_str()) {
+                        if value.trim().is_empty() {
+                            return Err(format!("String property '{}' cannot be empty", name));
+                        }
+                    }
+                }
+            }
+        }
         validate_value_against_schema(&args_val, schema)?;
     }
 
@@ -2109,6 +2144,26 @@ pub async fn model_chat(
         .await
 }
 
+async fn tool_model_chat(
+    brain: &EdgeBrain,
+    prompt: &str,
+    req: &ChatCompletionRequest,
+) -> Result<String, String> {
+    let grammar_path = get_grammar_path(req);
+    brain
+        .query_tool_raw(
+            prompt,
+            req.temperature,
+            req.top_p,
+            req.max_tokens,
+            req.stop.clone(),
+            req.seed,
+            extract_json_schema(req),
+            grammar_path,
+        )
+        .await
+}
+
 /// Cap a tool result to ~2000 chars (~500 tokens). Keeps the head, which
 /// carries the useful payload, and the tail, which usually holds errors.
 pub fn clamp_tool_result(content: &str) -> String {
@@ -2256,49 +2311,39 @@ async fn query_model_for_tool_calls(
     brain: &EdgeBrain,
     req: &ChatCompletionRequest,
 ) -> Result<(Vec<ToolCallOut>, String), String> {
-    let runtime_config = RuntimeConfig::global();
-    if runtime_config.uses_worker() {
-        let prompt = build_chat_prompt(req);
-        let grammar_path = get_grammar_path(req);
-        let grammar_content = grammar_path
-            .as_ref()
-            .and_then(|p| std::fs::read_to_string(p).ok());
+    let prompt = build_chat_prompt(req);
+    // Tool-specialized weights are selected from the catalog. Keep generation
+    // bounded because the response is a small structured call.
+    let mut capped_req = req.clone();
+    capped_req.max_tokens = Some(capped_req.max_tokens.unwrap_or(256).min(256));
+    let raw = tool_model_chat(brain, &prompt, &capped_req).await?;
+    let parsed_calls = parse_tool_calls(&raw);
+    Ok((parsed_calls, raw))
+}
 
-        match brain
-            .text_worker
-            .query_completion(
-                &prompt,
-                req.temperature,
-                req.top_p,
-                req.max_tokens,
-                req.stop.clone(),
-                req.seed,
-                req.frequency_penalty,
-                req.presence_penalty,
-                None,
-                grammar_content,
-            )
-            .await
-        {
-            Ok(resp) => {
-                if let Some(content) = resp.get("content").and_then(|c| c.as_str()) {
-                    let content_str = content.to_string();
-                    let parsed_calls = parse_tool_calls(&content_str);
-                    return Ok((parsed_calls, content_str));
-                }
-            }
-            Err(err) => warn!("[MIVI-V2 Worker] ToolGen worker completion error: {}", err),
+fn validate_generated_tool_calls(
+    calls: &[ToolCallOut],
+    selected_tools: &[ToolDef],
+) -> (Vec<ToolCallOut>, Vec<String>) {
+    let mut valid = Vec::new();
+    let mut errors = Vec::new();
+
+    for call in calls {
+        let Some(tool) = selected_tools
+            .iter()
+            .find(|tool| tool.function.name == call.function.name)
+        else {
+            errors.push(format!("Unknown tool '{}'", call.function.name));
+            continue;
+        };
+
+        match validate_tool_call_arguments(call, tool) {
+            Ok(()) => valid.push(call.clone()),
+            Err(error) => errors.push(format!("{}: {}", call.function.name, error)),
         }
     }
 
-    let prompt = build_chat_prompt(req);
-    // Cap max_tokens for tool generation: tool calls are short JSON,
-    // no need to generate 512+ tokens which spikes CPU/RAM on small models
-    let mut capped_req = req.clone();
-    capped_req.max_tokens = Some(capped_req.max_tokens.unwrap_or(256).min(256));
-    let raw = model_chat(brain, &prompt, &capped_req).await?;
-    let parsed_calls = parse_tool_calls(&raw);
-    Ok((parsed_calls, raw))
+    (valid, errors)
 }
 
 /// Generate tool calls: run the model with tool-aware prompt, parse tool calls.
@@ -2328,22 +2373,39 @@ pub async fn generate_tool_calls(
     let blocked_tools = blocked_tool_names(&selection.blocked);
 
     let (parsed_calls, raw) = query_model_for_tool_calls(brain, req).await?;
+    let mut final_raw = raw;
 
     if parsed_calls.is_empty() {
-        let final_content = append_tool_execution_summary(req, raw);
+        let final_content = append_tool_execution_summary(req, final_raw);
         return Ok((Vec::new(), final_content));
     }
 
-    // Validate parsed tool calls against selected tools
-    let mut valid_calls = Vec::new();
-    for call in parsed_calls {
-        if let Some(tool) = selected_tools
-            .iter()
-            .find(|t| t.function.name == call.function.name)
-        {
-            if validate_tool_call_arguments(&call, tool).is_ok() {
-                valid_calls.push(call);
-            }
+    // Validate parsed tool calls against selected tools. If the model emitted
+    // a structurally valid call with schema-invalid arguments, give it one
+    // schema-driven correction turn instead of silently turning the request
+    // into a normal text answer.
+    let (mut valid_calls, validation_errors) =
+        validate_generated_tool_calls(&parsed_calls, &selected_tools);
+    let mut route = "single_pass";
+
+    if valid_calls.is_empty() && !validation_errors.is_empty() {
+        let mut retry_req = req.clone();
+        retry_req.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: serde_json::Value::String(format!(
+                "The previous tool call was invalid: {}. Return one corrected tool call only. Follow the provided JSON Schema exactly.",
+                validation_errors.join("; ")
+            )),
+            tool_call_id: None,
+            tool_calls: None,
+        });
+
+        let (retry_parsed, retry_raw) = query_model_for_tool_calls(brain, &retry_req).await?;
+        let (retry_valid, _) = validate_generated_tool_calls(&retry_parsed, &selected_tools);
+        if !retry_valid.is_empty() {
+            valid_calls = retry_valid;
+            final_raw = retry_raw;
+            route = "schema_retry";
         }
     }
 
@@ -2352,7 +2414,7 @@ pub async fn generate_tool_calls(
         &trace,
         serde_json::json!({
             "kind": "tool_generation",
-            "route": "single_pass",
+            "route": route,
             "agent_intent": selection.intent.as_str(),
             "selected_tools": selected_tool_names,
             "selected_tool_roles": selected_tool_roles,
@@ -2365,7 +2427,7 @@ pub async fn generate_tool_calls(
     if !valid_calls.is_empty() {
         Ok((valid_calls, String::new()))
     } else {
-        let final_content = append_tool_execution_summary(req, raw);
+        let final_content = append_tool_execution_summary(req, final_raw);
         Ok((Vec::new(), final_content))
     }
 }
@@ -5055,7 +5117,7 @@ mod tests {
 
     #[test]
     pub fn explicit_stop_request_can_call_selected_tool() {
-        let req = tool_request("stop the cron job", None);
+        let req = tool_request("stop scheduled job 1", None);
         let selection = ToolSelection {
             intent: AgentIntent::Chat,
             selected: vec![server_tool("remove_job", "Remove a scheduled job")],
@@ -5539,6 +5601,13 @@ Hello!"
                         "mode": {
                             "type": "string",
                             "enum": ["fast", "slow"]
+                        },
+                        "label": {
+                            "type": "string"
+                        },
+                        "url": {
+                            "type": "string",
+                            "format": "uri"
                         }
                     }
                 })),
@@ -5570,6 +5639,19 @@ Hello!"
         let err_missing = validate_tool_call_arguments(&call_missing, &tool).unwrap_err();
         assert!(err_missing.contains("Missing required property 'retries'"));
 
+        // Empty declared string fields are invalid even when the client omitted
+        // them from the schema's required list.
+        let call_empty_string = ToolCallOut {
+            id: "call_empty".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCallOut {
+                name: "test_tool".to_string(),
+                arguments: r#"{"cmd": "npm run test", "retries": 3, "label": ""}"#.to_string(),
+            },
+        };
+        let err_empty = validate_tool_call_arguments(&call_empty_string, &tool).unwrap_err();
+        assert!(err_empty.contains("String property 'label' cannot be empty"));
+
         // Invalid type
         let call_invalid_type = ToolCallOut {
             id: "call_3".to_string(),
@@ -5593,6 +5675,40 @@ Hello!"
         };
         let err_enum = validate_tool_call_arguments(&call_invalid_enum, &tool).unwrap_err();
         assert!(err_enum.contains("not one of the allowed enums"));
+
+        let call_invalid_url = ToolCallOut {
+            id: "call_url".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCallOut {
+                name: "test_tool".to_string(),
+                arguments: r#"{"cmd":"test","retries":3,"url":"hono.dev"}"#.to_string(),
+            },
+        };
+        let err_url = validate_tool_call_arguments(&call_invalid_url, &tool).unwrap_err();
+        assert!(err_url.contains("format 'uri'"));
+
+        let strict_tool = ToolDef {
+            r#type: "function".to_string(),
+            function: FunctionDef {
+                name: "strict_tool".to_string(),
+                description: None,
+                parameters: Some(json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {"value": {"type": "string"}}
+                })),
+            },
+        };
+        let call_unknown = ToolCallOut {
+            id: "call_unknown".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCallOut {
+                name: "strict_tool".to_string(),
+                arguments: r#"{"value":"ok","extra":true}"#.to_string(),
+            },
+        };
+        let err_unknown = validate_tool_call_arguments(&call_unknown, &strict_tool).unwrap_err();
+        assert!(err_unknown.contains("Unknown property 'extra'"));
     }
 
     #[test]
@@ -5869,6 +5985,7 @@ Hello!"
             minicpm_cli: PathBuf::new(),
             llama_path: PathBuf::new(),
             qwen_path: PathBuf::new(),
+            tool_path: PathBuf::new(),
             minicpm_path: PathBuf::new(),
             minicpm_proj: PathBuf::new(),
             ultra_low_ram: false,
