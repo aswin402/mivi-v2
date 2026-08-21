@@ -4401,18 +4401,26 @@ async fn rate_limit_middleware(
     Ok(next.run(req).await)
 }
 
+fn request_timeout_secs() -> u64 {
+    std::env::var("MIVI_REQUEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(300)
+}
+
 async fn timeout_middleware(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, axum::http::StatusCode> {
-    let duration = std::time::Duration::from_secs(300);
+    let duration = std::time::Duration::from_secs(request_timeout_secs());
     match tokio::time::timeout(duration, next.run(req)).await {
         Ok(res) => Ok(res),
         Err(_) => {
             let error_json = serde_json::json!({
                 "error": {
                     "type": "timeout_error",
-                    "message": "Request timed out after 300 seconds."
+                    "message": format!("Request timed out after {} seconds.", request_timeout_secs())
                 }
             });
             let mut res = axum::response::Json(error_json).into_response();
@@ -6120,5 +6128,25 @@ Hello!"
         assert!(!constant_time_eq("short", "shorter"));
         assert!(constant_time_eq("", ""));
         assert!(!constant_time_eq("", "x"));
+    }
+
+    #[test]
+    fn request_timeout_reads_env_with_safe_default() {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let _guard = LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap();
+
+        std::env::remove_var("MIVI_REQUEST_TIMEOUT_SECS");
+        assert_eq!(request_timeout_secs(), 300);
+
+        std::env::set_var("MIVI_REQUEST_TIMEOUT_SECS", "60");
+        assert_eq!(request_timeout_secs(), 60);
+
+        std::env::set_var("MIVI_REQUEST_TIMEOUT_SECS", "0");
+        assert_eq!(request_timeout_secs(), 300, "zero/negative falls back");
+
+        std::env::remove_var("MIVI_REQUEST_TIMEOUT_SECS");
     }
 }
