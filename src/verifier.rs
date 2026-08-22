@@ -486,6 +486,14 @@ mod tests {
         let old_path = env::var_os("PATH");
         env::set_var("PATH", "/usr/bin:/bin");
 
+        // Probe with the same restricted PATH run_local_code sees, so the
+        // expectation matches what the verifier can actually resolve.
+        let node_ok = std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .map(|o| node_supports_strip_types(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or(false);
+
         let verifier = CompilerVerifier::new(EdgeBrain::new());
         let (success, output) = verifier
             .run_local_code("console.log('ts fallback ok');", "typescript")
@@ -496,12 +504,6 @@ mod tests {
         } else {
             env::remove_var("PATH");
         }
-
-        let node_ok = std::process::Command::new("node")
-            .arg("--version")
-            .output()
-            .map(|o| node_supports_strip_types(&String::from_utf8_lossy(&o.stdout)))
-            .unwrap_or(false);
 
         if node_ok {
             assert!(
