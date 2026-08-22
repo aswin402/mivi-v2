@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "mivi"
-version = "0.0.14"
+version = "0.0.15"
 dependencies = [
  "axum",
  "bytes",
@@ -2114,15 +2114,6 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "splitter"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
 ]
 
 [[package]]
