@@ -58,7 +58,11 @@ mivi-v2/
     ├── router.rs               # Sub-millisecond Needle Intent Router
     ├── logger.rs               # Verified SFT Dataset Logger
     ├── orchestrator.rs         # Multi-Agent Planner & Sequential Executor
-    ├── server.rs               # Axum Async REST API Server (Port 8000)
+    ├── server/                 # Axum Async REST API Server (Port 8000)
+    │   ├── types.rs            # Request/response structs, AppState, RateLimiter
+    │   ├── helpers.rs          # Agent-facing logic & middleware
+    │   ├── handlers.rs         # Route handlers
+    │   └── mod.rs              # Module glue
     ├── cli.rs                  # Interactive Terminal Chat UI
     └── audit.rs                # End-to-End System Health Diagnostic
 ```
@@ -150,7 +154,7 @@ Set `MIVI_CANDIDATES_FILE` to a JSONL file with `name`, `reasoner`, and `coder` 
 
 ## Latest Runtime Benchmark
 
-Measured on 2026-07-26 with `scripts/bench_runtime.sh` using the built-in defaults: Qwen3 0.6B Q4_K_M reasoner, Qwen2.5 0.5B Q4_K_M coder, and a 3072 raw context budget. Worker modes stayed under the 1000 MB active-RAM target with practical headroom.
+Measured on 2026-07-26 with `scripts/bench_runtime.sh` using the built-in defaults at the time: Qwen3 0.6B Q4_K_M reasoner, Qwen2.5 0.5B Q4_K_M coder, and a 3072 raw context budget (the runtime default context budget is now 8192 tokens — see `DEFAULT_CONTEXT_TOKENS` in `src/constants.rs`). Worker modes stayed under the 1000 MB active-RAM target with practical headroom.
 
 | Mode | Chat | Coding | Tool | RAG | Vision Skip | Peak Worker RSS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
