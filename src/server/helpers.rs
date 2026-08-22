@@ -1804,9 +1804,11 @@ pub fn repair_tool_argument_string(text: &str) -> Option<String> {
     }
 
     // Remove trailing commas before } or ]
-    if let Ok(re) = regex::Regex::new(r",\s*([}\]])") {
-        fixed = re.replace_all(&fixed, "$1").to_string();
-    }
+    static TRAILING_COMMA_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = TRAILING_COMMA_RE.get_or_init(|| {
+        regex::Regex::new(r",\s*([}\]])").expect("trailing-comma regex must compile")
+    });
+    fixed = re.replace_all(&fixed, "$1").to_string();
 
     // Try parsing the fixed version
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&fixed) {
