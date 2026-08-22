@@ -1,18 +1,18 @@
 # 🚀 MIVI-V2: Ultra-Compact Low-Resource Pure Rust Local AI Engine
 
-[![Version](https://img.shields.io/badge/version-v0.0.11-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.0.14-brightgreen.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![RAM Footprint](https://img.shields.io/badge/Idle%20RAM-%3C%2012%20MB-purple.svg)]()
 [![Ultra Low RAM](https://img.shields.io/badge/Ultra%20Low%20RAM-%3C%2040%20MB-green.svg)]()
 
-**MIVI-V2 (v0.0.11)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
+**MIVI-V2 (v0.0.14)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
 
 It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for autonomous AI agents including **Hermes Agent**, **OpenCode Agent**, **OpenZ**, **AutoGen**, **CrewAI**, **VS Code (Continue.dev)**, and **Cursor IDE**.
 
 ---
 
-## 🌟 Key Features in v0.0.11
+## 🌟 Key Features in v0.0.14
 
 * 🦀 **100% Pure Rust Architecture:** Zero Python runtime, zero PyTorch/transformers memory bloat, and zero virtual environment dependencies.
 * ⚡ **Reqwest Connection Pooling:** Pooled HTTP client in `worker.rs` with keep-alive socket reuse, reducing API server request overhead.
@@ -58,7 +58,11 @@ mivi-v2/
     ├── router.rs               # Sub-millisecond Needle Intent Router
     ├── logger.rs               # Verified SFT Dataset Logger
     ├── orchestrator.rs         # Multi-Agent Planner & Sequential Executor
-    ├── server.rs               # Axum Async REST API Server (Port 8000)
+    ├── server/                 # Axum Async REST API Server (Port 8000)
+    │   ├── types.rs            # Request/response structs, AppState, RateLimiter
+    │   ├── helpers.rs          # Agent-facing logic & middleware
+    │   ├── handlers.rs         # Route handlers
+    │   └── mod.rs              # Module glue
     ├── cli.rs                  # Interactive Terminal Chat UI
     └── audit.rs                # End-to-End System Health Diagnostic
 ```
@@ -150,7 +154,7 @@ Set `MIVI_CANDIDATES_FILE` to a JSONL file with `name`, `reasoner`, and `coder` 
 
 ## Latest Runtime Benchmark
 
-Measured on 2026-07-26 with `scripts/bench_runtime.sh` using the built-in defaults: Qwen3 0.6B Q4_K_M reasoner, Qwen2.5 0.5B Q4_K_M coder, and a 3072 raw context budget. Worker modes stayed under the 1000 MB active-RAM target with practical headroom.
+Measured on 2026-07-26 with `scripts/bench_runtime.sh` using the built-in defaults at the time: Qwen3 0.6B Q4_K_M reasoner, Qwen2.5 0.5B Q4_K_M coder, and a 3072 raw context budget (the runtime default context budget is now 8192 tokens — see `DEFAULT_CONTEXT_TOKENS` in `src/constants.rs`). Worker modes stayed under the 1000 MB active-RAM target with practical headroom.
 
 | Mode | Chat | Coding | Tool | RAG | Vision Skip | Peak Worker RSS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |

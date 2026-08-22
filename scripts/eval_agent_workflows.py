@@ -16,6 +16,8 @@ WORKFLOWS = [
     "chat-injected",
     "coding-verified",
     "tool-json",
+    "web-research-url",
+    "stop-scheduled-job",
     "tool-shell-100",
     "long-tool-output",
     "rag-router",
@@ -88,6 +90,28 @@ def payload_for(kind):
             "stream": False,
             "messages": [{"role": "user", "content": "Use the get_weather tool for Paris."}],
             "tools": [make_tool("get_weather", "Get weather for a city", {"city": {"type": "string"}}, ["city"])],
+        }
+    if kind == "web-research-url":
+        return {
+            "model": "mivi",
+            "stream": False,
+            "messages": [{"role": "user", "content": "Research https://hono.dev/ and summarize it."}],
+            "tools": [
+                make_tool("webfetch", "Fetch and read a web page from a URL", {"url": {"type": "string", "format": "uri"}}, ["url"]),
+                make_tool("search_web", "Search the web for a query", {"query": {"type": "string"}}, ["query"]),
+                make_tool("read_file", "Read a local workspace file", {"path": {"type": "string"}}, ["path"]),
+            ],
+        }
+    if kind == "stop-scheduled-job":
+        return {
+            "model": "mivi",
+            "stream": False,
+            "messages": [{"role": "user", "content": "Stop scheduled job 1."}],
+            "tools": [
+                make_tool("remove_job", "Remove or stop an existing scheduled job", {"id": {"type": "string"}}, ["id"]),
+                make_tool("schedule_job", "Create or update a scheduled job", {"prompt": {"type": "string"}}, ["prompt"]),
+                make_tool("read_file", "Read a local workspace file", {"path": {"type": "string"}}, ["path"]),
+            ],
         }
     if kind in {"tool-shell-100", "trace-tool-shell"}:
         return {
@@ -252,6 +276,30 @@ def score_workflow(kind, response_text, trace_rows):
                 reasons.append(error)
             if args.get("city") != "Paris":
                 reasons.append("missing city Paris")
+    elif kind == "web-research-url":
+        if len(tool_calls) != 1:
+            reasons.append("expected one web research tool call")
+        else:
+            fn = tool_calls[0].get("function", {})
+            if fn.get("name") != "webfetch":
+                reasons.append("wrong web research tool name")
+            args, error = parse_tool_arguments(tool_calls[0])
+            if error:
+                reasons.append(error)
+            if args.get("url") != "https://hono.dev/":
+                reasons.append("missing exact research URL")
+    elif kind == "stop-scheduled-job":
+        if len(tool_calls) != 1:
+            reasons.append("expected one stop-job tool call")
+        else:
+            fn = tool_calls[0].get("function", {})
+            if fn.get("name") != "remove_job":
+                reasons.append("selected schedule/create tool instead of stop tool")
+            args, error = parse_tool_arguments(tool_calls[0])
+            if error:
+                reasons.append(error)
+            if str(args.get("id")) != "1":
+                reasons.append("missing scheduled job id 1")
     elif kind in {"tool-shell-100", "trace-tool-shell"}:
         if len(tool_calls) != 1:
             reasons.append("expected one shell tool call")

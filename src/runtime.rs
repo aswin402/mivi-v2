@@ -114,6 +114,12 @@ impl RuntimeConfig {
             .map(|v| v == "1" || v == "true")
             .unwrap_or(false);
 
+        let ram_target_mb = env::var("MIVI_RAM_TARGET_MB")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|mb| *mb > 0)
+            .unwrap_or(DEFAULT_RAM_TARGET_MB);
+
         let kv_cache_type = env::var("MIVI_KV_CACHE_TYPE").unwrap_or_else(|_| {
             if ultra_low {
                 "q4_0".to_string()
@@ -150,7 +156,7 @@ impl RuntimeConfig {
             mode,
             context: ContextBudget::from_max_input_tokens(max_input_tokens),
             worker_idle_secs,
-            ram_target_mb: DEFAULT_RAM_TARGET_MB,
+            ram_target_mb,
             kv_cache_type,
             threads,
             draft_model,
@@ -174,6 +180,7 @@ mod tests {
         std::env::remove_var("MIVI_WORKER_IDLE_SECS");
         std::env::remove_var("MIVI_THREADS");
         std::env::remove_var("MIVI_DRAFT_MODEL");
+        std::env::remove_var("MIVI_RAM_TARGET_MB");
     }
 
     #[test]
@@ -248,5 +255,24 @@ mod tests {
         assert_eq!(config.mode, RuntimeMode::WorkerHot);
 
         clear_runtime_env();
+    }
+
+    #[test]
+    fn ram_target_mb_is_configurable_via_env() {
+        let _guard = env_lock();
+        clear_runtime_env();
+        std::env::set_var("MIVI_RAM_TARGET_MB", "1500");
+
+        let config = RuntimeConfig::from_env();
+        assert_eq!(config.ram_target_mb, 1500);
+
+        std::env::set_var("MIVI_RAM_TARGET_MB", "not-a-number");
+        let config = RuntimeConfig::from_env();
+        assert_eq!(
+            config.ram_target_mb,
+            crate::constants::DEFAULT_RAM_TARGET_MB
+        );
+
+        std::env::remove_var("MIVI_RAM_TARGET_MB");
     }
 }

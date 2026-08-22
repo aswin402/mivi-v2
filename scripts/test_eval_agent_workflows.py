@@ -28,6 +28,47 @@ class AgentWorkflowEvalTests(unittest.TestCase):
         self.assertEqual(parts[-1]["text"], "Say who you are in one short sentence.")
         self.assertIn("user-prompt-submit-hook", parts[0]["text"])
 
+    def test_web_research_payload_declares_url_schema(self):
+        payload = workflows.payload_for("web-research-url")
+        self.assertEqual(payload["tools"][0]["function"]["name"], "webfetch")
+        self.assertEqual(
+            payload["tools"][0]["function"]["parameters"]["properties"]["url"]["format"],
+            "uri",
+        )
+
+    def test_web_research_score_requires_exact_url(self):
+        result = workflows.score_workflow(
+            "web-research-url",
+            response(
+                tool_calls=[{
+                    "type": "function",
+                    "function": {
+                        "name": "webfetch",
+                        "arguments": json.dumps({"url": "https://hono.dev/"}),
+                    },
+                }]
+            ),
+            [],
+        )
+        self.assertTrue(result["ok"])
+
+    def test_stop_job_score_rejects_schedule_tool(self):
+        result = workflows.score_workflow(
+            "stop-scheduled-job",
+            response(
+                tool_calls=[{
+                    "type": "function",
+                    "function": {
+                        "name": "schedule_job",
+                        "arguments": json.dumps({"prompt": "stop job 1"}),
+                    },
+                }]
+            ),
+            [],
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("selected schedule/create tool instead of stop tool", result["reasons"])
+
     def test_tool_shell_score_requires_valid_npm_test_call(self):
         result = workflows.score_workflow(
             "tool-shell-100",

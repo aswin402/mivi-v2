@@ -2,8 +2,8 @@
   "external_model": "mivi",
   "models": [
     {
-      "id": "mivi-0.5b-tool-reasoner",
-      "role": "reasoner",
+      "id": "mivi-0.5b-tool",
+      "role": "tool",
       "backend": "llama-cli",
       "path": "models/mivi-0.5b-tool-q4_k_m.gguf",
       "context_tokens": 8192,
@@ -31,7 +31,7 @@
       "path": "models/mivi-0.5b-tool-q4_k_m.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 460,
-      "enabled": true,
+      "enabled": false,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
       "notes": "Fine-tuned MIVI 0.5B Knowledge-Lean Coder & Tool Specialist (Q4_K_M)",
       "chat_template": {
@@ -100,9 +100,9 @@
       "path": "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 490,
-      "enabled": false,
+      "enabled": true,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
-      "notes": "Qwen 2.5 0.5B Instruct (disabled)",
+      "notes": "Qwen 2.5 0.5B Instruct (enabled fallback reasoner)",
       "chat_template": {
         "system_prefix": "<|im_start|>system\n",
         "system_suffix": "<|im_end|>\n",
@@ -123,9 +123,9 @@
       "path": "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 490,
-      "enabled": false,
+      "enabled": true,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
-      "notes": "Qwen 2.5 0.5B Instruct (disabled)",
+      "notes": "Qwen 2.5 0.5B Instruct (enabled fallback coder)",
       "chat_template": {
         "system_prefix": "<|im_start|>system\n",
         "system_suffix": "<|im_end|>\n",
@@ -146,9 +146,9 @@
       "path": "models/Qwen3-1.7B-Q2_K.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 780,
-      "enabled": true,
+      "enabled": false,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
-      "notes": "Qwen3 1.7B Instruct (enabled)",
+      "notes": "Qwen3 1.7B Instruct (disabled)",
       "chat_template": {
         "system_prefix": "<|im_start|>system\n",
         "system_suffix": "<|im_end|>\n",
@@ -169,9 +169,9 @@
       "path": "models/Qwen3-1.7B-Q2_K.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 780,
-      "enabled": true,
+      "enabled": false,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
-      "notes": "Qwen3 1.7B Coder/Tool Worker (enabled)",
+      "notes": "Qwen3 1.7B Coder/Tool Worker (disabled)",
       "chat_template": {
         "system_prefix": "<|im_start|>system\n",
         "system_suffix": "<|im_end|>\n",

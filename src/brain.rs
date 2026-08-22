@@ -15,6 +15,7 @@ pub struct EdgeBrain {
     pub minicpm_cli: PathBuf,
     pub llama_path: PathBuf,
     pub qwen_path: PathBuf,
+    pub tool_path: PathBuf,
     pub minicpm_path: PathBuf,
     pub minicpm_proj: PathBuf,
     pub ultra_low_ram: bool,
@@ -377,9 +378,15 @@ impl EdgeBrain {
             crate::model_catalog::ModelRole::Coder,
             fallback_coder,
         );
+        let default_tool = catalog_model_path(
+            &base_dir,
+            crate::model_catalog::ModelRole::Tool,
+            default_coder.clone(),
+        );
 
         let llama_path = model_path_from_env("MIVI_REASONER_MODEL", default_reasoner);
         let qwen_path = model_path_from_env("MIVI_CODER_MODEL", default_coder);
+        let tool_path = model_path_from_env("MIVI_TOOL_MODEL", default_tool);
         let minicpm_path = model_path_from_env(
             "MIVI_VISION_MODEL",
             models_dir.join("MiniCPM-V-4.6-Q4_K_M.gguf"),
@@ -402,9 +409,10 @@ impl EdgeBrain {
         )));
 
         info!(
-            "[MIVI-V2 Models] reasoner={} coder={}",
+            "[MIVI-V2 Models] reasoner={} coder={} tool={}",
             llama_path.display(),
-            qwen_path.display()
+            qwen_path.display(),
+            tool_path.display()
         );
 
         if ultra_low_ram {
@@ -418,6 +426,7 @@ impl EdgeBrain {
             minicpm_cli,
             llama_path,
             qwen_path,
+            tool_path,
             minicpm_path,
             minicpm_proj,
             ultra_low_ram,
@@ -566,11 +575,15 @@ impl EdgeBrain {
             )
         };
 
-        let eff_context_base = if self.ultra_low_ram && context_size == "8192" {
-            4096
-        } else {
-            context_size.parse::<usize>().unwrap_or(3072)
-        };
+        let parsed_context = context_size
+            .parse::<usize>()
+            .unwrap_or(crate::constants::DEFAULT_CONTEXT_TOKENS);
+        let eff_context_base =
+            if self.ultra_low_ram && parsed_context == crate::constants::DEFAULT_CONTEXT_TOKENS {
+                parsed_context / 2
+            } else {
+                parsed_context
+            };
         let prompt_tokens = (formatted_prompt.len() / 3) + 256;
         let final_context = if prompt_tokens > eff_context_base {
             ((prompt_tokens + 1023) / 1024) * 1024
@@ -746,9 +759,60 @@ impl EdgeBrain {
         }
     }
 
-    #[allow(unused_variables)]
     pub async fn query_raw(
         &self,
+        prompt: &str,
+        temp: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        stop: Option<serde_json::Value>,
+        seed: Option<u64>,
+        json_schema: Option<String>,
+        grammar_path: Option<String>,
+    ) -> Result<String, String> {
+        self.query_raw_with_model(
+            &self.llama_path,
+            prompt,
+            temp,
+            top_p,
+            max_tokens,
+            stop,
+            seed,
+            json_schema,
+            grammar_path,
+        )
+        .await
+    }
+
+    pub async fn query_tool_raw(
+        &self,
+        prompt: &str,
+        temp: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        stop: Option<serde_json::Value>,
+        seed: Option<u64>,
+        json_schema: Option<String>,
+        grammar_path: Option<String>,
+    ) -> Result<String, String> {
+        self.query_raw_with_model(
+            &self.tool_path,
+            prompt,
+            temp,
+            top_p,
+            max_tokens,
+            stop,
+            seed,
+            json_schema,
+            grammar_path,
+        )
+        .await
+    }
+
+    #[allow(unused_variables)]
+    async fn query_raw_with_model(
+        &self,
+        model_path: &Path,
         prompt: &str,
         temp: Option<f32>,
         top_p: Option<f32>,
@@ -794,7 +858,7 @@ impl EdgeBrain {
                 );
                 return self
                     .run_cli_spawn(
-                        &self.llama_path,
+                        model_path,
                         &prompt_with_hints,
                         "",
                         &temp_str,
@@ -808,7 +872,7 @@ impl EdgeBrain {
             }
 
             return self.native.query_raw_prompt(
-                &self.llama_path,
+                model_path,
                 &prompt_with_hints,
                 &temp_str,
                 max,
@@ -840,7 +904,7 @@ impl EdgeBrain {
 
             let prompt_file = write_prompt_file(prompt).await?;
             let mut cmd = tokio::process::Command::new(&self.llama_cli);
-            cmd.arg("-m").arg(&self.llama_path);
+            cmd.arg("-m").arg(model_path);
             cmd.arg("-ngl").arg(ngl_val);
             cmd.arg("-c").arg(&final_context_str);
             cmd.arg("-fa").arg("on");
@@ -904,7 +968,7 @@ impl EdgeBrain {
 
             #[cfg(target_os = "linux")]
             if self.ultra_low_ram {
-                if let Ok(file) = std::fs::File::open(&self.llama_path) {
+                if let Ok(file) = std::fs::File::open(model_path) {
                     use std::os::unix::io::AsRawFd;
                     let fd = file.as_raw_fd();
                     unsafe {

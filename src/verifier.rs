@@ -2,7 +2,24 @@ use crate::brain::EdgeBrain;
 use regex::Regex;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static CODE_BLOCK_RE: OnceLock<Regex> = OnceLock::new();
+
+fn code_block_regex() -> &'static Regex {
+    CODE_BLOCK_RE.get_or_init(|| {
+        Regex::new(r"(?s)```(?:\w+)?\n?(.*?)\n?```").expect("code-block regex must compile")
+    })
+}
+
+static SUM_TWO_ARGS_RE: OnceLock<Regex> = OnceLock::new();
+
+fn sum_two_args_regex() -> &'static Regex {
+    SUM_TWO_ARGS_RE.get_or_init(|| {
+        Regex::new(r"sum\(\s*([^,()]+)\s*,\s*([^,()]+)\s*\)").expect("sum regex must compile")
+    })
+}
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -36,6 +53,25 @@ fn compile_timeout_secs() -> u64 {
 
 fn exec_timeout_secs() -> u64 {
     timeout_secs_from_env("MIVI_VERIFY_EXEC_TIMEOUT_SECS", 15)
+}
+
+/// Parse "v22.14.0" into (major, minor). Node gained `--experimental-strip-types`
+/// in 22.6 and enables type stripping by default from 23.6.
+fn parse_node_version(output: &str) -> Option<(u32, u32)> {
+    let v = output.trim().trim_start_matches('v');
+    let mut parts = v.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
+fn node_supports_strip_types(version_output: &str) -> bool {
+    match parse_node_version(version_output) {
+        Some((major, minor)) => {
+            major > 23 || (major == 23 && minor >= 6) || (major == 22 && minor >= 6)
+        }
+        None => false,
+    }
 }
 
 /// Run a command to completion with a wall-clock timeout. `kill_on_drop` is
@@ -78,7 +114,7 @@ impl CompilerVerifier {
     }
 
     pub fn extract_code_block(&self, text: &str) -> String {
-        let re = Regex::new(r"(?s)```(?:\w+)?\n?(.*?)\n?```").unwrap();
+        let re = code_block_regex();
         if let Some(caps) = re.captures(text) {
             caps.get(1).map_or("", |m| m.as_str()).trim().to_string()
         } else {
@@ -207,8 +243,33 @@ impl CompilerVerifier {
                 // Do not retry on timeout: a timed-out bun run would only time out
                 // again under node and double the wall-clock cost.
                 Err(ref e) if cmd_name == "bun" && e.kind() != std::io::ErrorKind::TimedOut => {
-                    // Fallback to node for TypeScript/JavaScript if bun is not installed.
+                    let is_ts = matches!(lang_lower.as_str(), "typescript" | "ts");
+                    if is_ts {
+                        let version = tokio::process::Command::new("node")
+                            .arg("--version")
+                            .kill_on_drop(true)
+                            .output()
+                            .await
+                            .ok()
+                            .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+                        let supported = version
+                            .as_deref()
+                            .map(node_supports_strip_types)
+                            .unwrap_or(false);
+                        if !supported {
+                            let _ = tokio::fs::remove_file(&temp_file).await;
+                            return (
+                                false,
+                                "TypeScript verification requires bun, or node >= 22.6 \
+                                 with type-stripping support."
+                                    .to_string(),
+                            );
+                        }
+                    }
                     let mut fallback_cmd = tokio::process::Command::new("node");
+                    if is_ts {
+                        fallback_cmd.arg("--experimental-strip-types");
+                    }
                     fallback_cmd.arg(&temp_file).kill_on_drop(true);
                     let output = timed_output(&mut fallback_cmd, exec_timeout_secs()).await;
                     let _ = tokio::fs::remove_file(&temp_file).await;
@@ -259,7 +320,7 @@ impl CompilerVerifier {
             return None;
         }
 
-        let sum_two_args = Regex::new(r"sum\(\s*([^,()]+)\s*,\s*([^,()]+)\s*\)").ok()?;
+        let sum_two_args = sum_two_args_regex();
         for captures in sum_two_args.captures_iter(code) {
             let left = captures.get(1)?.as_str().trim();
             let right = captures.get(2)?.as_str().trim();
@@ -420,10 +481,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn typescript_falls_back_to_node_when_bun_is_missing() {
+    async fn typescript_without_bun_uses_node_when_supported_else_clear_error() {
         let _guard = ENV_LOCK.lock().unwrap();
         let old_path = env::var_os("PATH");
         env::set_var("PATH", "/usr/bin:/bin");
+
+        // Probe with the same restricted PATH run_local_code sees, so the
+        // expectation matches what the verifier can actually resolve.
+        let node_ok = std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .map(|o| node_supports_strip_types(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or(false);
 
         let verifier = CompilerVerifier::new(EdgeBrain::new());
         let (success, output) = verifier
@@ -436,16 +505,34 @@ mod tests {
             env::remove_var("PATH");
         }
 
-        assert!(
-            success,
-            "expected node fallback to succeed, got output: {}",
-            output
-        );
-        assert!(
-            output.contains("ts fallback ok"),
-            "unexpected output: {}",
-            output
-        );
+        if node_ok {
+            assert!(
+                success,
+                "expected node strip-types success, got: {}",
+                output
+            );
+            assert!(output.contains("ts fallback ok"));
+        } else {
+            assert!(!success);
+            assert!(
+                output.contains("requires bun"),
+                "expected clear unsupported-node error, got: {}",
+                output
+            );
+        }
+    }
+
+    #[test]
+    fn node_version_parsing_and_strip_types_gate() {
+        assert_eq!(parse_node_version("v22.14.0"), Some((22, 14)));
+        assert_eq!(parse_node_version("v18.0.0"), Some((18, 0)));
+        assert_eq!(parse_node_version("garbage"), None);
+        assert!(node_supports_strip_types("v22.6.0"));
+        assert!(node_supports_strip_types("v23.6.0"));
+        assert!(node_supports_strip_types("v24.1.0"));
+        assert!(!node_supports_strip_types("v22.5.0"));
+        assert!(!node_supports_strip_types("v20.11.0"));
+        assert!(!node_supports_strip_types("junk"));
     }
     #[test]
     fn extract_code_block_skips_echoed_rag_context() {

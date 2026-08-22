@@ -11,7 +11,7 @@ pub async fn handle_root() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "online",
         "service": "MIVI-V2 Pure Rust High-Speed AI Engine",
-        "version": "0.0.11",
+        "version": env!("CARGO_PKG_VERSION"),
         "ram_footprint": "< 12 MB RAM",
         "openai_endpoint": "/v1/chat/completions"
     }))
@@ -46,7 +46,11 @@ pub async fn handle_models() -> Json<ModelListResponse> {
             object: "model".to_string(),
             created: now,
             owned_by: MODEL_NAME.to_string(),
-            context_length: Some(131072),
+            context_length: Some(
+                crate::runtime::RuntimeConfig::global()
+                    .context
+                    .max_input_tokens,
+            ),
         }],
     })
 }
@@ -103,4 +107,19 @@ pub fn tool_call_stream_chunks_include_usage_when_requested() {
 
     assert_eq!(chunks.last().unwrap()["usage"]["total_tokens"], 11);
     assert_eq!(chunks.last().unwrap()["choices"], json!([]));
+}
+
+#[tokio::test]
+async fn root_reports_cargo_package_version() {
+    let Json(value) = handle_root().await;
+    assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[tokio::test]
+async fn models_report_runtime_context_budget_not_a_lie() {
+    let Json(resp) = handle_models().await;
+    let expected = crate::runtime::RuntimeConfig::global()
+        .context
+        .max_input_tokens;
+    assert_eq!(resp.data[0].context_length, Some(expected));
 }
