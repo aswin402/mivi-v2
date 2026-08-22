@@ -108,6 +108,7 @@ There is a parallel `/v1/responses` endpoint (`handle_responses`) that maps Resp
 | `MIVI_RAM_TARGET_MB` | RAM budget reported/used by low-RAM checks (default 1000) |
 | `MIVI_MODEL_CACHE_MAX` | Max GGUF models kept in the native model cache, LRU-evicted (default 2; 1 in ultra-low-RAM) |
 | `MIVI_VERIFY_EXEC_TIMEOUT_SECS` / `MIVI_VERIFY_COMPILE_TIMEOUT_SECS` | Wall-clock caps on verifier code execution / compilation (defaults 15s / 60s) |
+| `MIVI_VERIFY_SANDBOX` | Verifier subprocess sandboxing: `auto` (default, Landlock when available, warn-once otherwise), `on` (require it; fail verification if unavailable), `off` (no sandboxing). Linux-only via the `landlock` crate; restricts children to system toolchain paths + `/tmp/mivi-verify`, denies TCP on kernels ≥ 6.7. |
 | `MIVI_SMOKE_BASE_URL`, `MIVI_EVAL_SERVER_URL`, `MIVI_EVAL_TIMEOUT` | script-side URLs/timeouts |
 
 

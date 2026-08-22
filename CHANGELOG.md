@@ -5,6 +5,12 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+* Verifier subprocesses (python3, node, bun, rustc, g++) now run inside a Linux Landlock sandbox: deny-by-default filesystem access limited to system toolchain paths plus the verifier's dedicated temp directory, and TCP bind/connect denied on kernels with Landlock ABI v4 (6.7+). Controlled by `MIVI_VERIFY_SANDBOX` (`auto` default degrades to unsandboxed with a one-time warning; `on` makes it fatal; `off` restores previous behavior).
+
 ## [v0.0.15] - 2026-08-22
 
 ### Security

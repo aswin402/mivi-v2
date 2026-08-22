@@ -18,6 +18,7 @@ pub mod rag;
 pub mod retrieval;
 pub mod router;
 pub mod runtime;
+pub mod sandbox;
 pub mod semantic_rag;
 pub mod server;
 pub mod stability;

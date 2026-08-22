@@ -1,6 +1,6 @@
 use crate::brain::EdgeBrain;
 use regex::Regex;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -53,6 +53,30 @@ fn compile_timeout_secs() -> u64 {
 
 fn exec_timeout_secs() -> u64 {
     timeout_secs_from_env("MIVI_VERIFY_EXEC_TIMEOUT_SECS", 15)
+}
+
+/// Dedicated absolute directory for verifier scratch files. Absolute paths are
+/// required for sandbox rules and avoid depending on the server's CWD.
+fn verify_temp_dir() -> PathBuf {
+    std::env::temp_dir().join("mivi-verify")
+}
+
+static SANDBOX_WARNED: OnceLock<()> = OnceLock::new();
+
+/// Attach the platform sandbox to a command before spawning it. In `auto`
+/// mode an unsupported kernel degrades to unsandboxed execution with a
+/// one-time warning; strict mode (`on`) turns that into a hard error.
+fn prepare_sandboxed(cmd: &mut tokio::process::Command, allow_dir: &Path) -> Result<(), String> {
+    match crate::sandbox::attach(cmd, allow_dir.to_path_buf()) {
+        Ok(Some(warning)) => {
+            if SANDBOX_WARNED.set(()).is_ok() {
+                println!("[CompilerVerifier] {}", warning);
+            }
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Parse "v22.14.0" into (major, minor). Node gained `--experimental-strip-types`
@@ -157,7 +181,7 @@ impl CompilerVerifier {
     }
 
     pub async fn run_local_code(&self, code: &str, language: &str) -> (bool, String) {
-        let temp_dir = PathBuf::from("temp_run");
+        let temp_dir = verify_temp_dir();
         if let Err(e) = tokio::fs::create_dir_all(&temp_dir).await {
             return (false, format!("Failed to create temp directory: {}", e));
         }
@@ -185,12 +209,18 @@ impl CompilerVerifier {
                 .arg("-o")
                 .arg(&out_bin)
                 .kill_on_drop(true);
+            if let Err(e) = prepare_sandboxed(&mut compile_cmd, &temp_dir) {
+                return (false, format!("Sandbox error: {}", e));
+            }
             let compile_res = timed_output(&mut compile_cmd, compile_timeout_secs()).await;
             let _ = tokio::fs::remove_file(&temp_file).await;
             match compile_res {
                 Ok(comp) if comp.status.success() => {
                     let mut exec_cmd = tokio::process::Command::new(&out_bin);
                     exec_cmd.kill_on_drop(true);
+                    if let Err(e) = prepare_sandboxed(&mut exec_cmd, &temp_dir) {
+                        return (false, format!("Sandbox error: {}", e));
+                    }
                     let exec_res = timed_output(&mut exec_cmd, exec_timeout_secs()).await;
                     let _ = tokio::fs::remove_file(&out_bin).await;
                     match exec_res {
@@ -212,12 +242,18 @@ impl CompilerVerifier {
                 .arg("-o")
                 .arg(&out_bin)
                 .kill_on_drop(true);
+            if let Err(e) = prepare_sandboxed(&mut compile_cmd, &temp_dir) {
+                return (false, format!("Sandbox error: {}", e));
+            }
             let compile_res = timed_output(&mut compile_cmd, compile_timeout_secs()).await;
             let _ = tokio::fs::remove_file(&temp_file).await;
             match compile_res {
                 Ok(comp) if comp.status.success() => {
                     let mut exec_cmd = tokio::process::Command::new(&out_bin);
                     exec_cmd.kill_on_drop(true);
+                    if let Err(e) = prepare_sandboxed(&mut exec_cmd, &temp_dir) {
+                        return (false, format!("Sandbox error: {}", e));
+                    }
                     let exec_res = timed_output(&mut exec_cmd, exec_timeout_secs()).await;
                     let _ = tokio::fs::remove_file(&out_bin).await;
                     match exec_res {
@@ -234,6 +270,9 @@ impl CompilerVerifier {
         } else {
             let mut run_cmd = tokio::process::Command::new(cmd_name);
             run_cmd.arg(&temp_file).kill_on_drop(true);
+            if let Err(e) = prepare_sandboxed(&mut run_cmd, &temp_dir) {
+                return (false, format!("Sandbox error: {}", e));
+            }
             let output = timed_output(&mut run_cmd, exec_timeout_secs()).await;
             match output {
                 Ok(out) => {
@@ -271,6 +310,9 @@ impl CompilerVerifier {
                         fallback_cmd.arg("--experimental-strip-types");
                     }
                     fallback_cmd.arg(&temp_file).kill_on_drop(true);
+                    if let Err(e) = prepare_sandboxed(&mut fallback_cmd, &temp_dir) {
+                        return (false, format!("Sandbox error: {}", e));
+                    }
                     let output = timed_output(&mut fallback_cmd, exec_timeout_secs()).await;
                     let _ = tokio::fs::remove_file(&temp_file).await;
                     match output {
