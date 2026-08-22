@@ -49,7 +49,7 @@ Model weights (~3.3 GB total) and llama.cpp binaries are **gitignored** — `mod
 
 - `src/main.rs` — subcommand dispatcher: `serve` (default), `audit`, `cli`, `chat`, `task`, `model`.
 - `src/lib.rs` — module list; adding a module requires adding it here.
-- `src/server.rs` — **5800+ lines**; the OpenAI-compatible API surface. Almost all agent-facing logic lives here (not in a framework router): tool-call parsing/validation, verified fast-path answers, streaming, usage accounting, `/v1/responses` mapping.
+- `src/server/` — OpenAI-compatible API surface, split by responsibility: `types.rs` (request/response structs, AppState, RateLimiter), `helpers.rs` (agent-facing logic: tool-call parsing/validation, verified answers, streaming, auth/rate-limit/timeout middleware, `start_api_server`), `handlers.rs` (route handlers), `mod.rs` (module glue + shared template state), `tests.rs` (integration-style tests).
 - `src/brain.rs` — `EdgeBrain`: subprocess wrapper around `llama-cli` / `llama-mtmd-cli`; response cleaning; Qwen3 think-mode directives.
 - `src/worker.rs` — `WorkerManager`: persistent `llama-server` worker for `worker-eco`/`worker-hot` modes (port 18080 by default).
 - `src/runtime.rs` — `RuntimeConfig` / `ContextBudget` from env.
@@ -66,7 +66,7 @@ Model weights (~3.3 GB total) and llama.cpp binaries are **gitignored** — `mod
 - `src/model_catalog.rs` — typed model catalog loader; `configs/models.json` drives `mivi model list/inspect` and token-counter config.
 - `configs/models.json` — internal model catalog (external name `mivi` + reasoner/coder/vision entries with `enabled` flags).
 - `configs/capabilities.json` — tool taxonomy/aliases, error markers, error-category priority (used by tool summary and trace logic).
-- `docs/` — `ARCHITECTURE.md` (partially stale: says 8192 default context; the runtime default is 3072), `AGENTS_GUIDE.md` (external-agent integration, not agent rules), `API_REFERENCE.md`, `OPENZ_INTEGRATION.md`.
+- `docs/` — `ARCHITECTURE.md` (partially stale in places), `AGENTS_GUIDE.md` (external-agent integration, not agent rules), `API_REFERENCE.md`, `OPENZ_INTEGRATION.md`.
 - `scripts/` — Python eval/smoke/compat tooling with matching `test_*.py` unit tests; `bench_runtime.sh`, `eval_small_models.sh`, `eval_model_candidates.sh`.
 
 ## Request flow (server)
@@ -100,6 +100,12 @@ There is a parallel `/v1/responses` endpoint (`handle_responses`) that maps Resp
 | `MIVI_AGENT_REASONING_SUMMARY` | set to `0`/`false`/`off`/`no` to disable the `reasoning_content` summary (on by default for tool workflows; suppressed for pure chat) |
 | `MIVI_API_KEY` | Bearer Authorization key for API auth (disabled/public if unset) |
 | `MIVI_MAX_CONCURRENT_REQUESTS` | Max concurrent requests allowed to be handled by the server (default 2) |
+| `MIVI_HOST` | Bind address for the API server (default `127.0.0.1`; set `0.0.0.0` to expose deliberately) |
+| `MIVI_PORT` | Override the default port 8000 |
+| `MIVI_RATE_LIMIT_PER_MIN` | Per-client request limit (default 60) |
+| `MIVI_TRUST_PROXY_HEADERS` | `1`/`true` to honor `X-Forwarded-For`/`X-Real-IP` for rate-limit identity (off by default) |
+| `MIVI_REQUEST_TIMEOUT_SECS` | Whole-request timeout (default 300) |
+| `MIVI_RAM_TARGET_MB` | RAM budget reported/used by low-RAM checks (default 1000) |
 | `MIVI_MODEL_CACHE_MAX` | Max GGUF models kept in the native model cache, LRU-evicted (default 2; 1 in ultra-low-RAM) |
 | `MIVI_VERIFY_EXEC_TIMEOUT_SECS` / `MIVI_VERIFY_COMPILE_TIMEOUT_SECS` | Wall-clock caps on verifier code execution / compilation (defaults 15s / 60s) |
 | `MIVI_SMOKE_BASE_URL`, `MIVI_EVAL_SERVER_URL`, `MIVI_EVAL_TIMEOUT` | script-side URLs/timeouts |
@@ -116,8 +122,9 @@ There is a parallel `/v1/responses` endpoint (`handle_responses`) that maps Resp
 
 ## Gotchas
 
-- `server.rs` is the monolith; unrelated-looking behavior (verified answers, tool heuristics, trace metadata) is all in there. Search it before assuming a feature lives elsewhere.
+- `src/server/` holds the API surface; unrelated-looking behavior (verified answers, tool heuristics, trace metadata) lives in `helpers.rs`. Search it before assuming a feature lives elsewhere.
 - `*.jsonl` is globally gitignored, so benchmark/eval outputs never show up in `git status` — that is expected.
+- The runtime default context budget is 8192 tokens (`DEFAULT_CONTEXT_TOKENS` in `src/constants.rs`) — the single source of truth. Historical docs/benchmarks quoting 3072 predate the change.
 - `docs/ARCHITECTURE.md` is stale in places (context sizes, component list). Prefer `README.md`, `docs/AGENTS_GUIDE.md`, and the code itself.
 - The vision model (`minicpm-vision`) is `enabled: false` in `configs/models.json` by default, but `EdgeBrain::query_vision` uses `MIVI_VISION_MODEL`/`MIVI_VISION_PROJECTOR` paths directly, independent of the catalog flag.
 - `main.rs` indexes the current working directory into RAG at startup (`orchestrator.rag.index_directory`), so startup behavior depends on the working directory.
