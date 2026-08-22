@@ -4,9 +4,6 @@ version = "0.0.14"
 edition = "2021"
 description = "MIVI-V2: Ultra-Compact Low-Resource Pure Rust Local AI Engine"
 
-[workspace]
-members = ["splitter"]
-
 [dependencies]
 tokio = { version = "1.38", features = ["full"] }
 axum = "0.7"
