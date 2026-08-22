@@ -5,6 +5,30 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+* Bound the API server to `127.0.0.1` by default; new `MIVI_HOST` / `MIVI_PORT` overrides make deliberate exposure explicit.
+* Replaced the bearer-token comparison with a constant-time check, removing a timing side channel on `MIVI_API_KEY`.
+* Hardened the rate limiter against identity spoofing: `X-Forwarded-For` / `X-Real-IP` are honored only behind `MIVI_TRUST_PROXY_HEADERS`, clients are identified by peer socket address otherwise, and the client map is capped at 4096 entries with oldest-entry eviction to stop unbounded memory growth from spoofed-header floods.
+
+### Fixed
+
+* Verified-code cache now requires exact prompt matches (fuzzy hits could return wrong code) and entries expire after 10 minutes.
+* `/v1/models` reports the real runtime context budget and `/` reports the actual Cargo package version instead of hardcoded values that had drifted.
+* TypeScript fallback no longer runs `node --experimental-strip-types` on Node versions lacking type-stripping support (< 22.6 / < 23.6); it fails with a clear error instead of a confusing syntax failure.
+* Orchestrator planner prompt now advertises all five verifier languages (Python, JavaScript, TypeScript, Rust, C++), so complex plans stop defaulting to Python-only steps.
+
+### Added
+
+* `MIVI_RATE_LIMIT_PER_MIN`, `MIVI_REQUEST_TIMEOUT_SECS`, and `MIVI_RAM_TARGET_MB` environment overrides for rate limiting, request timeout, and the RAM budget target.
+
+### Changed
+
+* Diagnostic and repair regexes (tool output compression, code-block extraction, JSON argument repair) are compiled once via `OnceLock` instead of per call.
+* Context constants unified in `src/constants.rs`; docs corrected — the runtime default context budget is 8192 tokens (`DEFAULT_CONTEXT_TOKENS`), and historical 3072 references predate the change.
+
 ## [v0.0.14] - 2026-08-20
 
 ### Fixed
