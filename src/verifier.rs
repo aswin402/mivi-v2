@@ -13,6 +13,14 @@ fn code_block_regex() -> &'static Regex {
     })
 }
 
+static SUM_TWO_ARGS_RE: OnceLock<Regex> = OnceLock::new();
+
+fn sum_two_args_regex() -> &'static Regex {
+    SUM_TWO_ARGS_RE.get_or_init(|| {
+        Regex::new(r"sum\(\s*([^,()]+)\s*,\s*([^,()]+)\s*\)").expect("sum regex must compile")
+    })
+}
+
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
@@ -312,7 +320,7 @@ impl CompilerVerifier {
             return None;
         }
 
-        let sum_two_args = Regex::new(r"sum\(\s*([^,()]+)\s*,\s*([^,()]+)\s*\)").ok()?;
+        let sum_two_args = sum_two_args_regex();
         for captures in sum_two_args.captures_iter(code) {
             let left = captures.get(1)?.as_str().trim();
             let right = captures.get(2)?.as_str().trim();

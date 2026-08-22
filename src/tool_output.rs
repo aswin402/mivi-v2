@@ -9,6 +9,38 @@ pub struct DiagnosticEntry {
     pub context: String,
 }
 
+// Diagnostic regexes are compiled once; extract_diagnostics runs on every
+// compressed tool output, so per-call Regex::new would dominate its cost.
+static CARGO_ERR_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+static CARGO_LOC_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+static TSC_DIAG_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+static PYTEST_FILE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+static PYTEST_ERR_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
+fn cargo_err_re() -> &'static regex::Regex {
+    CARGO_ERR_RE.get_or_init(|| regex::Regex::new(r"^(error|warning)\[(E\d+)\]:\s*(.*)$").unwrap())
+}
+
+fn cargo_loc_re() -> &'static regex::Regex {
+    CARGO_LOC_RE.get_or_init(|| regex::Regex::new(r"^\s*-->\s*([^:]+):(\d+):(\d+)").unwrap())
+}
+
+fn tsc_diag_re() -> &'static regex::Regex {
+    TSC_DIAG_RE.get_or_init(|| {
+        regex::Regex::new(r"^([^(\s]+)\((\d+),(\d+)\):\s*(error|warning)\s+(TS\d+):\s*(.*)$")
+            .unwrap()
+    })
+}
+
+fn pytest_file_re() -> &'static regex::Regex {
+    PYTEST_FILE_RE
+        .get_or_init(|| regex::Regex::new(r#"^\s*File\s+"([^"]+)",\s*line\s*(\d+)"#).unwrap())
+}
+
+fn pytest_err_re() -> &'static regex::Regex {
+    PYTEST_ERR_RE.get_or_init(|| regex::Regex::new(r"^([a-zA-Z_]\w*Error):\s*(.*)$").unwrap())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompressedToolOutput {
     pub kind: String,
@@ -158,8 +190,8 @@ fn extract_diagnostics(kind: &str, output: &str) -> Vec<DiagnosticEntry> {
 
     match kind {
         "cargo" => {
-            let re_err = regex::Regex::new(r"^(error|warning)\[(E\d+)\]:\s*(.*)$").unwrap();
-            let re_loc = regex::Regex::new(r"^\s*-->\s*([^:]+):(\d+):(\d+)").unwrap();
+            let re_err = cargo_err_re();
+            let re_loc = cargo_loc_re();
             for i in 0..lines.len() {
                 let line = lines[i].trim();
                 if let Some(caps) = re_err.captures(line) {
@@ -205,10 +237,7 @@ fn extract_diagnostics(kind: &str, output: &str) -> Vec<DiagnosticEntry> {
             }
         }
         "node-test" => {
-            let re_tsc = regex::Regex::new(
-                r"^([^(\s]+)\((\d+),(\d+)\):\s*(error|warning)\s+(TS\d+):\s*(.*)$",
-            )
-            .unwrap();
+            let re_tsc = tsc_diag_re();
             for line in &lines {
                 let trimmed = line.trim();
                 if let Some(caps) = re_tsc.captures(trimmed) {
@@ -237,8 +266,8 @@ fn extract_diagnostics(kind: &str, output: &str) -> Vec<DiagnosticEntry> {
             }
         }
         "pytest" => {
-            let re_file = regex::Regex::new(r#"^\s*File\s+"([^"]+)",\s*line\s*(\d+)"#).unwrap();
-            let re_err = regex::Regex::new(r"^([a-zA-Z_]\w*Error):\s*(.*)$").unwrap();
+            let re_file = pytest_file_re();
+            let re_err = pytest_err_re();
             for i in 0..lines.len() {
                 let line = lines[i];
                 if let Some(caps) = re_file.captures(line) {
