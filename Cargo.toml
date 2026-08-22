@@ -4,6 +4,11 @@ version = "0.0.14"
 edition = "2021"
 description = "MIVI-V2: Ultra-Compact Low-Resource Pure Rust Local AI Engine"
 
+# Empty workspace table: marks this manifest as a workspace root so cargo
+# does not attach to an unrelated Cargo.toml in a parent directory, and
+# keeps the gitignored local `splitter/` crate out of CI-visible builds.
+[workspace]
+
 [dependencies]
 tokio = { version = "1.38", features = ["full"] }
 axum = "0.7"
