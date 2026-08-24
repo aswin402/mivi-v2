@@ -4,7 +4,8 @@
 // Extracted from `helpers.rs` (server decomposition).
 
 use crate::runtime::RuntimeConfig;
-use crate::server::helpers::{clamp_tool_result, tool_names};
+use crate::server::tool_generate::clamp_tool_result;
+use crate::server::tool_parse::tool_names;
 use crate::server::tool_select::{
     blocked_tool_names, prompt_tools_for_request, select_tools_for_request,
 };
