@@ -59,6 +59,7 @@ button:disabled{opacity:.45;cursor:default}
   <span class="pill">RAM <b id="st-ram">…</b></span>
   <div id="rambar"><div id="ramfill"></div></div>
   <span class="pill">up <b id="st-up">…</b></span>
+  <span class="pill">cache <b id="st-cache">…</b></span>
 </header>
 <main>
   <div id="chatwrap">
@@ -89,6 +90,8 @@ async function pollStats(){
     $('st-ctx').textContent=s.context_tokens;
     $('st-ram').textContent=s.rss_mb+' MB';
     $('st-up').textContent=Math.floor(s.uptime_s/60)+'m'+Math.floor(s.uptime_s%60)+'s';
+    const cr=s.cache_hits+s.cache_misses;
+    $('st-cache').textContent=cr?Math.round(s.cache_hits/cr*100)+'% · '+s.cache_capacity:'–';
     const pct=Math.min(100,s.rss_mb/s.ram_target_mb*100);
     $('ramfill').style.width=pct+'%';
     $('ramfill').style.background=pct>85?'var(--warn)':'linear-gradient(90deg,var(--acc),var(--acc2))';

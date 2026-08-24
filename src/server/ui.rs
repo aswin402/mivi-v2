@@ -42,14 +42,21 @@ pub struct UiStats {
     pub rss_mb: u64,
     pub ram_target_mb: usize,
     pub uptime_s: u64,
+    /// SemanticCache lifetime counters + current adaptive capacity (19.4).
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub cache_evictions: u64,
+    pub cache_capacity: usize,
 }
 
 pub async fn handle_ui() -> Html<&'static str> {
     Html(UI_INDEX_HTML)
 }
 
-pub async fn handle_ui_stats() -> Json<UiStats> {
+pub async fn handle_ui_stats(State(state): State<Arc<AppState>>) -> Json<UiStats> {
     let config = crate::runtime::RuntimeConfig::global();
+    let (cache_hits, cache_misses, cache_evictions, cache_capacity) =
+        state.orchestrator.cache.counters();
     Json(UiStats {
         version: env!("CARGO_PKG_VERSION"),
         mode: format!("{:?}", config.mode).to_ascii_lowercase(),
@@ -57,6 +64,10 @@ pub async fn handle_ui_stats() -> Json<UiStats> {
         rss_mb: resident_rss_mb(),
         ram_target_mb: config.ram_target_mb,
         uptime_s: BOOT.elapsed().as_secs(),
+        cache_hits,
+        cache_misses,
+        cache_evictions,
+        cache_capacity,
     })
 }
 

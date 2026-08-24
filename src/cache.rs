@@ -1,19 +1,82 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Entries older than this are treated as misses and purged lazily.
 const CACHE_TTL_SECS: u64 = 600;
 
+/// Adaptive capacity bounds for the trace-driven tuner (19.4).
+pub const CACHE_MIN_CAPACITY: usize = 128;
+pub const CACHE_MAX_CAPACITY: usize = 2048;
+const CACHE_DEFAULT_CAPACITY: usize = 512;
+
 #[derive(Clone)]
 pub struct SemanticCache {
     cache: Arc<Mutex<HashMap<String, (String, std::time::SystemTime)>>>,
+    hits: Arc<AtomicU64>,
+    misses: Arc<AtomicU64>,
+    evictions: Arc<AtomicU64>,
+    capacity: Arc<AtomicUsize>,
 }
 
 impl SemanticCache {
     pub fn new() -> Self {
         Self {
             cache: Arc::new(Mutex::new(HashMap::new())),
+            hits: Arc::new(AtomicU64::new(0)),
+            misses: Arc::new(AtomicU64::new(0)),
+            evictions: Arc::new(AtomicU64::new(0)),
+            capacity: Arc::new(AtomicUsize::new(CACHE_DEFAULT_CAPACITY)),
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity.load(Ordering::Relaxed)
+    }
+
+    /// Snapshot of the lifetime counters (hits, misses, evictions, capacity).
+    pub fn counters(&self) -> (u64, u64, u64, usize) {
+        (
+            self.hits.load(Ordering::Relaxed),
+            self.misses.load(Ordering::Relaxed),
+            self.evictions.load(Ordering::Relaxed),
+            self.capacity(),
+        )
+    }
+
+    /// Trace-driven tuner (TODO 19.4): adapt capacity from a measured window.
+    ///
+    /// - grow when the cache earns its RAM (decent hit rate) but entries are
+    ///   being evicted to make room;
+    /// - shrink when lookups almost never hit (dead weight);
+    /// - keep otherwise, and keep when the window is too small to trust.
+    pub fn adapt_window(&self, hits: u64, misses: u64, evictions: u64) {
+        let total = hits + misses;
+        let current = self.capacity();
+        if total < 50 {
+            return;
+        }
+        let hit_rate = hits as f32 / total as f32;
+        let next = if evictions > 0 && hit_rate >= 0.25 {
+            (current * 2).min(CACHE_MAX_CAPACITY)
+        } else if hit_rate < 0.05 && total >= 200 {
+            (current / 2).max(CACHE_MIN_CAPACITY)
+        } else {
+            current
+        };
+        if next != current {
+            self.capacity.store(next, Ordering::Relaxed);
+            tracing::info!(
+                "[SemanticCache] adapted capacity {} -> {} \
+                 (window: {} hits / {} misses / {} evictions, rate {:.2})",
+                current,
+                next,
+                hits,
+                misses,
+                evictions,
+                hit_rate
+            );
         }
     }
 
@@ -57,12 +120,15 @@ impl SemanticCache {
         if let Some((val, ts)) = guard.get_mut(q_clean) {
             if !Self::fresh(ts) {
                 guard.remove(q_clean);
+                self.misses.fetch_add(1, Ordering::Relaxed);
                 return None;
             }
             *ts = std::time::SystemTime::now();
+            self.hits.fetch_add(1, Ordering::Relaxed);
             println!("[SemanticCache] EXACT CACHE HIT!");
             return Some(val.clone());
         }
+        self.misses.fetch_add(1, Ordering::Relaxed);
         None
     }
 
@@ -73,8 +139,10 @@ impl SemanticCache {
         if let Some((val, ts)) = guard.get_mut(q_clean) {
             if !Self::fresh(ts) {
                 guard.remove(q_clean);
+                self.misses.fetch_add(1, Ordering::Relaxed);
                 return None;
             }
+            self.hits.fetch_add(1, Ordering::Relaxed);
             println!("[SemanticCache] EXACT CACHE HIT!");
             *ts = std::time::SystemTime::now();
             return Some(val.clone());
@@ -101,13 +169,15 @@ impl SemanticCache {
                 "[SemanticCache] SEMANTIC CACHE HIT! Similarity score: {:.4}",
                 best_score
             );
-            if let Some(ref k) = best_key {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            if let Some(k) = &best_key {
                 if let Some((_, ts)) = guard.get_mut(k) {
                     *ts = std::time::SystemTime::now();
                 }
             }
             best_result
         } else {
+            self.misses.fetch_add(1, Ordering::Relaxed);
             None
         }
     }
@@ -116,7 +186,7 @@ impl SemanticCache {
         let mut guard = self.cache.lock().await;
         let q_clean = query.trim().to_string();
 
-        if guard.len() >= 512 && !guard.contains_key(&q_clean) {
+        if guard.len() >= self.capacity() && !guard.contains_key(&q_clean) {
             // Evict LRU: find key with oldest timestamp
             let mut oldest_key: Option<String> = None;
             let mut oldest_time = std::time::SystemTime::now();
@@ -130,6 +200,7 @@ impl SemanticCache {
 
             if let Some(k) = oldest_key {
                 guard.remove(&k);
+                self.evictions.fetch_add(1, Ordering::Relaxed);
             }
         }
 
@@ -218,5 +289,63 @@ mod tests {
                 std::time::SystemTime::now() - std::time::Duration::from_secs(601);
         }
         assert_eq!(cache.get_exact("q").await, None);
+    }
+
+    #[test]
+    fn tuner_keeps_capacity_when_window_too_small() {
+        let cache = SemanticCache::new();
+        cache.adapt_window(10, 0, 50);
+        assert_eq!(cache.capacity(), 512);
+    }
+
+    #[test]
+    fn tuner_grows_when_hits_earn_evictions() {
+        let cache = SemanticCache::new();
+        cache.adapt_window(300, 100, 12); // 75% hit rate, evicting
+        assert_eq!(cache.capacity(), 1024);
+    }
+
+    #[test]
+    fn tuner_shrinks_dead_weight_cache() {
+        let cache = SemanticCache::new();
+        cache.adapt_window(2, 400, 0); // 0.5% hit rate, large window
+        assert_eq!(cache.capacity(), 256);
+    }
+
+    #[test]
+    fn tuner_respects_hard_bounds() {
+        let cache = SemanticCache::new();
+        for _ in 0..12 {
+            cache.adapt_window(400, 50, 5); // grow repeatedly
+        }
+        assert_eq!(cache.capacity(), CACHE_MAX_CAPACITY);
+        for _ in 0..12 {
+            cache.adapt_window(1, 900, 0); // shrink repeatedly
+        }
+        assert_eq!(cache.capacity(), CACHE_MIN_CAPACITY);
+    }
+
+    #[tokio::test]
+    async fn counters_track_hits_misses_evictions() {
+        let cache = SemanticCache::new();
+        cache.put("alpha query", "a").await;
+        let _ = cache.get("alpha query").await;
+        let (hits_before, _, _, _) = cache.counters();
+        assert_eq!(hits_before, 1);
+        for i in 0..512 {
+            cache.put(&format!("filler-{i}"), "v").await;
+        }
+        let (_, _, evictions, _) = cache.counters();
+        assert!(evictions > 0, "inserting past capacity must evict");
+        let (hits, _, _, _) = cache.counters();
+        assert!(hits >= 1);
+    }
+
+    #[tokio::test]
+    async fn misses_are_counted() {
+        let cache = SemanticCache::new();
+        let _ = cache.get("totally unknown query").await;
+        let (_, misses, _, _) = cache.counters();
+        assert_eq!(misses, 1);
     }
 }

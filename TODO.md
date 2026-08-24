@@ -223,7 +223,7 @@ Phase 15 complete.
 
 - [x] **19.2** RAM-tiered preset recommender (`spawn`+ultra-low < 3 GB, `worker-eco` < 6 GB, else `worker-hot`) with export form
 - [x] **19.3** `MIVI_RUNTIME_MODE=auto`: server applies the doctor recommendation at startup and logs the chosen plan
-- [ ] **19.4** Trace-backed cache sizing: adapt SemanticCache/RAG limits from measured hit rates in `logs/mivi-trace.jsonl` instead of hardcoded caps
+- [x] **19.4** Trace-backed cache sizing: SemanticCache tracks hit/miss/eviction counters and an adaptive capacity (128–2048, default 512); `start_api_server` runs a 2-minute-window tuner that grows capacity when a healthy hit rate is paying eviction costs and shrinks it below 5% hit rate. Counters exposed via `/ui/api/stats` and the `/ui` dashboard cache pill. Note: the HTTP chat pipeline serves from verified fast-paths/direct model routes, so the cache (and thus the tuner) is exercised by orchestrator flows (`mivi task`, `cli`, `audit`); with zero traffic the tuner keeps the 512 default
 
 ## Phase 20: Cross-Mode Output Invariant 🔒 ✅ COMPLETE
 

@@ -4513,6 +4513,30 @@ pub async fn start_api_server(
         rate_limiter: crate::server::types::RateLimiter::new(),
     });
 
+    // Trace-driven cache tuner (TODO 19.4): every 2 minutes, adapt the
+    // SemanticCache capacity from the measured hit/miss window.
+    {
+        let tuning_cache = state.orchestrator.cache.clone();
+        tokio::spawn(async move {
+            let mut last = (0u64, 0u64, 0u64);
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(120));
+            // The first tick fires immediately; skip it so the first decision
+            // is made after a full 120s window of real traffic.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                let (hits, misses, evictions, _) = tuning_cache.counters();
+                let window = (
+                    hits.saturating_sub(last.0),
+                    misses.saturating_sub(last.1),
+                    evictions.saturating_sub(last.2),
+                );
+                last = (hits, misses, evictions);
+                tuning_cache.adapt_window(window.0, window.1, window.2);
+            }
+        });
+    }
+
     let api_routes = Router::new()
         .route("/models", get(handle_models))
         .route("/chat/completions", post(handle_chat_completions))
