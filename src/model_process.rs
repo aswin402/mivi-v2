@@ -35,6 +35,9 @@ fn base_args(cmd: &mut Command, model_path: &str, ngl: &str, ctx: &str, temp: &s
         .arg(runtime_config.threads.to_string())
         .arg("-tb")
         .arg(runtime_config.threads.to_string());
+    for arg in &runtime_config.lora_args {
+        cmd.arg(arg);
+    }
 }
 
 fn find_marker_case_insensitive(text: &str, markers: &[&str]) -> Option<(usize, usize)> {

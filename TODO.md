@@ -201,7 +201,7 @@ Phase 15 complete.
 
 > **Goal:** Switch specialist personas on a single 0.5B base model without reloading weights.
 
-- [ ] **17.1** Support dynamic adapter loading in `src/worker.rs` and `src/brain.rs` (`--lora` flags)
+- [x] **17.1** Support dynamic adapter loading in `src/worker.rs` and `src/brain.rs` (`--lora` flags): `MIVI_LORA_ADAPTERS="path[=scale],..."` parsed in `src/runtime.rs` into a single `--lora-scaled path:scale,...` flag, applied in worker launch args and both `llama-cli` spawn sites plus `model_process.rs`; missing paths warn+skip; reported by `mivi doctor`. Verified end-to-end: llama-server parses the flag and rejects a non-adapter GGUF (`expect general.type to be 'adapter'`), proving pass-through. 17.2/17.3 stay blocked until trained adapter GGUFs exist in `models/loras/`
 - [ ] **17.2** Per-request persona routing (`mivi:coder`, `mivi:tools`, `mivi:reasoner`)
 - [ ] **17.3** Adapter caching in memory for sub-millisecond persona switching
 

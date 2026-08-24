@@ -155,6 +155,10 @@ impl WorkerManager {
             }
         }
 
+        // Multi-LoRA specialist adapters (Phase 17.1); pre-flattened and
+        // existence-checked by RuntimeConfig.
+        args.extend(runtime_config.lora_args.iter().cloned());
+
         args
     }
 
@@ -861,6 +865,7 @@ mod tests {
             kv_cache_type: "q4_0".to_string(),
             threads: 1,
             draft_model: None,
+            lora_args: Vec::new(),
         }
     }
 

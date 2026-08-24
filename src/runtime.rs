@@ -71,6 +71,47 @@ pub struct RuntimeConfig {
     pub kv_cache_type: String,
     pub threads: usize,
     pub draft_model: Option<String>,
+    /// Flattened llama.cpp `--lora-scaled` args from `MIVI_LORA_ADAPTERS`
+    /// (Phase 17.1). Empty unless adapters are configured and exist on disk.
+    pub lora_args: Vec<String>,
+}
+
+/// Parse `MIVI_LORA_ADAPTERS`: comma-separated `path[=scale]` entries,
+/// scale defaulting to 1.0 (invalid scales fall back to 1.0).
+pub fn parse_lora_adapters(spec: &str) -> Vec<(String, f32)> {
+    spec.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| match entry.split_once('=') {
+            Some((path, scale)) => (
+                path.trim().to_string(),
+                scale.trim().parse::<f32>().unwrap_or(1.0),
+            ),
+            None => (entry.to_string(), 1.0),
+        })
+        .collect()
+}
+
+/// Flatten parsed adapters into llama.cpp `--lora-scaled FNAME:SCALE,...`
+/// (a single flag with colon-separated pairs joined by commas), skipping
+/// paths that do not exist (warn so typos are visible).
+pub fn lora_flag_args(adapters: &[(String, f32)]) -> Vec<String> {
+    let pairs: Vec<String> = adapters
+        .iter()
+        .filter(|(path, _)| {
+            let exists = std::path::Path::new(path).exists();
+            if !exists {
+                tracing::warn!("[runtime] LoRA adapter not found, skipping: {path}");
+            }
+            exists
+        })
+        .map(|(path, scale)| format!("{path}:{scale}"))
+        .collect();
+    if pairs.is_empty() {
+        Vec::new()
+    } else {
+        vec!["--lora-scaled".to_string(), pairs.join(",")]
+    }
 }
 
 impl RuntimeConfig {
@@ -167,6 +208,10 @@ impl RuntimeConfig {
             .ok()
             .filter(|v| !v.trim().is_empty());
 
+        let lora_args = env::var("MIVI_LORA_ADAPTERS")
+            .map(|spec| lora_flag_args(&parse_lora_adapters(&spec)))
+            .unwrap_or_default();
+
         Self {
             mode,
             context: ContextBudget::from_max_input_tokens(max_input_tokens),
@@ -175,6 +220,7 @@ impl RuntimeConfig {
             kv_cache_type,
             threads,
             draft_model,
+            lora_args,
         }
     }
 }
@@ -303,5 +349,63 @@ mod tests {
         );
 
         std::env::remove_var("MIVI_RAM_TARGET_MB");
+    }
+
+    #[test]
+    fn parse_lora_adapters_handles_paths_scales_and_garbage() {
+        assert!(parse_lora_adapters("").is_empty());
+        assert_eq!(
+            parse_lora_adapters("a.gguf, b.gguf=0.5"),
+            vec![("a.gguf".to_string(), 1.0), ("b.gguf".to_string(), 0.5)]
+        );
+        // Invalid scale falls back to 1.0 rather than failing the parse.
+        assert_eq!(
+            parse_lora_adapters("x.gguf=notanumber"),
+            vec![("x.gguf".to_string(), 1.0)]
+        );
+    }
+
+    #[test]
+    fn lora_flag_args_skip_missing_files() {
+        let adapters = vec![
+            ("definitely-missing-adapter.gguf".to_string(), 1.0),
+            ("Cargo.toml".to_string(), 0.75),
+        ];
+        assert_eq!(
+            lora_flag_args(&adapters),
+            vec!["--lora-scaled".to_string(), "Cargo.toml:0.75".to_string()]
+        );
+        assert!(lora_flag_args(&[]).is_empty());
+    }
+
+    #[test]
+    fn lora_flag_args_join_multiple_adapters_into_one_flag() {
+        let adapters = vec![
+            ("Cargo.toml".to_string(), 1.0),
+            ("README.md".to_string(), 0.5),
+        ];
+        assert_eq!(
+            lora_flag_args(&adapters),
+            vec![
+                "--lora-scaled".to_string(),
+                "Cargo.toml:1,README.md:0.5".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn lora_env_var_flows_into_from_env() {
+        let _guard = env_lock();
+        clear_runtime_env();
+        std::env::set_var("MIVI_LORA_ADAPTERS", "Cargo.toml=0.5,missing.gguf");
+
+        let config = RuntimeConfig::from_env();
+
+        assert_eq!(
+            config.lora_args,
+            vec!["--lora-scaled".to_string(), "Cargo.toml:0.5".to_string()]
+        );
+
+        clear_runtime_env();
     }
 }

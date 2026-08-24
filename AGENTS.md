@@ -93,6 +93,7 @@ There is a parallel `/v1/responses` endpoint (`handle_responses`) that maps Resp
 | `MIVI_WORKER_PORT` | worker server port (default 18080) |
 | `MIVI_REASONER_MODEL` / `MIVI_CODER_MODEL` / `MIVI_VISION_MODEL` / `MIVI_VISION_PROJECTOR` | GGUF path overrides |
 | `MIVI_REASONER_CONTEXT_SIZE` / `MIVI_CODER_CONTEXT_SIZE` | per-model context override (min 1024) |
+| `MIVI_LORA_ADAPTERS` | Comma-separated LoRA adapter GGUFs `path[=scale]` (scale default 1.0) passed to llama.cpp as `--lora-scaled path:scale,...` in spawn and worker modes; missing files are skipped with a warning (Phase 17.1 plumbing) |
 | `MIVI_REASONING_MODE` | `auto` (default) \| `think` \| `no_think` — prepends `/think` or `/no_think` to reasoner prompts; `auto` is conservative for agents |
 | `MIVI_ULTRA_LOW_RAM` | `1`/`true` → `-ngl 0`, reduced contexts, `--mmap` |
 | `MIVI_CLI_TIMEOUT_SECS` | llama-cli subprocess timeout (default 180) |

@@ -610,6 +610,10 @@ impl EdgeBrain {
             }
         }
 
+        for arg in &runtime_config.lora_args {
+            cmd.arg(arg);
+        }
+
         cmd.arg("-f").arg(&prompt_file);
         cmd.arg("--temp").arg(temp);
         cmd.arg("--simple-io");
@@ -916,6 +920,10 @@ impl EdgeBrain {
                     cmd.arg("--model-draft").arg(draft_path);
                     cmd.arg("--gpu-layers-draft").arg(ngl_val);
                 }
+            }
+
+            for arg in &runtime_config.lora_args {
+                cmd.arg(arg);
             }
 
             cmd.arg("-f").arg(&prompt_file);

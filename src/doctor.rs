@@ -216,7 +216,19 @@ pub fn run_doctor() {
     println!("ram target      : {} MB", config.ram_target_mb);
     println!("threads         : {}", config.threads);
     println!("kv cache type   : {}", config.kv_cache_type);
-
+    if config.lora_args.is_empty() {
+        println!("lora adapters   : none (set MIVI_LORA_ADAPTERS=\"path[=scale],...\")");
+    } else {
+        println!(
+            "lora adapters   : {}",
+            config
+                .lora_args
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+    }
     print_section("Recommended preset");
     let plan = recommend(&snapshot);
     println!("MIVI_RUNTIME_MODE={}", plan.runtime_mode);
