@@ -2,8 +2,10 @@ pub mod anthropic;
 pub mod chat;
 pub mod handlers;
 pub mod helpers;
+pub mod middleware;
 pub mod prompt;
 pub mod responses_map;
+pub mod startup;
 pub mod streaming;
 #[cfg(test)]
 pub mod tests;
@@ -19,5 +21,6 @@ pub use helpers::*;
 pub use prompt::*;
 pub use responses_map::*;
 pub use tool_select::*;
+pub use startup::*;
 pub use types::*;
 pub use usage::*;

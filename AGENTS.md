@@ -49,7 +49,7 @@ Model weights (~3.3 GB total) and llama.cpp binaries are **gitignored** — `mod
 
 - `src/main.rs` — subcommand dispatcher: `serve` (default), `audit`, `cli`, `chat`, `task`, `model`.
 - `src/lib.rs` — module list; adding a module requires adding it here.
-- `src/server/` — OpenAI-compatible API surface, split by responsibility: `types.rs` (request/response structs, AppState, RateLimiter), `helpers.rs` (agent-facing logic: tool-call parsing/validation, verified answers, streaming, auth/rate-limit/timeout middleware, `start_api_server`), `handlers.rs` (route handlers), `mod.rs` (module glue + shared template state), `tests.rs` (integration-style tests).
+- `src/server/` — OpenAI-compatible API surface, split by responsibility: `types.rs` (request/response structs, AppState, RateLimiter), `usage.rs` (token counting, usage estimation, response_format validation), `responses_map.rs` (`/v1/responses` ⇄ chat translation), `prompt.rs` (prompt assembly, agent contract, history sanitization), `tool_select.rs` (capability taxonomy, intent-driven tool filtering), `tool_parse.rs` (tool-call parsing + schema validation), `tool_generate.rs` (tool-path decision, grammar-constrained generation), `chat.rs` (model chat wrappers, `complete_chat_non_stream`, `handle_chat_completions`), `anthropic.rs` (`/v1/messages` adapter), `streaming.rs` (SSE), `middleware.rs` (auth/rate-limit/timeout), `startup.rs` (router assembly, cache tuner, warmup, `start_api_server`), `helpers.rs` (request-content extraction + shared leftovers), `handlers.rs` (route handlers), `ui.rs` (`/ui` dashboard), `mod.rs` (module glue), `tests.rs` (integration-style tests).
 - `src/brain.rs` — `EdgeBrain`: subprocess wrapper around `llama-cli` / `llama-mtmd-cli`; response cleaning; Qwen3 think-mode directives.
 - `src/worker.rs` — `WorkerManager`: persistent `llama-server` worker for `worker-eco`/`worker-hot` modes (port 18080 by default).
 - `src/runtime.rs` — `RuntimeConfig` / `ContextBudget` from env.
@@ -125,7 +125,7 @@ There is a parallel `/v1/responses` endpoint (`handle_responses`) that maps Resp
 
 ## Gotchas
 
-- `src/server/` holds the API surface; unrelated-looking behavior (verified answers, tool heuristics, trace metadata) lives in `helpers.rs`. Search it before assuming a feature lives elsewhere.
+- `src/server/` is split by responsibility (see layout above); `helpers.rs` is intentionally small now — request-content extraction and shared leftovers only.
 - `*.jsonl` is globally gitignored, so benchmark/eval outputs never show up in `git status` — that is expected.
 - The runtime default context budget is 8192 tokens (`DEFAULT_CONTEXT_TOKENS` in `src/constants.rs`) — the single source of truth. Historical docs/benchmarks quoting 3072 predate the change.
 - `docs/ARCHITECTURE.md` is stale in places (context sizes, component list). Prefer `README.md`, `docs/AGENTS_GUIDE.md`, and the code itself.

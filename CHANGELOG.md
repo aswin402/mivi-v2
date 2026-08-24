@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * `--live on` compat gate now runs the cross-mode output invariant as a `live-consistency` step (`scripts/check_runtime_consistency.py`, default modes `spawn,worker-eco`) right after the release build. Verified live: byte-identical outputs across both modes.
 * LoRA adapter plumbing (TODO 17.1, Phase 17): `MIVI_LORA_ADAPTERS="path[=scale],..."` loads specialist adapter GGUFs onto the base model in both spawn (`llama-cli`) and worker (`llama-server`) modes via a single `--lora-scaled path:scale,...` flag; missing files are skipped with a warning and the effective adapters are reported by `mivi doctor`. Verified pass-through end-to-end against llama-server (a non-adapter GGUF fails with `expect general.type to be 'adapter'`). Per-request persona routing (17.2) still needs trained adapter weights.
 
+### Changed
+
+* Server module decomposition: `src/server/helpers.rs` (6,185 lines, ~200 functions across 10+ unrelated concerns) split into responsibility-scoped modules — `usage`, `responses_map`, `prompt`, `tool_select`, `tool_parse`, `tool_generate`, `chat`, `anthropic`, `streaming`, `middleware`, `startup` — with inline tests moved to `tests.rs`. Pure move-only refactor (no behavior changes); full suite 216/216 green before and after. `helpers.rs` is now 211 lines.
+
 ## [v0.0.15] - 2026-08-22
 
 ### Security
