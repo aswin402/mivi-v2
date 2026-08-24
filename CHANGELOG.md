@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 * Server module decomposition: `src/server/helpers.rs` (6,185 lines, ~200 functions across 10+ unrelated concerns) split into responsibility-scoped modules — `usage`, `responses_map`, `prompt`, `tool_select`, `tool_parse`, `tool_generate`, `chat`, `anthropic`, `streaming`, `middleware`, `startup` — with inline tests moved to `tests.rs`. Pure move-only refactor (no behavior changes); full suite 216/216 green before and after. `helpers.rs` is now 211 lines.
+* Same decomposition applied to the inference layer: `src/reasoning.rs` (Qwen3 `/think` directives, think-block stripping, llama-cli response cleaning) out of `brain.rs` (1,228 → 950 lines), and `src/native_model.rs` (GGUF loading, tokenizer discovery, grammar state, LRU model cache) out of `native_brain.rs` (1,363 → 1,148 lines — the remainder is the three cohesive inference loops, left intact deliberately).
 
 ## [v0.0.15] - 2026-08-22
 
