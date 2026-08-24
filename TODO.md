@@ -227,11 +227,9 @@ Phase 15 complete.
 
 ## Phase 20: Cross-Mode Output Invariant 🔒 ✅ COMPLETE
 
-- [x] **20.3** Verified live across `spawn`, `worker-eco`, and `worker-hot` (byte-identical "Paris"); wire into the `--live on` compat gate when RAM headroom allows
-
 - [x] **20.1** `scripts/check_runtime_consistency.py`: seeded greedy request served through every runtime mode must yield byte-identical content + tool calls
 - [x] **20.2** Unit tests for payload determinism/output extraction (`scripts/test_check_runtime_consistency.py`)
-- [ ] **20.3** Wire into the `--live on` compat gate once worker-hot is included (needs ~2 GB free RAM headroom)
+- [x] **20.3** Wired into the `--live on` compat gate as the `live-consistency` step (`scripts/check_agent_compat.py`), after `release-build`; default modes `spawn,worker-eco`. `worker-hot` remains opt-in via `--modes` until a ~2 GB RAM headroom machine runs the gate
 
 ## Phase 15 addendum: dashboard spec enriched from Colibrì's `coli web` 🖥️
 

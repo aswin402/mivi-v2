@@ -21,8 +21,10 @@ class AgentCompatCheckTests(unittest.TestCase):
         names = [step.name for step in plan]
 
         self.assertIn("live-smoke", names)
+        self.assertIn("live-consistency", names)
         self.assertIn("live-agent-eval", names)
         self.assertLess(names.index("release-build"), names.index("live-smoke"))
+        self.assertLess(names.index("release-build"), names.index("live-consistency"))
 
     def test_probe_server_returns_false_for_unreachable_port(self):
         self.assertFalse(check.server_is_reachable("http://127.0.0.1:9/v1", timeout=0.05))

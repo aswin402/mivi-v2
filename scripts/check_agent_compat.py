@@ -66,6 +66,9 @@ def build_plan(live=False, eval_live=False, base_url=DEFAULT_BASE_URL, trace_pat
 
     if live:
         steps.append(Step('live-smoke', ('python3', 'scripts/smoke_openai_compat.py', '--base-url', base_url)))
+        # Cross-mode output invariant (Phase 20): spawns its own servers per
+        # runtime mode, so it only needs the release binary built above.
+        steps.append(Step('live-consistency', ('python3', 'scripts/check_runtime_consistency.py')))
     if eval_live:
         trace_path = trace_path or os.environ.get('MIVI_TRACE_PATH', 'logs/mivi-trace.jsonl')
         env = {'MIVI_TRACE': '1', 'MIVI_TRACE_PATH': trace_path}

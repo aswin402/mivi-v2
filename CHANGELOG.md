@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Built-in web dashboard at `/ui` (`src/server/ui.rs` + `assets/ui/index.html`, embedded via `include_str!`, zero new dependencies): SSE streaming chat playground with collapsible `<think>` traces and inline tool-call inspector, per-message latency/TTFT/tok-s, live RAM gauge from `/proc/self/statm` (`/ui/api/stats`), and a workspace RAG explorer with score bars (`/ui/api/rag`). Verified in a real browser against a live server.
 * Adaptive `SemanticCache` sizing (TODO 19.4): the cache now tracks hit/miss/eviction counters, and the server runs a background tuner that adapts capacity every 2 minutes from the measured window — grows (up to 2048) when a decent hit rate is being throttled by evictions, shrinks (down to 128) when lookups almost never hit. Lifetime counters and current capacity are exposed via `/ui/api/stats` and a dashboard pill. Exercised live: an identical repeat task returns in <1 ms from the exact-hit path.
 * Dashboard fix: `pollStats` referenced a nonexistent `st-up` element and threw every 2 s cycle since v0.0.16's dashboard shipped, silently disabling the uptime pill and the RAM-gauge fill bar. Both now render.
+* `--live on` compat gate now runs the cross-mode output invariant as a `live-consistency` step (`scripts/check_runtime_consistency.py`, default modes `spawn,worker-eco`) right after the release build. Verified live: byte-identical outputs across both modes.
 
 ## [v0.0.15] - 2026-08-22
 
