@@ -1,4 +1,5 @@
 use axum::extract::{Json, State};
+use axum::http::StatusCode;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -55,6 +56,69 @@ pub async fn handle_models() -> Json<ModelListResponse> {
     })
 }
 
+/// Maximum number of texts accepted per embeddings request (bounds CPU/RAM).
+pub const MAX_EMBEDDING_INPUTS: usize = 256;
+
+fn invalid_request(message: String) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "error": {
+                "type": "invalid_request_error",
+                "message": message,
+            }
+        })),
+    )
+}
+
+/// OpenAI-compatible `/v1/embeddings`: pure Rust dense vectors from
+/// `semantic_rag::compute_text_embedding` (no model load, no external deps).
+pub async fn handle_embeddings(
+    Json(req): Json<EmbeddingsRequest>,
+) -> Result<Json<EmbeddingsResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(fmt) = req.encoding_format.as_deref() {
+        if !fmt.eq_ignore_ascii_case("float") {
+            return Err(invalid_request(format!(
+                "Unsupported encoding_format '{fmt}': only 'float' is supported."
+            )));
+        }
+    }
+
+    let texts = req.input.into_texts();
+    if texts.is_empty() {
+        return Err(invalid_request(
+            "input must contain at least one text.".to_string(),
+        ));
+    }
+    if texts.len() > MAX_EMBEDDING_INPUTS {
+        return Err(invalid_request(format!(
+            "input exceeds the maximum of {} texts per request.",
+            MAX_EMBEDDING_INPUTS
+        )));
+    }
+
+    let mut prompt_tokens: u32 = 0;
+    let mut data = Vec::with_capacity(texts.len());
+    for (index, text) in texts.into_iter().enumerate() {
+        prompt_tokens += crate::tokenizer::count_tokens(&text);
+        data.push(EmbeddingData {
+            object: "embedding".to_string(),
+            index,
+            embedding: crate::semantic_rag::compute_text_embedding(&text),
+        });
+    }
+
+    Ok(Json(EmbeddingsResponse {
+        object: "list".to_string(),
+        data,
+        model: req.model.unwrap_or_else(|| MODEL_NAME.to_string()),
+        usage: EmbeddingsUsage {
+            prompt_tokens,
+            total_tokens: prompt_tokens,
+        },
+    }))
+}
+
 #[test]
 pub fn text_stream_chunks_include_usage_only_when_requested() {
     let without_usage = text_stream_chunks(
@@ -84,6 +148,84 @@ pub fn text_stream_chunks_include_usage_only_when_requested() {
     assert_eq!(usage_chunk["usage"]["prompt_tokens"], 5);
     assert_eq!(usage_chunk["usage"]["completion_tokens"], 2);
     assert_eq!(usage_chunk["usage"]["total_tokens"], 7);
+}
+
+#[cfg(test)]
+fn embeddings_request(value: serde_json::Value) -> EmbeddingsRequest {
+    serde_json::from_value(value).expect("valid embeddings request")
+}
+
+#[tokio::test]
+async fn embeddings_single_input_returns_unit_vector_and_usage() {
+    let req = embeddings_request(json!({
+        "model": "mivi",
+        "input": "hello world of embeddings"
+    }));
+    let Json(resp) = handle_embeddings(Json(req)).await.unwrap();
+
+    assert_eq!(resp.object, "list");
+    assert_eq!(resp.model, "mivi");
+    assert_eq!(resp.data.len(), 1);
+    assert_eq!(resp.data[0].object, "embedding");
+    assert_eq!(resp.data[0].index, 0);
+    assert!(!resp.data[0].embedding.is_empty());
+    let norm: f32 = resp.data[0]
+        .embedding
+        .iter()
+        .map(|x| x * x)
+        .sum::<f32>()
+        .sqrt();
+    assert!((norm - 1.0).abs() < 1e-4, "embedding must be L2-normalized");
+    assert!(resp.usage.prompt_tokens > 0);
+    assert_eq!(resp.usage.total_tokens, resp.usage.prompt_tokens);
+}
+
+#[tokio::test]
+async fn embeddings_rejects_empty_batch() {
+    let req = embeddings_request(json!({ "input": [] }));
+    let (status, body) = handle_embeddings(Json(req)).await.unwrap_err();
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body.0["error"]["type"], "invalid_request_error");
+}
+
+#[tokio::test]
+async fn embeddings_rejects_base64_encoding_format() {
+    let req = embeddings_request(json!({
+        "input": "text",
+        "encoding_format": "base64"
+    }));
+    let (status, body) = handle_embeddings(Json(req)).await.unwrap_err();
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.0["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("float"));
+}
+#[tokio::test]
+async fn embeddings_batch_indices_are_sequential() {
+    let req = embeddings_request(json!({
+        "model": "mivi",
+        "input": ["first text", "second text", "third text"]
+    }));
+    let Json(resp) = handle_embeddings(Json(req)).await.unwrap();
+
+    assert_eq!(resp.data.len(), 3);
+    for (i, item) in resp.data.iter().enumerate() {
+        assert_eq!(item.index, i);
+        assert_eq!(item.object, "embedding");
+    }
+    // Distinct texts must produce distinct vectors.
+    assert_ne!(resp.data[0].embedding, resp.data[1].embedding);
+}
+
+#[tokio::test]
+async fn embeddings_rejects_oversized_batch() {
+    let inputs: Vec<String> = (0..=MAX_EMBEDDING_INPUTS)
+        .map(|i| format!("text-{i}"))
+        .collect();
+    let req = embeddings_request(json!({ "input": inputs }));
+    let (status, _) = handle_embeddings(Json(req)).await.unwrap_err();
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[test]

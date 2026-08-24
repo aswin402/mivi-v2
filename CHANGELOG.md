@@ -5,11 +5,20 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v0.0.16] - 2026-08-24
 
 ### Security
 
 * Verifier subprocesses (python3, node, bun, rustc, g++) now run inside a Linux Landlock sandbox: deny-by-default filesystem access limited to system toolchain paths plus the verifier's dedicated temp directory, and TCP bind/connect denied on kernels with Landlock ABI v4 (6.7+). Controlled by `MIVI_VERIFY_SANDBOX` (`auto` default degrades to unsandboxed with a one-time warning; `on` makes it fatal; `off` restores previous behavior).
+
+### Added
+
+* OpenAI-compatible `POST /v1/embeddings` endpoint: dense 128-dimensional L2-normalized embeddings from the pure Rust engine (`semantic_rag::compute_text_embedding`) with single-string or batch input (max 256), tokenizer-backed usage metadata, and no model load. Only `encoding_format: "float"` is supported; `base64` returns a clear 400 error. Covered by unit tests, an HTTP smoke case, and API reference docs.
+* `mivi doctor` subcommand (`src/doctor.rs`): hardware snapshot (RAM/CPU from `/proc/meminfo`), llama.cpp binary and model-catalog checks, effective runtime config report, and a RAM-tiered preset recommendation (`spawn`+ultra-low under 3 GB free, `worker-eco` under 6 GB, else `worker-hot`) with an exportable `MIVI_*` env block. Read-only advisory; covered by unit tests.
+* `scripts/check_runtime_consistency.py`: cross-runtime-mode output invariant (kimi-k3-in-c pattern) — the same seeded greedy request must return byte-identical content and tool calls through every runtime mode; verified live on `spawn` vs `worker-eco`.
+* `MIVI_RUNTIME_MODE=auto`: resolves at startup to the doctor's RAM-tiered runtime recommendation and logs the chosen plan.
+* Worker modes now pass `--cache-reuse 64` (env-tunable via `MIVI_WORKER_CACHE_REUSE`, `0` disables) so agent tool-loop follow-ups with a changed context slice skip re-prefilling the shared prompt prefix. Measured through the live pipeline: turn-2 latency on a ~1300-token divergent prefix drops from 39.8 s to 2.9 s (13.6x). Identical-prefix turns were already served from the single-slot prompt cache (~230 ms).
+* Built-in web dashboard at `/ui` (`src/server/ui.rs` + `assets/ui/index.html`, embedded via `include_str!`, zero new dependencies): SSE streaming chat playground with collapsible `<think>` traces and inline tool-call inspector, per-message latency/TTFT/tok-s, live RAM gauge from `/proc/self/statm` (`/ui/api/stats`), and a workspace RAG explorer with score bars (`/ui/api/rag`). Verified in a real browser against a live server.
 
 ## [v0.0.15] - 2026-08-22
 

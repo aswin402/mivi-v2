@@ -5,6 +5,7 @@ pub mod chat;
 pub mod cli;
 pub mod constants;
 pub mod context_compressor;
+pub mod doctor;
 pub mod logger;
 pub mod lora_router;
 pub mod math_eval;

@@ -11,6 +11,9 @@ MIVI-V2 exposes an OpenAI-compatible REST API built with Axum listening on `http
 | `GET` | `/` | Root service status and version health check |
 | `GET` | `/v1/models` | OpenAI-compatible model list |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions endpoint |
+| `POST` | `/v1/responses` | OpenAI Responses API mapped onto the chat pipeline |
+| `POST` | `/v1/messages` | Anthropic Messages adapter (Claude Code / Cursor) |
+| `POST` | `/v1/embeddings` | OpenAI-compatible embeddings (pure Rust, no model load) |
 
 ---
 
@@ -46,6 +49,36 @@ Returns available models in OpenAI list format.
 ```
 
 > **Note:** Internal SMLs (qwen-2.5-0.5b, llama-3.2-1b, minicpm-v-4.6) exist but are not exposed. MIVI auto-routes `mivi` requests to the right model internally.
+
+## 3. `POST /v1/embeddings`
+
+Returns dense vector embeddings for one text or a batch, in OpenAI format.
+Vectors are computed in-process by the pure Rust hashed n-gram engine
+(`semantic_rag::compute_text_embedding`, 128 dimensions, L2-normalized) — no
+GGUF model is loaded and no inference subprocess is spawned. Only
+`encoding_format: "float"` is supported (`base64` returns a 400 error).
+Batches are capped at 256 inputs.
+
+**Request:**
+```json
+{
+  "model": "mivi",
+  "input": ["hello world", "second text"]
+}
+```
+
+**Response:**
+```json
+{
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": [0.012, -0.044, "..."] },
+    { "object": "embedding", "index": 1, "embedding": [0.007, 0.121, "..."] }
+  ],
+  "model": "mivi",
+  "usage": { "prompt_tokens": 5, "total_tokens": 5 }
+}
+```
 
 ## Runtime Modes
 

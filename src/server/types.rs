@@ -326,6 +326,54 @@ pub struct ModelListResponse {
     pub data: Vec<ModelObject>,
 }
 
+/// Input for `/v1/embeddings`: a single string or a batch of strings.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum EmbeddingInput {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl EmbeddingInput {
+    pub fn into_texts(self) -> Vec<String> {
+        match self {
+            EmbeddingInput::Single(text) => vec![text],
+            EmbeddingInput::Multiple(texts) => texts,
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct EmbeddingsRequest {
+    pub input: EmbeddingInput,
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Only `float` is supported; `base64` is rejected with a clear error.
+    #[serde(default)]
+    pub encoding_format: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct EmbeddingData {
+    pub object: String,
+    pub index: usize,
+    pub embedding: Vec<f32>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct EmbeddingsUsage {
+    pub prompt_tokens: u32,
+    pub total_tokens: u32,
+}
+
+#[derive(Serialize, Debug)]
+pub struct EmbeddingsResponse {
+    pub object: String,
+    pub data: Vec<EmbeddingData>,
+    pub model: String,
+    pub usage: EmbeddingsUsage,
+}
+
 /// A tool call in the assistant's response.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ToolCallOut {

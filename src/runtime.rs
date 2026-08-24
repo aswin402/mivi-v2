@@ -94,9 +94,24 @@ impl RuntimeConfig {
         #[cfg(not(feature = "native"))]
         let default_mode = RuntimeMode::WorkerEco;
 
-        let mode = env::var("MIVI_RUNTIME_MODE")
-            .map(|value| RuntimeMode::from_env_value(&value))
-            .unwrap_or(default_mode);
+        let mode = match env::var("MIVI_RUNTIME_MODE") {
+            // `auto` defers to the doctor's RAM-tiered recommendation so the
+            // runtime shape always fits the machine it runs on.
+            Ok(value) if value.trim().eq_ignore_ascii_case("auto") => {
+                let snapshot = crate::doctor::read_system_snapshot();
+                let plan = crate::doctor::recommend(&snapshot);
+                tracing::info!(
+                    "[runtime] MIVI_RUNTIME_MODE=auto resolved to {} \
+                     ({} MB RAM available, ultra_low_ram={})",
+                    plan.runtime_mode,
+                    snapshot.available_ram_mb,
+                    plan.ultra_low_ram
+                );
+                RuntimeMode::from_env_value(plan.runtime_mode)
+            }
+            Ok(value) => RuntimeMode::from_env_value(&value),
+            Err(_) => default_mode,
+        };
 
         let max_input_tokens = env::var("MIVI_CONTEXT_BUDGET")
             .ok()
@@ -240,6 +255,20 @@ mod tests {
         assert_eq!(config.mode, RuntimeMode::WorkerEco);
         assert_eq!(config.worker_idle_secs, 120);
         assert_eq!(config.context.max_input_tokens, 8192);
+
+        clear_runtime_env();
+    }
+    #[test]
+    fn auto_mode_resolves_to_the_doctor_recommendation_for_this_machine() {
+        let _guard = env_lock();
+        clear_runtime_env();
+        std::env::set_var("MIVI_RUNTIME_MODE", "auto");
+
+        let config = RuntimeConfig::from_env();
+
+        let plan = crate::doctor::recommend(&crate::doctor::read_system_snapshot());
+        let expected = RuntimeMode::from_env_value(plan.runtime_mode);
+        assert_eq!(config.mode, expected);
 
         clear_runtime_env();
     }

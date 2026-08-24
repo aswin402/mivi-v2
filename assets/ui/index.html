@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIVI — Live Playground</title>
+<style>
+:root{
+  --bg:#0b0f14;--panel:#111823;--panel2:#0e141d;--line:#1e2937;
+  --fg:#d7e2ee;--dim:#8195ab;--acc:#4fd1a5;--acc2:#5aa2ff;--warn:#ffb454;
+  --mono:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--mono);font-size:13px;
+     display:flex;flex-direction:column;height:100vh}
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+header h1{font-size:15px;color:var(--acc)}
+.pill{border:1px solid var(--line);border-radius:20px;padding:3px 10px;color:var(--dim);font-size:11px}
+.pill b{color:var(--fg)}
+#rambar{width:120px;height:6px;background:var(--line);border-radius:4px;overflow:hidden}
+#ramfill{height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2));transition:width .5s}
+main{flex:1;display:grid;grid-template-columns:1fr 340px;min-height:0}
+@media(max-width:900px){main{grid-template-columns:1fr}#side{display:none}}
+#chatwrap{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line)}
+#log{flex:1;overflow-y:auto;padding:18px 22px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:82%;padding:9px 12px;border-radius:8px;line-height:1.55;white-space:pre-wrap;word-wrap:break-word}
+.msg.user{align-self:flex-end;background:#173049;border:1px solid #234a6b}
+.msg.assistant{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
+.msg .meta{margin-top:6px;font-size:10px;color:var(--dim)}
+details.think{margin-bottom:6px;font-size:11px;color:var(--dim)}
+details.think summary{cursor:pointer;color:var(--warn)}
+.toolcall{margin-top:6px;padding:6px 8px;background:#101b12;border:1px solid #274a2c;border-radius:6px;font-size:11px;color:#9fd8a8;overflow-x:auto}
+#inputrow{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--panel2)}
+#inp{flex:1;background:#0a0e13;border:1px solid var(--line);color:var(--fg);
+     border-radius:6px;padding:10px 12px;font-family:var(--mono);font-size:13px;outline:none}
+#inp:focus{border-color:var(--acc)}
+button{background:var(--acc);color:#04120c;border:none;border-radius:6px;padding:10px 18px;
+       font-weight:700;font-family:var(--mono);cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+#side{overflow-y:auto;padding:16px;background:var(--panel2)}
+#side h2{font-size:12px;color:var(--acc2);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px}
+#ragq{width:100%;background:#0a0e13;border:1px solid var(--line);color:var(--fg);
+      border-radius:6px;padding:8px 10px;font-family:var(--mono);outline:none;margin-bottom:10px}
+.hit{border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:8px;background:var(--panel)}
+.hit .path{color:var(--acc);font-size:11px;margin-bottom:4px}
+.hit .scorebar{height:4px;background:var(--line);border-radius:3px;margin-top:6px}
+.hit .scorefill{height:100%;background:var(--acc2);border-radius:3px}
+.hit pre{white-space:pre-wrap;color:var(--dim);font-size:11px;max-height:110px;overflow:hidden}
+.statrow{display:flex;justify-content:space-between;padding:3px 0;color:var(--dim);font-size:12px}
+.statrow b{color:var(--fg)}
+</style>
+</head>
+<body>
+<header>
+  <h1>MIVI</h1><span style="color:var(--dim)">live playground</span>
+  <span class="pill">mode <b id="st-mode">…</b></span>
+  <span class="pill">v<b id="st-ver">…</b></span>
+  <span class="pill">ctx <b id="st-ctx">…</b></span>
+  <span class="pill">RAM <b id="st-ram">…</b></span>
+  <div id="rambar"><div id="ramfill"></div></div>
+  <span class="pill">up <b id="st-up">…</b></span>
+</header>
+<main>
+  <div id="chatwrap">
+    <div id="log"></div>
+    <div id="inputrow">
+      <input id="inp" placeholder="ask mivi …  (Enter to send)" autofocus>
+      <button id="send">Send</button>
+    </div>
+  </div>
+  <div id="side">
+    <h2>Workspace RAG</h2>
+    <input id="ragq" placeholder="search indexed workspace …">
+    <div id="hits"></div>
+    <h2 style="margin-top:18px">Hot Files</h2>
+    <div id="heat"><div style="color:var(--dim)">no usage data yet</div></div>
+    <h2 style="margin-top:18px">Request Trace</h2>
+    <div id="traces"><div style="color:var(--dim)">trace disabled (MIVI_TRACE=1)</div></div>
+  </div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+async function pollStats(){
+  try{
+    const s=await(await fetch('/ui/api/stats')).json();
+    $('st-mode').textContent=s.mode;
+    $('st-ver').textContent=s.version;
+    $('st-ctx').textContent=s.context_tokens;
+    $('st-ram').textContent=s.rss_mb+' MB';
+    $('st-up').textContent=Math.floor(s.uptime_s/60)+'m'+Math.floor(s.uptime_s%60)+'s';
+    const pct=Math.min(100,s.rss_mb/s.ram_target_mb*100);
+    $('ramfill').style.width=pct+'%';
+    $('ramfill').style.background=pct>85?'var(--warn)':'linear-gradient(90deg,var(--acc),var(--acc2))';
+  }catch(e){}
+}
+pollStats();setInterval(pollStats,2000);
+
+/* ---------- chat ---------- */
+const history=[];
+function addMsg(cls){const d=document.createElement('div');d.className='msg '+cls;$('log').appendChild(d);return d;}
+async function send(){
+  const q=$('inp').value.trim();if(!q)return;
+  $('inp').value='';$('send').disabled=true;
+  addMsg('user').textContent=q;
+  history.push({role:'user',content:q});
+  const bubble=addMsg('assistant');
+  const meta=document.createElement('div');meta.className='meta';
+  let content='',reasoning='',toolCalls=[],t0=performance.now(),firstTok=null,chars=0;
+  try{
+    const resp=await fetch('/v1/chat/completions',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:'mivi',messages:history,stream:true})});
+    const reader=resp.body.getReader(),dec=new TextDecoder();
+    let buf='';
+    while(true){
+      const{done,value}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split('\n');buf=lines.pop();
+      for(const line of lines){
+        if(!line.startsWith('data: '))continue;
+        const data=line.slice(6).trim();
+        if(data==='[DONE]')continue;
+        let j;try{j=JSON.parse(data)}catch(e){continue}
+        const d=((j.choices||[])[0]||{}).delta||{};
+        if(d.reasoning_content)reasoning+=d.reasoning_content;
+        if(d.content){content+=d.content;chars+=d.content.length;
+          if(firstTok===null)firstTok=performance.now();}
+        const tc=(j.choices||[])[0]?.delta?.tool_calls;
+        if(tc)toolCalls.push(...tc);
+        render();
+      }
+    }
+  }catch(e){content+='\n[connection error: '+e+']';}
+  function render(){
+    let body='';
+    if(reasoning)body+=`<details class="think"><summary>thinking (${reasoning.length} ch)</summary>${esc(reasoning)}</details>`;
+    let main=content;
+    const ti=main.indexOf('<think>');
+    if(ti>=0){const te=main.indexOf('</think>');
+      if(te>=0){reasoning+=main.slice(ti+7,te);main=main.slice(0,ti)+main.slice(te+8);}
+    }
+    body+=esc(main)+(content?'▌':'');
+    for(const tc of toolCalls){
+      const f=tc.function||{};
+      body+=`<div class="toolcall">🔧 ${esc(f.name||'')} ${esc((f.arguments||'').slice(0,300))}</div>`;
+    }
+    bubble.innerHTML=body||'<span style="color:var(--dim)">…</span>';
+    $('log').scrollTop=$('log').scrollHeight;
+  }
+  render();
+  const secs=(performance.now()-t0)/1000;
+  const ttft=firstTok?((firstTok-t0)/1000).toFixed(2)+'s':'—';
+  const tps=chars>4?(chars/4/(secs-(firstTok-t0)/1000)).toFixed(1):'0';
+  meta.textContent=`${secs.toFixed(2)}s · ttft ${ttft} · ~${tps} tok/s`;
+  bubble.appendChild(meta);
+  history.push({role:'assistant',content});
+  $('send').disabled=false;$('inp').focus();
+}
+$('send').onclick=send;
+$('inp').addEventListener('keydown',e=>{if(e.key==='Enter')send();});
+
+/* ---------- RAG explorer ---------- */
+let maxScore=1;
+async function ragSearch(){
+  const q=$('ragq').value.trim();if(!q)return;
+  const hits=await(await fetch('/ui/api/rag',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({query:q,top_k:8})})).json();
+  const out=[];
+  for(const h of (hits.results||[])){
+    maxScore=Math.max(maxScore,h.score);
+    out.push(`<div class="hit">
+      <div class="path">${esc(h.file_path)}:${h.line_start}</div>
+      <pre>${esc(h.text.slice(0,400))}</pre>
+      <div class="scorebar"><div class="scorefill" style="width:${h.score/maxScore*100}%"></div></div>
+    </div>`);
+  }
+  $('hits').innerHTML=out.join('')||'<div style="color:var(--dim)">no matches</div>';
+}
+$('ragq').addEventListener('keydown',e=>{if(e.key==='Enter')ragSearch();});
+
+/* ---------- hot files (RAG usage heat) ---------- */
+async function pollHeat(){
+  try{
+    const d=await(await fetch('/ui/api/heat')).json();
+    const rs=d.results||[];
+    if(!rs.length)return;
+    const max=rs[0].count||1;
+    $('heat').innerHTML=rs.slice(0,10).map(r=>{
+      const short=r.path.split('/').slice(-2).join('/');
+      return `<div class="hit"><div class="path">${esc(short)}</div>
+        <div class="scorebar"><div class="scorefill" style="width:${r.count/max*100}%;background:var(--acc)"></div></div>
+        <div style="color:var(--dim);font-size:10px;margin-top:3px">${r.count} hits</div></div>`;
+    }).join('');
+  }catch(e){}
+}
+pollHeat();setInterval(pollHeat,10000);
+
+/* ---------- request trace timeline ---------- */
+const KIND_COLOR={'request':'var(--acc2)','final_response':'var(--acc)','tool_generation':'var(--warn)'};
+async function pollTraces(){
+  try{
+    const d=await(await fetch('/ui/api/traces?limit=25')).json();
+    if(!d.enabled){$('traces').innerHTML='<div style="color:var(--dim)">trace disabled (MIVI_TRACE=1)</div>';return;}
+    const ev=(d.events||[]).slice(0,25);
+    if(!ev.length){$('traces').innerHTML='<div style="color:var(--dim)">no events yet</div>';return;}
+    $('traces').innerHTML=ev.map(e=>{
+      const t=new Date((e.ts_unix||0)*1000).toLocaleTimeString();
+      const kind=e.kind||'?';
+      const color=KIND_COLOR[kind]||'var(--dim)';
+      let detail='';
+      if(e.route)detail+=e.route+' ';
+      if(e.elapsed_ms)detail+=e.elapsed_ms+'ms ';
+      if(e.response_chars)detail+=e.response_chars+'ch ';
+      if(e.confidence!==undefined)detail+='conf '+Number(e.confidence).toFixed(2)+' ';
+      if(e.intent&&e.kind==='request')detail+='in:'+e.messages+' msg ';
+      return `<div class="hit" style="padding:5px 8px">
+        <span style="color:${color};font-size:10px">${esc(kind)}</span>
+        <span style="color:var(--dim);font-size:10px;float:right">${t}</span>
+        <div style="color:var(--dim);font-size:10px">${esc(detail.trim())}</div>
+      </div>`;
+    }).join('');
+  }catch(e){}
+}
+pollTraces();setInterval(pollTraces,3000);
+</script>
+</body>
+</html>

@@ -166,26 +166,34 @@
 
 ---
 
-## Phase 15: Built-in Web Dashboard & Live Playground (`/ui`) 🖥️
+## Phase 15: Built-in Web Dashboard & Live Playground (`/ui`) 🖥️ 🟢 CORE COMPLETE
 
-> **Goal:** Zero-dependency interactive web dashboard served directly from MIVI server.
+> **Goal:** Zero-dependency interactive web dashboard served directly from MIVI server (spec enriched from Colibrì's `coli web`).
 
-- [ ] **15.1** Embed self-contained HTML/CSS/JS single-page application inside Rust binary (`include_str!`)
-- [ ] **15.2** Interactive Chat Playground with token-by-token SSE streaming & collapsible `<think>` reasoning traces
-- [ ] **15.3** Visual Tool Call Inspector (displays tool arguments and simulated tool results live)
-- [ ] **15.4** Real-time RAM Gauge & Latency Monitor (reads `/proc/self/statm` and displays tok/s)
-- [ ] **15.5** RAG & Knowledge Workspace Explorer (search indexed code chunks and preview cosine similarity scores)
+- [x] **15.1** Embed self-contained HTML/CSS/JS single-page application inside Rust binary (`include_str!` in `src/server/ui.rs`, page in `assets/ui/index.html`)
+- [x] **15.2** Interactive Chat Playground with token-by-token SSE streaming & collapsible `<think>` reasoning traces
+- [x] **15.3** Visual Tool Call Inspector (renders streamed tool-call names + arguments inline)
+- [x] **15.4** Real-time RAM Gauge (`/proc/self/statm` via `/ui/api/stats`, warn-color >85% of target) + per-message latency/TTFT/tok-s
+- [x] **15.5** RAG & Knowledge Workspace Explorer (`/ui/api/rag` hybrid search with score bars)
+
+### Remaining
+
+- [x] **15.6** Request trace timeline panel fed by `logs/mivi-trace.jsonl` (`/ui/api/traces`, tail-capped at 512 KB, color-coded by kind)
+- [x] **15.7** Hot-files heat view rendering `.mivi_rag_usage` (`/ui/api/heat`, hottest-first with count bars)
+
+Phase 15 complete.
 
 ---
 
-## Phase 16: OpenAI-Compatible `/v1/embeddings` Endpoint 🧮
+
+## Phase 16: OpenAI-Compatible `/v1/embeddings` Endpoint 🧮 ✅ COMPLETE
 
 > **Goal:** Allow external agent frameworks (LangChain, Mem0, LlamaIndex) to use MIVI for local embeddings.
 
-- [ ] **16.1** Implement `/v1/embeddings` route in `src/server/helpers.rs`
-- [ ] **16.2** Pure Rust dense vector embedding output using `src/semantic_rag.rs`
-- [ ] **16.3** Support batch text inputs (`input: ["text1", "text2"]` or single string)
-- [ ] **16.4** Add embedding unit tests and smoke tests
+- [x] **16.1** Implement `/v1/embeddings` route in `src/server/handlers.rs` (registered in `start_api_server`)
+- [x] **16.2** Pure Rust dense vector embedding output using `src/semantic_rag.rs`
+- [x] **16.3** Support batch text inputs (`input: ["text1", "text2"]` or single string; max 256 per request)
+- [x] **16.4** Add embedding unit tests and smoke tests (`scripts/smoke_openai_compat.py` `embeddings` case)
 
 ---
 
@@ -196,6 +204,39 @@
 - [ ] **17.1** Support dynamic adapter loading in `src/worker.rs` and `src/brain.rs` (`--lora` flags)
 - [ ] **17.2** Per-request persona routing (`mivi:coder`, `mivi:tools`, `mivi:reasoner`)
 - [ ] **17.3** Adapter caching in memory for sub-millisecond persona switching
+
+---
+
+## Phase 18: Warm Conversation KV Persistence 🧠 ✅ COMPLETE (KV-shift approach)
+
+> **Goal:** Agent tool-loops skip re-prefilling the system prompt across turns (Colibrì `kv_persist` idea).
+> **Result:** Measured 13.6x turn-2 speedup (39.8s → 2.9s on a ~1300-token divergent prefix) via llama-server `--cache-reuse` KV shifting.
+
+- [x] **18.1** Worker modes pass `--cache-reuse` (env-tunable `MIVI_WORKER_CACHE_REUSE`, default 64, `0` off) in `src/worker.rs`
+- [x] **18.2** Sticky slot routing: N/A — the worker runs `-np 1`, so llama-server's single-slot prompt cache already covers identical prefixes (measured: 230 ms turn-2 without any flag)
+- [x] **18.3** A/B benchmarked through the live pipeline with identical and divergent prefixes; only divergent prefixes needed KV shifting
+
+---
+## Phase 19: Hardware Auto-Preset & `mivi doctor` 🩺
+
+> **Goal:** Machine-aware defaults instead of hand-tuned env vars (kimi-k3-in-c presets, Colibrì autotune).
+
+- [x] **19.2** RAM-tiered preset recommender (`spawn`+ultra-low < 3 GB, `worker-eco` < 6 GB, else `worker-hot`) with export form
+- [x] **19.3** `MIVI_RUNTIME_MODE=auto`: server applies the doctor recommendation at startup and logs the chosen plan
+- [ ] **19.4** Trace-backed cache sizing: adapt SemanticCache/RAG limits from measured hit rates in `logs/mivi-trace.jsonl` instead of hardcoded caps
+
+## Phase 20: Cross-Mode Output Invariant 🔒 ✅ COMPLETE
+
+- [x] **20.3** Verified live across `spawn`, `worker-eco`, and `worker-hot` (byte-identical "Paris"); wire into the `--live on` compat gate when RAM headroom allows
+
+- [x] **20.1** `scripts/check_runtime_consistency.py`: seeded greedy request served through every runtime mode must yield byte-identical content + tool calls
+- [x] **20.2** Unit tests for payload determinism/output extraction (`scripts/test_check_runtime_consistency.py`)
+- [ ] **20.3** Wire into the `--live on` compat gate once worker-hot is included (needs ~2 GB free RAM headroom)
+
+## Phase 15 addendum: dashboard spec enriched from Colibrì's `coli web` 🖥️
+
+- [ ] **15.6** Per-request latency breakdown panel fed by `logs/mivi-trace.jsonl`
+- [ ] **15.7** RAG heat view rendering `.mivi_rag_usage` hot files (mini "expert atlas")
 
 ## Phase 12: Semantic RAG Upgrade 🦀 ✅ COMPLETE
 

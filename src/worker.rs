@@ -28,6 +28,9 @@ pub struct WorkerConfig {
     pub context_tokens: usize,
     pub gpu_layers: String,
     pub idle_secs: u64,
+    /// Minimum chunk size for llama-server KV prefix reuse (`--cache-reuse`).
+    /// 0 disables the flag entirely.
+    pub cache_reuse_tokens: u32,
     pub threads: usize,
 }
 
@@ -58,6 +61,10 @@ impl WorkerConfig {
             context_tokens: runtime.context.max_input_tokens,
             gpu_layers,
             idle_secs: runtime.worker_idle_secs,
+            cache_reuse_tokens: env::var("MIVI_WORKER_CACHE_REUSE")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(64),
             threads: runtime.threads,
         }
     }
@@ -130,6 +137,14 @@ impl WorkerManager {
             "-tb".to_string(),
             self.config.threads.to_string(),
         ];
+
+        // KV prefix reuse: consecutive requests sharing a prompt prefix
+        // (agent tool-loops re-send the system prompt every turn) skip
+        // re-prefilling the shared part.
+        if self.config.cache_reuse_tokens > 0 {
+            args.push("--cache-reuse".to_string());
+            args.push(self.config.cache_reuse_tokens.to_string());
+        }
 
         if let Some(ref draft_path) = runtime_config.draft_model {
             if std::path::Path::new(draft_path).exists() {
@@ -908,6 +923,7 @@ You are OpenZ, a high-performance framework...
             context_tokens: 4096,
             gpu_layers: "0".to_string(),
             idle_secs: 30,
+            cache_reuse_tokens: 64,
             threads: 1,
         });
 
@@ -921,7 +937,41 @@ You are OpenZ, a high-performance framework...
             .windows(2)
             .any(|pair| pair == ["--sleep-idle-seconds", "30"]));
         assert!(args.contains(&"--no-webui".to_string()));
+
         assert!(args.contains(&"--mmap".to_string()));
+    }
+    #[test]
+    fn text_worker_args_include_cache_reuse_when_enabled() {
+        let manager = WorkerManager::new(WorkerConfig {
+            server_path: PathBuf::from("bin/llama-server"),
+            model_path: PathBuf::from("models/qwen3-0.6b-q4_k_m.gguf"),
+            host: "127.0.0.1".to_string(),
+            port: 18080,
+            context_tokens: 4096,
+            gpu_layers: "0".to_string(),
+            idle_secs: 30,
+            cache_reuse_tokens: 128,
+            threads: 1,
+        });
+        let args = manager.server_args();
+        assert!(args.windows(2).any(|pair| pair == ["--cache-reuse", "128"]));
+    }
+
+    #[test]
+    fn text_worker_args_omit_cache_reuse_when_disabled() {
+        let manager = WorkerManager::new(WorkerConfig {
+            server_path: PathBuf::from("bin/llama-server"),
+            model_path: PathBuf::from("models/qwen3-0.6b-q4_k_m.gguf"),
+            host: "127.0.0.1".to_string(),
+            port: 18080,
+            context_tokens: 4096,
+            gpu_layers: "0".to_string(),
+            idle_secs: 30,
+            cache_reuse_tokens: 0,
+            threads: 1,
+        });
+        let args = manager.server_args();
+        assert!(!args.contains(&"--cache-reuse".to_string()));
     }
 
     #[test]

@@ -20,6 +20,7 @@ DEFAULT_BASE_URL = os.environ.get("MIVI_SMOKE_BASE_URL", "http://127.0.0.1:8000/
 DEFAULT_TIMEOUT = float(os.environ.get("MIVI_SMOKE_TIMEOUT", "30"))
 DEFAULT_CASES = [
     "models",
+    "embeddings",
     "chat-usage",
     "chat-stream-usage",
     "tool-call",
@@ -252,6 +253,11 @@ def payload_for(case):
             ],
             "max_tokens": 100,
         }
+    if case == "embeddings":
+        return {
+            "model": "mivi",
+            "input": ["hello world", "mivi embeddings"],
+        }
     raise ValueError(f"unknown smoke case: {case}")
 
 
@@ -288,6 +294,15 @@ def request_sse(url, payload, timeout):
         except json.JSONDecodeError:
             events.append(data)
     return events
+
+
+def embedding_usage_is_valid(usage):
+    # OpenAI embeddings usage has prompt_tokens/total_tokens only.
+    return (
+        isinstance(usage, dict)
+        and isinstance(usage.get("prompt_tokens"), int)
+        and isinstance(usage.get("total_tokens"), int)
+    )
 
 
 def usage_is_valid(usage):
@@ -408,6 +423,23 @@ def score_case(case, result):
             reasons.append("multi-tool result missing shell summary")
         if not usage_is_valid(result.get("usage")):
             reasons.append("multi-tool result usage missing or invalid")
+    elif case == "embeddings":
+        if result.get("object") != "list":
+            reasons.append("embeddings object is not list")
+        data = result.get("data", [])
+        if len(data) != 2:
+            reasons.append("expected two embedding entries")
+        else:
+            for i, item in enumerate(data):
+                if item.get("object") != "embedding":
+                    reasons.append(f"entry {i} object is not embedding")
+                if item.get("index") != i:
+                    reasons.append(f"entry {i} has wrong index")
+                vector = item.get("embedding") or []
+                if not vector or not all(isinstance(v, (int, float)) for v in vector):
+                    reasons.append(f"entry {i} embedding missing or non-numeric")
+        if not embedding_usage_is_valid(result.get("usage")):
+            reasons.append("embeddings usage missing or invalid")
     elif case == "anthropic-messages":
         if result.get("type") != "message":
             reasons.append("anthropic response type is not message")
@@ -438,6 +470,9 @@ def run_case(base_url, case, timeout):
         return json.loads(raw)
     if case == "chat-stream-usage":
         return request_sse(f"{base_url}/chat/completions", payload_for(case), timeout)
+    if case == "embeddings":
+        raw = request_json(f"{base_url}/embeddings", payload_for(case), timeout)
+        return json.loads(raw)
     raw = request_json(f"{base_url}/chat/completions", payload_for(case), timeout)
     return json.loads(raw)
 

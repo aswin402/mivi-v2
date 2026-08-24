@@ -86,9 +86,10 @@ There is a parallel `/v1/responses` endpoint (`handle_responses`) that maps Resp
 
 | Var | Effect |
 | --- | --- |
-| `MIVI_RUNTIME_MODE` | `spawn` (default) \| `worker-eco` \| `worker-hot` |
+| `MIVI_RUNTIME_MODE` | `spawn` \| `worker-eco` (default) \| `worker-hot` \| `native` \| `auto` (doctor RAM-tier recommendation) |
 | `MIVI_CONTEXT_BUDGET` | max input tokens (default 3072; floors at 1024). `ContextBudget` derives recent/retrieval/memory/tool slices |
 | `MIVI_WORKER_IDLE_SECS` | worker idle timeout (default 120) |
+| `MIVI_WORKER_CACHE_REUSE` | Min chunk size (tokens) for llama-server `--cache-reuse` KV prefix shifting in worker modes (default 64, `0` disables). Measured 13.6x turn-2 speedup when consecutive requests share most-but-not-all of their prompt prefix |
 | `MIVI_WORKER_PORT` | worker server port (default 18080) |
 | `MIVI_REASONER_MODEL` / `MIVI_CODER_MODEL` / `MIVI_VISION_MODEL` / `MIVI_VISION_PROJECTOR` | GGUF path overrides |
 | `MIVI_REASONER_CONTEXT_SIZE` / `MIVI_CODER_CONTEXT_SIZE` | per-model context override (min 1024) |

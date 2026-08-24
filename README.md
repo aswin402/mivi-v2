@@ -1,18 +1,18 @@
 # 🚀 MIVI-V2: Ultra-Compact Low-Resource Pure Rust Local AI Engine
 
-[![Version](https://img.shields.io/badge/version-v0.0.15-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.0.16-brightgreen.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![RAM Footprint](https://img.shields.io/badge/Idle%20RAM-%3C%2012%20MB-purple.svg)]()
 [![Ultra Low RAM](https://img.shields.io/badge/Ultra%20Low%20RAM-%3C%2040%20MB-green.svg)]()
 
-**MIVI-V2 (v0.0.15)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
+**MIVI-V2 (v0.0.16)** is a **100% Pure Rust, Small Model Logic (SML) local AI engine** designed to run advanced reasoning, coding, vision analysis, RAG, and multi-agent coordination on low-spec hardware. It exposes a single OpenAI-compatible model name, **`mivi`**, while internally routing to compact chat/reasoning, coding, and vision workers.
 
 It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for autonomous AI agents including **Hermes Agent**, **OpenCode Agent**, **OpenZ**, **AutoGen**, **CrewAI**, **VS Code (Continue.dev)**, and **Cursor IDE**.
 
 ---
 
-## 🌟 Key Features in v0.0.15
+## 🌟 Key Features in v0.0.16
 
 * 🦀 **100% Pure Rust Architecture:** Zero Python runtime, zero PyTorch/transformers memory bloat, and zero virtual environment dependencies.
 * ⚡ **Reqwest Connection Pooling:** Pooled HTTP client in `worker.rs` with keep-alive socket reuse, reducing API server request overhead.
@@ -27,6 +27,7 @@ It acts as an ultra-fast, zero-overhead, OpenAI-compatible local AI backend for 
 * 🐡 **Sakana Fugu Evolutionary Task Routing (`Sakana Fugu` pattern):** Adaptive complexity classifier routing simple tasks direct to Coder (**25x audit speedup: 180s ➔ 7.05s**).
 * 🌵 **Cactus Compute Needle 26M Integration:** Sub-2ms AI intent routing using 14MB GGUF weights.
 * 🌐 **High-Speed Async Axum REST Server:** OpenAI-compatible API listening on `http://localhost:8000/v1` for `/v1/chat/completions` and `/v1/models`.
+* 🖥️ **Built-in Web Dashboard (`/ui`):** SSE streaming chat playground with collapsible reasoning traces, live RAM gauge, per-message TTFT/tok-s, and a workspace RAG explorer — served directly from the binary, zero extra dependencies.
 * ⚙️ **Multi-Language Double-Loop Verifier:** Generates, executes, and auto-corrects code across **Python, JavaScript, TypeScript, Rust, and C++**.
 * 🧠 **Zero-Overhead Semantic Cache:** Token-set Jaccard similarity cache for instant **< 0.001s responses** on repeat queries.
 * 🧾 **Tool Output Compression:** Cargo, npm/pnpm/yarn/vitest/jest, pytest, and git diff outputs are reduced to salient failure/hunk lines before they enter the small-model context.
@@ -110,9 +111,14 @@ uv run --with huggingface_hub python3 download_models.py
 # 3. Launch Interactive Terminal Chat CLI
 ./target/release/mivi cli
 
-# 4. Execute a single code task
+# 4. Diagnose environment & get a recommended runtime preset
+./target/release/mivi doctor
+
+# 5. Execute a single code task
 ./target/release/mivi task "Write a python script calculating Fibonacci numbers"
 ```
+
+The running server also hosts a zero-dependency web dashboard at **`http://localhost:8000/ui`**: streaming chat playground, live RAM gauge, and workspace RAG explorer.
 
 ### 4. Benchmark Runtime Modes
 
@@ -123,6 +129,14 @@ scripts/bench_runtime.sh
 ```
 
 Results are written to `benchmarks/runtime-YYYYMMDD-HHMMSS.jsonl` with mode, prompt kind, latency, RSS, and status.
+
+Verify that runtime modes never change model output (only speed) — a seeded greedy request must produce byte-identical results in every mode:
+
+```bash
+python3 scripts/check_runtime_consistency.py --binary target/release/mivi --modes spawn,worker-eco
+```
+
+Results are written to `model-eval-results/runtime-consistency-YYYYMMDD-HHMMSS.jsonl`.
 
 Small-model evals are scored semantically: `scripts/eval_small_models.sh` writes `semantic_ok`, `score`, and `reasons`, and exits non-zero when an answer fails expected facts or tool-call checks.
 

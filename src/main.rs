@@ -86,6 +86,11 @@ async fn main() {
         return;
     }
 
+    if mode == "doctor" {
+        mivi::doctor::run_doctor();
+        return;
+    }
+
     let brain = EdgeBrain::new();
     let orchestrator = AgentOrchestrator::new(brain.clone());
 

@@ -4518,6 +4518,7 @@ pub async fn start_api_server(
         .route("/chat/completions", post(handle_chat_completions))
         .route("/responses", post(handle_responses))
         .route("/messages", post(handle_anthropic_messages))
+        .route("/embeddings", post(handle_embeddings))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
@@ -4527,6 +4528,11 @@ pub async fn start_api_server(
 
     let app = Router::new()
         .route("/", get(handle_root))
+        .route("/ui", get(crate::server::ui::handle_ui))
+        .route("/ui/api/stats", get(crate::server::ui::handle_ui_stats))
+        .route("/ui/api/traces", get(crate::server::ui::handle_ui_traces))
+        .route("/ui/api/heat", get(crate::server::ui::handle_ui_heat))
+        .route("/ui/api/rag", post(crate::server::ui::handle_ui_rag))
         .route("/v1/health", get(handle_health))
         .nest("/v1", api_routes)
         .layer(CorsLayer::permissive())
@@ -6056,6 +6062,7 @@ Hello!"
                     context_tokens: 1024,
                     gpu_layers: "0".to_string(),
                     idle_secs: 10,
+                    cache_reuse_tokens: 0,
                     threads: 2,
                 },
             )),
