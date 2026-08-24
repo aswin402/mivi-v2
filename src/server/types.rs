@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::helpers::{default_tool_type, TokenCounter};
+use super::helpers::default_tool_type;
+use super::usage::TokenCounter;
 use crate::brain::EdgeBrain;
 use crate::model_catalog::{ModelCatalog, ModelRole};
 use crate::orchestrator::AgentOrchestrator;
