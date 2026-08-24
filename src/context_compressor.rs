@@ -199,7 +199,7 @@ fn normalize_context_text(text: &str) -> String {
     ] {
         normalized = strip_tagged_block(&normalized, tag);
     }
-    normalized = crate::brain::strip_think_blocks(&normalized);
+    normalized = crate::reasoning::strip_think_blocks(&normalized);
     normalized.trim().to_string()
 }
 

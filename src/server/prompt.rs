@@ -154,7 +154,7 @@ pub fn build_chat_prompt(req: &ChatCompletionRequest) -> String {
                 let mut new_m = m.clone();
                 if new_m.role == "assistant" {
                     if let Some(text) = new_m.content.as_str() {
-                        let cleaned = crate::brain::strip_think_blocks(text);
+                        let cleaned = crate::reasoning::strip_think_blocks(text);
                         new_m.content = serde_json::json!(cleaned);
                     }
                 }

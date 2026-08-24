@@ -20,7 +20,7 @@ pub use handlers::*;
 pub use helpers::*;
 pub use prompt::*;
 pub use responses_map::*;
-pub use tool_select::*;
 pub use startup::*;
+pub use tool_select::*;
 pub use types::*;
 pub use usage::*;

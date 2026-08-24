@@ -60,7 +60,7 @@ pub async fn handle_responses_streaming(
     let brain = state.brain.clone();
     let system_prompt = wrap_agent_prompt(MIVI_CHAT_SYSTEM_PROMPT, "");
     let t = active_chat_template();
-    let formatted = if crate::brain::is_prompt_preformatted(&model_user_prompt) {
+    let formatted = if crate::reasoning::is_prompt_preformatted(&model_user_prompt) {
         model_user_prompt.clone()
     } else {
         format!(
@@ -563,7 +563,7 @@ pub async fn handle_streaming(
     let brain = state.brain.clone();
     let system_prompt = wrap_agent_prompt(MIVI_CHAT_SYSTEM_PROMPT, "");
     let t = active_chat_template();
-    let formatted = if crate::brain::is_prompt_preformatted(&user_prompt) {
+    let formatted = if crate::reasoning::is_prompt_preformatted(&user_prompt) {
         user_prompt.clone()
     } else {
         format!(
@@ -759,7 +759,8 @@ pub async fn handle_streaming(
         }
 
         if !emitted {
-            let fallback_prompt = if crate::brain::is_prompt_preformatted(&fallback_user_prompt) {
+            let fallback_prompt = if crate::reasoning::is_prompt_preformatted(&fallback_user_prompt)
+            {
                 fallback_user_prompt
             } else {
                 wrap_agent_prompt(MIVI_CHAT_SYSTEM_PROMPT, &fallback_user_prompt)
