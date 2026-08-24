@@ -409,6 +409,38 @@ pub async fn complete_chat_non_stream(
     })
 }
 
+/// Deterministic identity answer for "who are you"-style prompts. Returns
+/// `None` when the prompt is not asking about the model's identity.
+fn identity_fast_answer(user_prompt: &str) -> Option<String> {
+    // Phrase match that requires a non-alphanumeric boundary after the
+    // phrase, so "who are your friends" does not match "who are you".
+    fn has_phrase(lower: &str, phrase: &str) -> bool {
+        lower.match_indices(phrase).any(|(i, _)| {
+            lower[i + phrase.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_alphanumeric())
+        })
+    }
+    let lower = user_prompt.to_lowercase();
+    let asks_identity = has_phrase(&lower, "who are you")
+        || has_phrase(&lower, "who r u")
+        || has_phrase(&lower, "what model are you")
+        || has_phrase(&lower, "which model are you")
+        || has_phrase(&lower, "what are you")
+        || lower.contains("your name")
+        || lower.contains("introduce yourself")
+        || lower.contains("say who you are");
+    if !asks_identity {
+        return None;
+    }
+    Some(
+        "I'm MIVI, a local OpenAI-compatible model endpoint for AI agents; \
+         my external model name is mivi."
+            .to_string(),
+    )
+}
+
 pub async fn handle_chat_completions(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Json(mut req): Json<ChatCompletionRequest>,
@@ -646,6 +678,57 @@ pub async fn handle_chat_completions(
             })
             .into_response();
         }
+    }
+
+    // Deterministic identity fast path: "who are you"-style prompts are
+    // answered exactly without a model call. Small models flub this on noisy
+    // agent payloads even though the agent contract already states it.
+    // Unlike the math path, identity works from extracted text, so multi-part
+    // (array) user content — the common agent payload shape — qualifies too.
+    let identity_eligible =
+        image_path.is_none() && req.messages.last().map_or(false, |m| m.role == "user");
+    if identity_eligible && identity_fast_answer(&user_prompt).is_some() {
+        let answer = identity_fast_answer(&user_prompt).expect("checked above");
+        let _ = trace_event(
+            &trace,
+            serde_json::json!({
+                "kind": "final_response",
+                "route": "identity_fast_path",
+                "finish_reason": "stop",
+                "response_chars": answer.chars().count()
+            }),
+        );
+        if req.stream.unwrap_or(false) {
+            return stream_text_response(
+                answer.clone(),
+                now,
+                None,
+                include_usage.then(|| estimated_usage_for_text(&req, &answer)),
+                permit,
+            )
+            .into_response();
+        }
+        return Json(ChatCompletionResponse {
+            id: format!("chatcmpl-v2-{}", now),
+            object: "chat.completion".to_string(),
+            created: now,
+            model: MODEL_NAME.to_string(),
+            usage: Some(estimated_usage_for_text(&req, &answer)),
+            choices: vec![ChoiceOut {
+                index: 0,
+                message: ChatMessageOut {
+                    role: "assistant".to_string(),
+                    content: answer,
+                    refusal: None,
+                    reasoning_content: None,
+                    tool_calls: None,
+                },
+                logprobs: None,
+                finish_reason: "stop".to_string(),
+            }],
+            system_fingerprint: Some("fp_mivi".to_string()),
+        })
+        .into_response();
     }
 
     let tool_selection = select_tools_for_request(&req);
@@ -1009,4 +1092,30 @@ pub async fn handle_chat_completions(
         system_fingerprint: Some("fp_mivi".to_string()),
     })
     .into_response()
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::identity_fast_answer;
+
+    #[test]
+    fn identity_fast_answer_matches_identity_prompts() {
+        assert!(identity_fast_answer("Say who you are in one short sentence.").is_some());
+        assert!(identity_fast_answer("Who are you?").is_some());
+        assert!(identity_fast_answer("What model are you running?").is_some());
+    }
+
+    #[test]
+    fn identity_fast_answer_ignores_other_prompts() {
+        assert!(identity_fast_answer("Write a quicksort in Python.").is_none());
+        assert!(identity_fast_answer("What is the weather in Paris?").is_none());
+        assert!(identity_fast_answer("Who are your friends?").is_none());
+    }
+
+    #[test]
+    fn identity_fast_answer_names_mivi() {
+        let answer = identity_fast_answer("who are you").unwrap();
+        assert!(answer.contains("mivi"));
+        assert!(!answer.to_lowercase().contains("qwen"));
+    }
 }

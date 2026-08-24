@@ -421,13 +421,15 @@ mod tests {
     #[test]
     fn print_default_catalog() {
         let cat = ModelCatalog::load_default().expect("catalog load failed");
+        // Quality experiment 2026-08-25: qwen3-1.7b is the enabled
+        // reasoner/coder; the 0.5B instruct entries are disabled.
         assert_eq!(
             cat.default_enabled_path(ModelRole::Reasoner),
-            Some("models/qwen2.5-0.5b-instruct-q4_k_m.gguf")
+            Some("models/Qwen3-1.7B-Q2_K.gguf")
         );
         assert_eq!(
             cat.default_enabled_path(ModelRole::Coder),
-            Some("models/qwen2.5-0.5b-instruct-q4_k_m.gguf")
+            Some("models/Qwen3-1.7B-Q2_K.gguf")
         );
         assert_eq!(
             cat.default_enabled_path(ModelRole::Tool),

@@ -21,7 +21,10 @@
         "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
         "tool_suffix": "<|im_end|>\n",
         "assistant_start": "<|im_start|>assistant\n",
-        "stop_words": ["<|im_end|>","<|im_start|>"]
+        "stop_words": [
+          "<|im_end|>",
+          "<|im_start|>"
+        ]
       }
     },
     {
@@ -44,7 +47,10 @@
         "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
         "tool_suffix": "<|im_end|>\n",
         "assistant_start": "<|im_start|>assistant\n",
-        "stop_words": ["<|im_end|>","<|im_start|>"]
+        "stop_words": [
+          "<|im_end|>",
+          "<|im_start|>"
+        ]
       }
     },
     {
@@ -67,7 +73,10 @@
         "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
         "tool_suffix": "<|im_end|>\n",
         "assistant_start": "<|im_start|>assistant\n",
-        "stop_words": ["<|im_end|>","<|im_start|>"]
+        "stop_words": [
+          "<|im_end|>",
+          "<|im_start|>"
+        ]
       }
     },
     {
@@ -90,7 +99,10 @@
         "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
         "tool_suffix": "<|im_end|>\n",
         "assistant_start": "<|im_start|>assistant\n",
-        "stop_words": ["<|im_end|>","<|im_start|>"]
+        "stop_words": [
+          "<|im_end|>",
+          "<|im_start|>"
+        ]
       }
     },
     {
@@ -100,7 +112,7 @@
       "path": "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 490,
-      "enabled": true,
+      "enabled": false,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
       "notes": "Qwen 2.5 0.5B Instruct (enabled fallback reasoner)",
       "chat_template": {
@@ -113,7 +125,10 @@
         "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
         "tool_suffix": "<|im_end|>\n",
         "assistant_start": "<|im_start|>assistant\n",
-        "stop_words": ["<|im_end|>","<|im_start|>"]
+        "stop_words": [
+          "<|im_end|>",
+          "<|im_start|>"
+        ]
       }
     },
     {
@@ -123,7 +138,7 @@
       "path": "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 490,
-      "enabled": true,
+      "enabled": false,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
       "notes": "Qwen 2.5 0.5B Instruct (enabled fallback coder)",
       "chat_template": {
@@ -136,7 +151,10 @@
         "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
         "tool_suffix": "<|im_end|>\n",
         "assistant_start": "<|im_start|>assistant\n",
-        "stop_words": ["<|im_end|>","<|im_start|>"]
+        "stop_words": [
+          "<|im_end|>",
+          "<|im_start|>"
+        ]
       }
     },
     {
@@ -146,9 +164,9 @@
       "path": "models/Qwen3-1.7B-Q2_K.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 780,
-      "enabled": false,
+      "enabled": true,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
-      "notes": "Qwen3 1.7B Instruct (disabled)",
+      "notes": "Qwen3 1.7B Instruct (quality experiment 2026-08-25)",
       "chat_template": {
         "system_prefix": "<|im_start|>system\n",
         "system_suffix": "<|im_end|>\n",
@@ -159,7 +177,10 @@
         "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
         "tool_suffix": "<|im_end|>\n",
         "assistant_start": "<|im_start|>assistant\n",
-        "stop_words": ["<|im_end|>","<|im_start|>"]
+        "stop_words": [
+          "<|im_end|>",
+          "<|im_start|>"
+        ]
       }
     },
     {
@@ -169,9 +190,9 @@
       "path": "models/Qwen3-1.7B-Q2_K.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 780,
-      "enabled": false,
+      "enabled": true,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
-      "notes": "Qwen3 1.7B Coder/Tool Worker (disabled)",
+      "notes": "Qwen3 1.7B Coder/Tool Worker (quality experiment 2026-08-25)",
       "chat_template": {
         "system_prefix": "<|im_start|>system\n",
         "system_suffix": "<|im_end|>\n",
@@ -182,7 +203,10 @@
         "tool_prefix": "<|im_start|>tool\nTool result ({id}): ",
         "tool_suffix": "<|im_end|>\n",
         "assistant_start": "<|im_start|>assistant\n",
-        "stop_words": ["<|im_end|>","<|im_start|>"]
+        "stop_words": [
+          "<|im_end|>",
+          "<|im_start|>"
+        ]
       }
     },
     {
@@ -205,7 +229,10 @@
         "tool_prefix": "<|start_header_id|>tool<|end_header_id|>\n\n",
         "tool_suffix": "<|eot_id|>",
         "assistant_start": "<|start_header_id|>assistant<|end_header_id|>\n\n",
-        "stop_words": ["<|eot_id|>","<|start_header_id|>"]
+        "stop_words": [
+          "<|eot_id|>",
+          "<|start_header_id|>"
+        ]
       }
     },
     {
@@ -228,7 +255,10 @@
         "tool_prefix": "<|start_header_id|>tool<|end_header_id|>\n\n",
         "tool_suffix": "<|eot_id|>",
         "assistant_start": "<|start_header_id|>assistant<|end_header_id|>\n\n",
-        "stop_words": ["<|eot_id|>","<|start_header_id|>"]
+        "stop_words": [
+          "<|eot_id|>",
+          "<|start_header_id|>"
+        ]
       }
     },
     {
