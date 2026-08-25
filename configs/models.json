@@ -62,7 +62,7 @@
       "ram_mb_estimate": 540,
       "enabled": false,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
-      "notes": "Configured primary reasoning and chat model (Qwen3 0.6B Instruct Q4_K_M)",
+      "notes": "Eval 2026-08-26: 6/11 agent workflows (vs 1.7B 7/11, 0.5B 3/11); similar worker RSS to 1.7B \u2014 kept as alternate tier",
       "chat_template": {
         "system_prefix": "<|im_start|>system\n",
         "system_suffix": "<|im_end|>\n",
