@@ -142,10 +142,55 @@ async fn main() {
                     .arg("llama-server")
                     .status();
             }
-            if let Err(e) = start_api_server(brain, orchestrator, 8000).await {
+            if let Err(e) = start_api_server(brain, orchestrator, serve_port(&args[2..])).await {
                 eprintln!("Fatal error: {}", e);
                 std::process::exit(1);
             }
         }
+    }
+}
+
+/// Parse the serving port from `--port N`, `-p N`, or `--port=N`.
+/// Defaults to 8000 (which `start_api_server` may override via `MIVI_PORT`).
+fn serve_port(args: &[String]) -> u16 {
+    let mut port = 8000u16;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--port" || arg == "-p" {
+            if let Some(value) = iter.next() {
+                port = value.parse().unwrap_or(port);
+            }
+        } else if let Some(value) = arg.strip_prefix("--port=") {
+            port = value.parse().unwrap_or(port);
+        }
+    }
+    port
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serve_port;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn serve_port_defaults_to_8000() {
+        assert_eq!(serve_port(&args(&[])), 8000);
+        assert_eq!(serve_port(&args(&["--host", "0.0.0.0"])), 8000);
+    }
+
+    #[test]
+    fn serve_port_parses_all_flag_forms() {
+        assert_eq!(serve_port(&args(&["--port", "8123"])), 8123);
+        assert_eq!(serve_port(&args(&["-p", "9001"])), 9001);
+        assert_eq!(serve_port(&args(&["--port=7777"])), 7777);
+    }
+
+    #[test]
+    fn serve_port_ignores_garbage() {
+        assert_eq!(serve_port(&args(&["--port", "abc"])), 8000);
+        assert_eq!(serve_port(&args(&["--port"])), 8000);
     }
 }
