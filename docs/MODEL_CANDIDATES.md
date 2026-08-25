@@ -9,7 +9,6 @@ measured on Ryzen 7 7730U (16 threads), llama.cpp b10075, Q4_K_M/Q4_0 quants,
 `scripts/eval_agent_workflows.py` suite (11 graded workflows) served through the
 full MIVI pipeline (`scripts/eval_model_candidates.sh`).
 
-## Measured candidates (all served through MIVI)
 
 | Model | Params | File size | Model RSS | tok/s | Agentic | Notes |
 |---|---|---|---|---|---|---|
@@ -17,6 +16,7 @@ full MIVI pipeline (`scripts/eval_model_candidates.sh`).
 | **LFM2.5-1.2B-Instruct** (LiquidAI) | 1.17B hybrid | 697 MB | 1,259 MB | 21.7 | 5/11 | beats Qwen3-1.7B on paper (BFCLv3 49.1 vs 46.3); custom LFM1.0 license; DSpark 296M drafter = 2.1× spec-decode |
 | **Qwen3.5-0.8B** (unsloth GGUF) | 0.8B | 508 MB | 903 MB | 23.1* | 4/11 | *slow through MIVI pipeline (62 s/workflow avg — long `<think>` traces); timed out once |
 | **Granite-4.0-h-350m** (IBM) | 350M hybrid Mamba | 212 MB | **494 MB** | **44.0** | 4/11 | fastest + lightest; apache-2.0; tool calling supported |
+| **LFM2.5-350M** (LiquidAI) | 350M hybrid | 219 MB | **438 MB** | **88.2** | **6/11** | ties 1B-class agentic at ⅓ RAM; custom LFM1.0 license |
 | Qwen3-1.7B Q2_K (current default) | 1.7B | 778 MB | 1,255 MB | 19.1 | **7/11** | slowest of the set; Q2_K quant |
 | Qwen2.5-0.5B (old default) | 0.5B | ~400 MB | 599 MB | 39.1 | 3/11 | reference baseline |
 
