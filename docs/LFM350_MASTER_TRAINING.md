@@ -1,21 +1,22 @@
-# LFM2.5-350M Master Agentic Training Guide (Google Colab)
+# 🚀 15,000+ Sample Master Agentic Training Guide (Google Colab)
 
-> **Target Model:** `LiquidAI/LFM2.5-350M`  
-> **Platform:** Google Colab Free Tier (T4 GPU, 16 GB VRAM)  
-> **Dataset:** `datasets/mivi_lfm_serving_master.jsonl` (280 balanced samples across 6 agentic pillars)  
-> **Training Time:** ~1.5–2 minutes (60 steps)  
+> **Model Target:** `LiquidAI/LFM2.5-350M`  
+> **Platform:** Google Colab (Free Tier - T4 GPU, 16 GB VRAM)  
+> **Dataset Size:** **15,000 samples** (xLAM Function Calling + UltraFeedback Chat + Parameter Binding + Verified Coding)  
+> **Loss Masking:** Unsloth Response-Only Masking (`train_on_responses_only`)  
+> **Total Training Time:** **~15–18 minutes** (~900 optimizer steps, 1 full epoch)  
 > **Output:** `mivi-lfm350-master` GGUF (`Q4_K_M`, ~229 MB)
 
 ---
 
-## 🚀 Step 1: Set Runtime in Colab
-1. Open [Google Colab](https://colab.research.google.com/).
-2. In the top menu, go to **Runtime** $\rightarrow$ **Change runtime type**.
-3. Select **T4 GPU** under Hardware accelerator and click **Save**.
+## 📋 Step 1: Set Runtime to T4 GPU
+In Google Colab:
+1. Go to **Runtime** $\rightarrow$ **Change runtime type**.
+2. Select **T4 GPU** under Hardware accelerator and click **Save**.
 
 ---
 
-## 📋 Step 2: Colab Notebook Cells (Run in Order)
+## 📋 Step 2: Copy-Paste Cells (Run in Order)
 
 ### 🔹 Cell 1: Super-Fast Install with `uv` (~30 seconds)
 ```python
@@ -25,14 +26,14 @@
 import os
 os.environ["PATH"] = f"{os.environ['HOME']}/.local/bin:" + os.environ["PATH"]
 
-# 2. Fast install Unsloth, Unsloth Zoo, and ML dependencies
+# 2. Fast install Unsloth, Unsloth Zoo, HuggingFace datasets and ML dependencies
 !uv pip install --system unsloth unsloth_zoo trl peft accelerate bitsandbytes datasets transformers sentencepiece protobuf
 print("✅ Environment ready via uv!")
 ```
 
 ---
 
-### 🔹 Cell 2: Clone Repo & Build Master Dataset (~10 seconds)
+### 🔹 Cell 2: Clone Repo & Build 15,000-Sample Master Dataset (~1–2 minutes)
 ```python
 import os, pathlib, subprocess
 
@@ -44,47 +45,48 @@ if not pathlib.Path('mivi-v2').exists():
 os.chdir('/content/mivi-v2')
 subprocess.run(['git', 'pull', 'origin', BRANCH], check=True)
 
-# Build Master SFT Dataset (280 balanced samples across all 6 agentic pillars)
-subprocess.run(['python3', 'scripts/generate_agentic_lfm_dataset.py'], check=True)
-DATASET = 'datasets/mivi_lfm_serving_master.jsonl'
+# Build 15,000 Sample Master Dataset (Streaming xLAM + UltraFeedback + Verified Coding + Param Binding)
+subprocess.run(['python3', 'scripts/build_15k_agentic_dataset.py', '--total', '15000', '--out', 'datasets/mivi_master_15k_sft.jsonl'], check=True)
+DATASET = 'datasets/mivi_master_15k_sft.jsonl'
 print('✅ Master Dataset ready:', DATASET, '| rows:', sum(1 for _ in open(DATASET)))
 ```
 
 ---
 
-### 🔹 Cell 3: Direct In-Kernel Trainer Function
+### 🔹 Cell 3: Response-Only Masked Trainer Function
 ```python
 import os, json, glob, torch
 from unsloth import FastLanguageModel
+from unsloth.chat_templates import train_on_responses_only
 from datasets import Dataset
 from trl import SFTTrainer
-from transformers import TrainingArguments
+from transformers import TrainingArguments, DataCollatorForSeq2Seq
 from google.colab import files
 
-def train_and_export(
+def train_and_export_master(
     model_name="LiquidAI/LFM2.5-350M",
-    dataset_path="datasets/mivi_lfm_serving_master.jsonl",
+    dataset_path="datasets/mivi_master_15k_sft.jsonl",
     output_dir="outputs/mivi-lfm350-master",
-    max_steps=60,
-    batch_size=2,
-    grad_accum=2,
+    max_steps=900,
+    batch_size=4,
+    grad_accum=4,
     lr=2e-4
 ):
     print("=" * 60)
-    print(f"🚀 Training: {model_name}")
-    print(f"📁 Output:   {output_dir}")
-    print(f"⚡ GPU:      {torch.cuda.get_device_name(0)} ({torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB VRAM)")
+    print(f"🚀 Training 15k Master: {model_name}")
+    print(f"📁 Output:              {output_dir}")
+    print(f"⚡ GPU:                 {torch.cuda.get_device_name(0)} ({torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB VRAM)")
     print("=" * 60)
 
-    # 1. Load base model in 4-bit with 4k context
+    # 1. Load base model in 4-bit with 2048 context
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_name,
-        max_seq_length=4096,
+        max_seq_length=2048,
         dtype=None,
         load_in_4bit=True,
     )
 
-    # 2. Add LoRA adapters
+    # 2. Add LoRA adapters to all linear projections
     model = FastLanguageModel.get_peft_model(
         model,
         r=16,
@@ -96,38 +98,38 @@ def train_and_export(
         random_state=3407,
     )
 
-    # 3. Load serving-format dataset (prompt + completion)
+    # 3. Load dataset (prompt + completion)
     with open(dataset_path, "r", encoding="utf-8") as f:
         raw = [json.loads(line) for line in f if line.strip()]
 
     formatted = []
     for item in raw:
         if "prompt" in item and "completion" in item:
-            formatted.append({"text": item["prompt"] + item["completion"]})
+            formatted.append({"text": item["prompt"] + item["completion"] + "<|im_end|>\n"})
         elif "messages" in item:
             formatted.append({"text": tokenizer.apply_chat_template(item["messages"], tokenize=False, add_generation_prompt=False)})
 
     dataset = Dataset.from_list(formatted)
-    print(f"📄 Training samples loaded: {len(dataset)}")
+    print(f"📄 Total training samples loaded: {len(dataset)}")
 
-    # 4. Trainer with full GPU utilization
+    # 4. SFT Trainer with Response-Only Masking
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
         dataset_text_field="text",
-        max_seq_length=4096,
+        max_seq_length=2048,
         dataset_num_proc=2,
         packing=False,
         args=TrainingArguments(
             per_device_train_batch_size=batch_size,
             gradient_accumulation_steps=grad_accum,
-            warmup_steps=5,
+            warmup_ratio=0.03,
             max_steps=max_steps,
             learning_rate=lr,
             fp16=not torch.cuda.is_bf16_supported(),
             bf16=torch.cuda.is_bf16_supported(),
-            logging_steps=5,
+            logging_steps=25,
             optim="adamw_8bit",
             weight_decay=0.01,
             lr_scheduler_type="cosine",
@@ -137,11 +139,18 @@ def train_and_export(
         ),
     )
 
-    print("🔥 Starting training loop...")
-    stats = trainer.train()
-    print(f"✅ Training finished in {stats.metrics.get('train_runtime', 0):.2f}s!")
+    # 5. Apply Response-Only Loss Masking (Focus 100% loss on assistant output!)
+    trainer = train_on_responses_only(
+        trainer,
+        instruction_part="<|im_start|>user\n",
+        response_part="<|im_start|>assistant\n",
+    )
 
-    # 5. Export merged GGUF
+    print("🔥 Starting 15,000-sample training loop (~15 minutes)...")
+    stats = trainer.train()
+    print(f"✅ Training completed in {stats.metrics.get('train_runtime', 0)/60:.2f} minutes!")
+
+    # 6. Export merged GGUF
     print(f"📦 Exporting merged model to Q4_K_M GGUF...")
     os.makedirs(output_dir, exist_ok=True)
     model.save_pretrained_gguf(
@@ -154,29 +163,30 @@ def train_and_export(
 
 ---
 
-### 🔹 Cell 4: Run Training (~2 minutes)
+### 🔹 Cell 4: Train 15,000-Sample Master Model (~15 minutes)
 ```python
-train_and_export(
+train_and_export_master(
     model_name="LiquidAI/LFM2.5-350M",
-    dataset_path="datasets/mivi_lfm_serving_master.jsonl",
+    dataset_path="datasets/mivi_master_15k_sft.jsonl",
     output_dir="outputs/mivi-lfm350-master",
-    max_steps=60
+    max_steps=900,
+    batch_size=4,
+    grad_accum=4,
+    lr=2e-4
 )
 ```
 
 ---
 
-### 🔹 Cell 5: Download Exported Model to Your Computer
+### 🔹 Cell 5: Download the Master Model to Your Machine
 ```python
 import glob, os
 from google.colab import files
 
-# Specifically target the new master model
 master_dir = '/content/mivi-v2/outputs/mivi-lfm350-master'
 ggufs = glob.glob(f'{master_dir}/**/*.gguf', recursive=True)
 
 if not ggufs:
-    # Fallback: get the single newest .gguf across outputs
     all_ggufs = glob.glob('/content/mivi-v2/outputs/**/*.gguf', recursive=True)
     if all_ggufs:
         all_ggufs.sort(key=os.path.getmtime, reverse=True)
@@ -192,11 +202,9 @@ for g in ggufs:
 
 ## 💻 Step 3: Local Benchmarking (After Download)
 
-Once the file is downloaded to your machine:
-
 ```bash
-# 1. Copy model into models directory
-cp ~/Downloads/*lfm350-master*.gguf models/mivi-lfm350-master.Q4_K_M.gguf
+# 1. Copy downloaded model to models directory
+cp ~/Downloads/*LFM2.5-350M*.gguf models/mivi-lfm350-master.Q4_K_M.gguf
 
 # 2. Run the 11-agentic-workflow benchmark
 MIVI_RUNTIME_MODE=worker-eco \
