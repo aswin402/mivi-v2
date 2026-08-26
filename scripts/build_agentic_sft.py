@@ -119,7 +119,58 @@ def coding_rows_from_pairs(pairs_path: Path, rng: random.Random) -> List[Dict[st
                 "coding_verified",
             )
         )
-    rng.shuffle(rows)
+
+    return rows
+
+
+def planner_rows() -> List[Dict[str, Any]]:
+    """Request -> minimal JSON step plan, matching orchestrator.rs's planner
+    schema: a ```json array of {step, description, language} objects (max 3)."""
+    system = (
+        "You are the Orchestrator Brain. Break down the user's request into the MINIMAL "
+        "number of necessary executable coding steps (1 to 3 steps max). Respond ONLY with "
+        "a valid JSON array of step objects inside a ```json ... ``` block. Each step object "
+        "must have keys: 'step' (integer), 'description' (string), 'language' "
+        "('python', 'javascript', 'typescript', 'rust', or 'cpp')."
+    )
+    cases = [
+        (
+            "Write a python script printing 'Audit OK'.",
+            [{"step": 1, "description": "Write a python script printing 'Audit OK'", "language": "python"}],
+        ),
+        (
+            "Fetch the prices from the API and save them to prices.json.",
+            [
+                {"step": 1, "description": "Write a script that fetches prices from the API and prints them as JSON", "language": "python"},
+                {"step": 2, "description": "Write the fetched prices to prices.json", "language": "python"},
+            ],
+        ),
+        (
+            "Create a config file, run the test suite, and fix any failures.",
+            [
+                {"step": 1, "description": "Create the config file with default values", "language": "python"},
+                {"step": 2, "description": "Run the test suite and print results", "language": "python"},
+                {"step": 3, "description": "Apply fixes for any failing tests", "language": "python"},
+            ],
+        ),
+        (
+            "Say hello in JavaScript.",
+            [{"step": 1, "description": "Write a JavaScript script printing hello", "language": "javascript"}],
+        ),
+    ]
+    rows = []
+    for user, steps in cases:
+        plan = "```json\n" + json.dumps(steps, indent=2) + "\n```"
+        rows.append(
+            row(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                    {"role": "assistant", "content": plan},
+                ],
+                "planner",
+            )
+        )
     return rows
 
 
@@ -191,6 +242,21 @@ def tool_selection_rows() -> List[Dict[str, Any]]:
         (
             "Schedule a job that reminds me to hydrate.",
             assistant_tool_call("call_sched", "schedule_job", {"prompt": "Remind me to hydrate."}),
+            None,
+        ),
+          (
+            "Search the web for recent Qwen3 releases.",
+            assistant_tool_call("call_search", "search_web", {"query": "recent Qwen3 releases"}),
+            None,
+        ),
+        (
+            "Read the file src/main.rs.",
+            assistant_tool_call("call_read", "read_file", {"path": "src/main.rs"}),
+            None,
+        ),
+        (
+            "Stop scheduled job 12 and then read README.md.",
+            assistant_tool_call("call_remove", "remove_job", {"id": "12"}),
             None,
         ),
     ]
@@ -358,6 +424,7 @@ def build(pairs_path: Path, out_path: Path) -> Dict[str, int]:
     rows += coding_rows_from_pairs(pairs_path, rng)
     rows += synthetic_coding_rows()
     rows += tool_selection_rows()
+    rows += planner_rows()
     rows += tool_result_summary_rows()
     rows += error_summary_rows()
     rows += rag_grounded_rows()

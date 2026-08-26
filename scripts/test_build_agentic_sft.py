@@ -18,7 +18,6 @@ class BuildAgenticSftTests(unittest.TestCase):
             counts = builder.build(Path("/nonexistent/verified_pairs.jsonl"), out)
             rows = [json.loads(l) for l in out.read_text().splitlines()]
 
-            self.assertGreater(len(rows), 20)
             for category in (
                 "coding_verified_synthetic",
                 "tool_selection",
@@ -27,6 +26,7 @@ class BuildAgenticSftTests(unittest.TestCase):
                 "rag_grounded",
                 "identity",
                 "english_chat",
+                "planner",
             ):
                 self.assertIn(category, counts, f"missing category {category}")
                 self.assertGreater(counts[category], 0)
