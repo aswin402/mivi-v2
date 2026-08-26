@@ -5,7 +5,23 @@ All notable changes to the **MIVI-V2** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.17] - 2026-08-26
+
+### Added
+* Adaptive `SemanticCache` sizing (TODO 19.4): the cache now tracks hit/miss/eviction counters, and the server runs a background tuner that adapts capacity every 2 minutes from the measured window — grows (up to 2048) when a decent hit rate is being throttled by evictions, shrinks (down to 128) when lookups almost never hit. Lifetime counters and current capacity are exposed via `/ui/api/stats` and a dashboard pill. Exercised live: an identical repeat task returns in <1 ms from the exact-hit path.
+* Dashboard fix: `pollStats` referenced a nonexistent `st-up` element and threw every 2 s cycle since v0.0.16's dashboard shipped, silently disabling the uptime pill and the RAM-gauge fill bar. Both now render.
+* `--live on` compat gate now runs the cross-mode output invariant as a `live-consistency` step (`scripts/check_runtime_consistency.py`, default modes `spawn,worker-eco`) right after the release build. Verified live: byte-identical outputs across both modes.
+* LoRA adapter plumbing (TODO 17.1, Phase 17): `MIVI_LORA_ADAPTERS="path[=scale],..."` loads specialist adapter GGUFs onto the base model in both spawn (`llama-cli`) and worker (`llama-server`) modes via a single `--lora-scaled path:scale,...` flag; missing files are skipped with a warning and the effective adapters are reported by `mivi doctor`. Verified pass-through end-to-end against llama-server (a non-adapter GGUF fails with `expect general.type to be 'adapter'`). Per-request persona routing (17.2) still needs trained adapter weights.
+
+### Changed
+
+* Model catalog: `qwen3-1.7b` enabled as default reasoner/coder tier; `qwen2.5-0.5b` instruct entries disabled.
+* `mivi serve --port N` / `-p N` / `--port=N` are now parsed (previously silently ignored; only `MIVI_PORT` env worked).
+* Server module decomposition: `src/server/helpers.rs` (6,185 lines) split into responsibility-scoped modules (`usage`, `responses_map`, `prompt`, `tool_select`, `tool_parse`, `tool_generate`, `chat`, `anthropic`, `streaming`, `middleware`, `startup`); `brain.rs` and `native_brain.rs` decomposed too (`reasoning.rs`, `native_model.rs`). Move-only; helpers.rs is now 211 lines.
+* Agent-model quality work: enabled `qwen3-1.7b` as default tier (agent eval 3/11 → 7/11), deterministic identity fast path, `--port` flag parsing, `just` agent-testing recipes, and SLM candidate benchmark (`docs/MODEL_CANDIDATES.md`).
+
 ## [v0.0.16] - 2026-08-24
+
 
 ### Security
 
@@ -19,15 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * `MIVI_RUNTIME_MODE=auto`: resolves at startup to the doctor's RAM-tiered runtime recommendation and logs the chosen plan.
 * Worker modes now pass `--cache-reuse 64` (env-tunable via `MIVI_WORKER_CACHE_REUSE`, `0` disables) so agent tool-loop follow-ups with a changed context slice skip re-prefilling the shared prompt prefix. Measured through the live pipeline: turn-2 latency on a ~1300-token divergent prefix drops from 39.8 s to 2.9 s (13.6x). Identical-prefix turns were already served from the single-slot prompt cache (~230 ms).
 * Built-in web dashboard at `/ui` (`src/server/ui.rs` + `assets/ui/index.html`, embedded via `include_str!`, zero new dependencies): SSE streaming chat playground with collapsible `<think>` traces and inline tool-call inspector, per-message latency/TTFT/tok-s, live RAM gauge from `/proc/self/statm` (`/ui/api/stats`), and a workspace RAG explorer with score bars (`/ui/api/rag`). Verified in a real browser against a live server.
-* Adaptive `SemanticCache` sizing (TODO 19.4): the cache now tracks hit/miss/eviction counters, and the server runs a background tuner that adapts capacity every 2 minutes from the measured window — grows (up to 2048) when a decent hit rate is being throttled by evictions, shrinks (down to 128) when lookups almost never hit. Lifetime counters and current capacity are exposed via `/ui/api/stats` and a dashboard pill. Exercised live: an identical repeat task returns in <1 ms from the exact-hit path.
-* Dashboard fix: `pollStats` referenced a nonexistent `st-up` element and threw every 2 s cycle since v0.0.16's dashboard shipped, silently disabling the uptime pill and the RAM-gauge fill bar. Both now render.
-* `--live on` compat gate now runs the cross-mode output invariant as a `live-consistency` step (`scripts/check_runtime_consistency.py`, default modes `spawn,worker-eco`) right after the release build. Verified live: byte-identical outputs across both modes.
-* LoRA adapter plumbing (TODO 17.1, Phase 17): `MIVI_LORA_ADAPTERS="path[=scale],..."` loads specialist adapter GGUFs onto the base model in both spawn (`llama-cli`) and worker (`llama-server`) modes via a single `--lora-scaled path:scale,...` flag; missing files are skipped with a warning and the effective adapters are reported by `mivi doctor`. Verified pass-through end-to-end against llama-server (a non-adapter GGUF fails with `expect general.type to be 'adapter'`). Per-request persona routing (17.2) still needs trained adapter weights.
-
-### Changed
-
-* Server module decomposition: `src/server/helpers.rs` (6,185 lines, ~200 functions across 10+ unrelated concerns) split into responsibility-scoped modules — `usage`, `responses_map`, `prompt`, `tool_select`, `tool_parse`, `tool_generate`, `chat`, `anthropic`, `streaming`, `middleware`, `startup` — with inline tests moved to `tests.rs`. Pure move-only refactor (no behavior changes); full suite 216/216 green before and after. `helpers.rs` is now 211 lines.
-* Same decomposition applied to the inference layer: `src/reasoning.rs` (Qwen3 `/think` directives, think-block stripping, llama-cli response cleaning) out of `brain.rs` (1,228 → 950 lines), and `src/native_model.rs` (GGUF loading, tokenizer discovery, grammar state, LRU model cache) out of `native_brain.rs` (1,363 → 1,148 lines — the remainder is the three cohesive inference loops, left intact deliberately).
 
 ## [v0.0.15] - 2026-08-22
 
