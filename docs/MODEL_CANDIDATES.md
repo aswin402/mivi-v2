@@ -77,3 +77,33 @@ the suite does not discriminate candidates.
 Raw evidence: `model-eval-results/model-candidates-20260826-012700.jsonl`,
 `agent-workflows-2026082{6}-*.jsonl`, server logs
 `model-eval-results/{candidate}.server.log`.
+
+## Finetune round 1 results (2026-08-26)
+
+Both bases trained (QLoRA r=16, 60 steps, 182 rows) and evaluated through the
+full pipeline:
+
+| Model | Pre-FT | Post-FT | Verdict |
+|---|---|---|---|
+| MiniCPM5-1B | 6/11 | 6/11 | neutral |
+| LFM2.5-350M | 6/11 | **5/11** | slight regression (lost long-tool-output) |
+| Qwen3-1.7B default | 7/11 | — | still leads |
+
+**Key finding — the behaviors WERE learned, but the serving format doesn't match:**
+
+- stop-scheduled-job: both finetuned models now emit the RIGHT decision
+  (`remove_job` with `id: 1`) — but as raw JSON text in `content`
+  (`{"tool_calls":[...]}`) instead of the format MIVI's grammar-constrained
+  tool path parses, so `tool_calls` arrives empty.
+- coding-verified: models emit code + output but with `**Response:**` /
+  `**Output:**` headings instead of the pipeline's `**Verified Terminal
+  Output:**`.
+
+**Root cause: train/serve prompt-format mismatch.** We finetuned on raw chat
+template; MIVI serves with the agent-contract prompt + grammar-constrained
+tool format. Round 2 must render training rows exactly as
+`build_chat_prompt` + `generate_tool_calls` do (same agent contract, same
+tool JSON block, same expected assistant output shape).
+
+Also fix in data: use consistent tool-call `id` values (models learned to put
+the function name in `id`).
