@@ -168,11 +168,21 @@ train_and_export(
 
 ### 🔹 Cell 5: Download Exported Model to Your Computer
 ```python
-import glob
+import glob, os
 from google.colab import files
 
-ggufs = glob.glob('/content/mivi-v2/outputs/**/*.gguf', recursive=True)
-print('📦 Found GGUFs:', ggufs)
+# Specifically target the new master model
+master_dir = '/content/mivi-v2/outputs/mivi-lfm350-master'
+ggufs = glob.glob(f'{master_dir}/**/*.gguf', recursive=True)
+
+if not ggufs:
+    # Fallback: get the single newest .gguf across outputs
+    all_ggufs = glob.glob('/content/mivi-v2/outputs/**/*.gguf', recursive=True)
+    if all_ggufs:
+        all_ggufs.sort(key=os.path.getmtime, reverse=True)
+        ggufs = [all_ggufs[0]]
+
+print('📦 Target Master GGUF:', ggufs)
 for g in ggufs:
     print(f'⬇️ Downloading {g}...')
     files.download(g)
