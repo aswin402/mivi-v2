@@ -22,7 +22,10 @@ def train(
     batch_size: int = 4,
     gradient_accumulation_steps: int = 4,
     learning_rate: float = 2e-4,
-    max_steps: int = 250,
+    # 175-row dataset / effective batch 16 = ~11 steps per epoch.
+    # 60 steps ~= 5 epochs — enough for LoRA to absorb the patterns without
+    # memorizing; raise only if the agent eval plateaus early.
+    max_steps: int = 60,
     export_gguf: bool = True
 ):
     print("=" * 60)
