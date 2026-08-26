@@ -30,8 +30,7 @@ import os
 os.environ["PATH"] = f"{os.environ['HOME']}/.local/bin:" + os.environ["PATH"]
 
 # 2. Install Unsloth and ML dependencies
-!uv pip install --system --no-deps "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
-!uv pip install --system trl peft accelerate bitsandbytes datasets transformers sentencepiece protobuf
+!uv pip install --system unsloth unsloth_zoo trl peft accelerate bitsandbytes datasets transformers sentencepiece protobuf
 print("✅ Environment ready via uv!")
 ```
 
