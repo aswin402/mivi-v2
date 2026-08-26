@@ -77,6 +77,8 @@ pub fn parse_single_tool_call_value(val: &serde_json::Value) -> Option<ToolCallO
         .get("name")
         .and_then(|value| value.as_str())
         .or_else(|| obj.get("tool").and_then(|value| value.as_str()))
+        .or_else(|| obj.get("call").and_then(|value| value.as_str()))
+        .or_else(|| obj.get("action").and_then(|value| value.as_str()))
         .or_else(|| obj.get("function").and_then(|value| value.as_str()))
         .or_else(|| {
             function_obj

@@ -8,7 +8,7 @@
       "path": "models/mivi-0.5b-tool-q4_k_m.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 460,
-      "enabled": true,
+      "enabled": false,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
       "notes": "Fine-tuned MIVI 0.5B Knowledge-Lean Agent Reasoner (Q4_K_M)",
       "chat_template": {
@@ -109,23 +109,23 @@
       "id": "lfm25-350m-reasoner",
       "role": "reasoner",
       "backend": "llama-cli",
-      "path": "models/LFM2.5-350M-Q4_K_M.gguf",
+      "path": "models/mivi-lfm350-master.Q4_K_M.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 440,
-      "enabled": false,
+      "enabled": true,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
-      "notes": "Ultra-low-RAM tier: 6/11 agent eval at 438 MB RSS, 88 tok/s (2026-08-26)"
+      "notes": "LFM2.5-350M Master fine-tune (2026-08-26)"
     },
     {
       "id": "lfm25-350m-coder",
       "role": "coder",
       "backend": "llama-cli",
-      "path": "models/LFM2.5-350M-Q4_K_M.gguf",
+      "path": "models/mivi-lfm350-master.Q4_K_M.gguf",
       "context_tokens": 8192,
       "ram_mb_estimate": 440,
-      "enabled": false,
+      "enabled": true,
       "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
-      "notes": "Ultra-low-RAM tier; pairs with lfm25-350m-reasoner"
+      "notes": "LFM2.5-350M Master fine-tune; pairs with lfm25-350m-reasoner"
     },
     {
       "id": "qwen2.5-0.5b-reasoner",

@@ -200,7 +200,10 @@ impl EdgeBrain {
 
         let llama_path = model_path_from_env("MIVI_REASONER_MODEL", default_reasoner);
         let qwen_path = model_path_from_env("MIVI_CODER_MODEL", default_coder);
-        let tool_path = model_path_from_env("MIVI_TOOL_MODEL", default_tool);
+        let mut tool_path = model_path_from_env("MIVI_TOOL_MODEL", default_tool);
+        if !tool_path.exists() {
+            tool_path = qwen_path.clone();
+        }
         let minicpm_path = model_path_from_env(
             "MIVI_VISION_MODEL",
             models_dir.join("MiniCPM-V-4.6-Q4_K_M.gguf"),
@@ -669,7 +672,7 @@ impl EdgeBrain {
                 }
             }
 
-            if runtime_config.mode == crate::runtime::RuntimeMode::Spawn {
+            if runtime_config.mode != crate::runtime::RuntimeMode::Native {
                 let context_size = cli_context_size(
                     "MIVI_REASONER_CONTEXT_SIZE",
                     runtime_config.context.max_input_tokens,
