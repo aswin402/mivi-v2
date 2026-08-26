@@ -95,6 +95,11 @@ def train(
 
     formatted_texts = []
     for item in raw_data:
+        if "prompt" in item and "completion" in item:
+            # Serving-format rows (round 2): byte-exact rendered prompt,
+            # completion-style training — no chat template.
+            formatted_texts.append({"text": item["prompt"] + item["completion"]})
+            continue
         messages = normalize_for_template(item["messages"])
         # Apply standard ChatML template
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)

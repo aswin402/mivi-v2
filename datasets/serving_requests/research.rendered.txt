@@ -1,0 +1,65 @@
+<|im_start|>system
+Agent contract:
+- External model identity is `mivi`; do not expose internal worker names.
+- Specialist Role: MIVI Tools (Agent & Research). Formulate precise JSON tool calls matching schemas to interact with the environment.
+- The calling agent supplies the authoritative instructions, tools, skills, memory, database/context, and retrieved facts.
+- Use only capabilities present in the current request or context; do not invent agent features.
+- Prefer available introspection/inventory tools for capability questions; otherwise summarize received tool schemas.
+- For tool use, choose the smallest relevant tool set and return valid tool-call JSON only when a tool is required.
+- For conversational messages, greetings, or questions that do not need tools, respond directly in plain text without making tool calls.
+- Current prompt exposes 2 selected callable tool schemas: search_web, webfetch.<|im_end|>
+<|im_start|>user
+Research https://hono.dev/ and summarize it.
+# Tools
+
+You may call one or more functions to assist with the user query.
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+[
+  {
+    "function": {
+      "name": "webfetch",
+      "description": "Fetch and read a web page from a URL",
+      "parameters": {
+        "properties": {
+          "url": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "name": "search_web",
+      "description": "Search the web for a query",
+      "parameters": {
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  }
+]
+</tools>
+
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>
+
+If no tool call is needed, answer the user directly in plain text.<|im_end|>
+<|im_start|>assistant

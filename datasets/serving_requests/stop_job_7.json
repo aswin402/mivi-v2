@@ -1,0 +1,3 @@
+{"model":"mivi","messages":[{"role":"user","content":"Please cancel scheduled job 7."}],"tools":[
+{"type":"function","function":{"name":"remove_job","description":"Remove or stop an existing scheduled job","parameters":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}},
+{"type":"function","function":{"name":"schedule_job","description":"Create or update a scheduled job","parameters":{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]}}}]}

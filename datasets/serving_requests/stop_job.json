@@ -1,0 +1,4 @@
+{"model":"mivi","messages":[{"role":"user","content":"Stop scheduled job 1."}],"tools":[
+{"type":"function","function":{"name":"remove_job","description":"Remove or stop an existing scheduled job","parameters":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}},
+{"type":"function","function":{"name":"schedule_job","description":"Create or update a scheduled job","parameters":{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]}}},
+{"type":"function","function":{"name":"read_file","description":"Read a local workspace file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}]}

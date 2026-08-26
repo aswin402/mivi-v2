@@ -86,6 +86,27 @@ async fn main() {
         return;
     }
 
+    if mode == "debug-prompt" {
+        // Finetune alignment helper: render the exact prompt the server would
+        // build for a ChatCompletionRequest JSON (read from stdin or a file
+        // argument), so training data can match the serving format.
+        let source = args
+            .get(2)
+            .map(|p| std::fs::read_to_string(p).expect("failed to read request file"))
+            .unwrap_or_else(|| {
+                use std::io::Read;
+                let mut buf = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut buf)
+                    .expect("failed to read stdin");
+                buf
+            });
+        let req: mivi::server::types::ChatCompletionRequest =
+            serde_json::from_str(&source).expect("invalid ChatCompletionRequest JSON");
+        print!("{}", mivi::server::prompt::build_chat_prompt(&req));
+        return;
+    }
+
     if mode == "doctor" {
         mivi::doctor::run_doctor();
         return;
