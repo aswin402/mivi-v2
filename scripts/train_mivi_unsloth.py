@@ -159,17 +159,19 @@ def train(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MIVI-V2 Sub-1B Unsloth Fine-Tuning")
-    parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Base model identifier")
-    parser.add_argument("--dataset", type=str, default="datasets/mivi_sub1b_tuning_dataset.jsonl", help="Dataset path")
-    parser.add_argument("--output", type=str, default="outputs/mivi-0.5b-tool-expert", help="Output directory")
-    parser.add_argument("--steps", type=int, default=250, help="Maximum training steps")
+    parser.add_argument("--model", "--base_model", dest="model", type=str, default="openbmb/MiniCPM5-1B", help="Base model identifier")
+    parser.add_argument("--dataset", "--dataset_path", dest="dataset", type=str, default="datasets/mivi_serving_sft.jsonl", help="Dataset path")
+    parser.add_argument("--output", "--output_dir", dest="output", type=str, default="outputs/mivi-minicpm5-r2", help="Output directory")
+    parser.add_argument("--steps", "--max_steps", dest="steps", type=int, default=25, help="Maximum training steps")
+    parser.add_argument("--export_gguf", type=str, default="1", help="Export GGUF (1/0/true/false)")
     parser.add_argument("--no-gguf", action="store_true", help="Skip GGUF export")
     
     args = parser.parse_args()
+    export_gguf = not args.no_gguf and args.export_gguf.lower() in ("1", "true", "yes")
     train(
         base_model=args.model,
         dataset_path=args.dataset,
         output_dir=args.output,
         max_steps=args.steps,
-        export_gguf=not args.no_gguf
+        export_gguf=export_gguf
     )
