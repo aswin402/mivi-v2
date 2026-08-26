@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
 MIVI-V2 Sub-1B Unsloth QLoRA Fine-Tuning Script
-Fine-tunes Qwen2.5-0.5B-Instruct (or Qwen3-0.6B) on Colab Free Tier (T4 GPU).
-Memory target: < 2.5 GB VRAM during training | < 500 MB RAM during GGUF inference.
+Fine-tunes the MIVI default model (openbmb/MiniCPM5-1B; also works for
+Qwen2.5/Qwen3 small models) on Colab Free Tier (T4 GPU).
+Memory target: < 2.5 GB VRAM during training | < 700 MB RAM during GGUF inference.
+Dataset: scripts/build_agentic_sft.py output (OpenAI messages format).
 """
 
 import os
@@ -11,9 +13,9 @@ import json
 import argparse
 
 def train(
-    base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
-    dataset_path: str = "datasets/mivi_sub1b_tuning_dataset.jsonl",
-    output_dir: str = "outputs/mivi-0.5b-tool-expert",
+    base_model: str = "openbmb/MiniCPM5-1B",
+    dataset_path: str = "datasets/mivi_agentic_sft.jsonl",
+    output_dir: str = "outputs/mivi-minicpm5-agent",
     max_seq_length: int = 4096,
     lora_rank: int = 16,
     lora_alpha: int = 32,
