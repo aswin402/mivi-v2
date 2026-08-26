@@ -36,7 +36,7 @@ print("✅ Environment ready via uv!")
 
 ---
 
-### 🔹 Cell 2: Clone Repository & Build Dataset (~10 seconds)
+### 🔹 Cell 2: Clone Repository & Build Master Dataset (~10 seconds)
 ```python
 import os, pathlib, subprocess
 
@@ -48,10 +48,10 @@ if not pathlib.Path('mivi-v2').exists():
 os.chdir('/content/mivi-v2')
 subprocess.run(['git', 'pull', 'origin', BRANCH], check=True)
 
-# Build the Round 2 serving SFT dataset
-subprocess.run(['python3', 'scripts/build_serving_sft.py', '--out', 'datasets/mivi_serving_sft.jsonl'], check=True)
-DATASET = 'datasets/mivi_serving_sft.jsonl'
-print('✅ Dataset ready:', DATASET, '| rows:', sum(1 for _ in open(DATASET)))
+# Build Master SFT Dataset (280 balanced samples across all 6 agentic pillars)
+subprocess.run(['python3', 'scripts/generate_agentic_lfm_dataset.py'], check=True)
+DATASET = 'datasets/mivi_lfm_serving_master.jsonl'
+print('✅ Master Dataset ready:', DATASET, '| rows:', sum(1 for _ in open(DATASET)))
 ```
 
 ---
@@ -158,25 +158,13 @@ def train_and_export(
 
 ---
 
-### 🔹 Cell 4: Train MiniCPM5-1B (~1–2 minutes)
-```python
-train_and_export(
-    model_name="openbmb/MiniCPM5-1B",
-    dataset_path="datasets/mivi_serving_sft.jsonl",
-    output_dir="outputs/mivi-minicpm5-r2",
-    max_steps=30
-)
-```
-
----
-
-### 🔹 Cell 5: Train LFM2.5-350M (~1 minute)
+### 🔹 Cell 4: Train LFM2.5-350M Master Agentic Model (~2 minutes)
 ```python
 train_and_export(
     model_name="LiquidAI/LFM2.5-350M",
-    dataset_path="datasets/mivi_serving_sft.jsonl",
-    output_dir="outputs/mivi-lfm350-r2",
-    max_steps=25
+    dataset_path="datasets/mivi_lfm_serving_master.jsonl",
+    output_dir="outputs/mivi-lfm350-master",
+    max_steps=60
 )
 ```
 

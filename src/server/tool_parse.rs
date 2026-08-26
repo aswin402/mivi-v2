@@ -150,7 +150,7 @@ pub fn required_tool_args(tool: &ToolDef) -> Vec<String> {
 fn check_value_type(value: &serde_json::Value, expected_type: &str) -> bool {
     match expected_type {
         "null" => value.is_null(),
-        "string" => value.is_string(),
+        "string" => value.is_string() || value.is_number(),
         "number" => value.is_number(),
         "integer" => {
             value.is_number() && (!value.is_f64() || value.as_f64().unwrap().fract() == 0.0)
