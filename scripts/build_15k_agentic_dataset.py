@@ -4,11 +4,8 @@ MIVI-V2 15,000+ Sample Master Agentic Dataset Builder.
 
 Streams and blends high-signal datasets from Hugging Face and MIVI domain generators:
 1. Salesforce/xlam-function-calling-60k (Tool use, nested args, distractors)
-2. glaiveai/glaive-function-calling-v2 (Real-world API function calls)
-3. NousResearch/hermes-function-calling-v1 (Agentic traces & multi-turn)
-4. ise-uiuc/Magicoder-Evol-Instruct-110K (Verified coding & algorithmic logic)
-5. HuggingFaceH4/ultrafeedback_binarized (Clean conversational QA & English fluency)
-6. MIVI Custom Generators (Literal parameter binding, verified output blocks, RAG citations, identity)
+2. HuggingFaceH4/ultrafeedback_binarized (Clean conversational QA & English fluency)
+3. MIVI Custom Generators (Literal parameter binding, verified output blocks, RAG citations, identity)
 
 Outputs:
 - datasets/mivi_master_15k_sft.jsonl (Ready for Unsloth Response-Only SFT)
@@ -94,12 +91,12 @@ def build_prompt_with_tools(user_text: str, tools: Optional[List[Dict[str, Any]]
     prompt += f"<|im_start|>user\n{user_content}<|im_end|>\n<|im_start|>assistant\n"
     return prompt
 
-def generate_parameter_bound_samples(count: int = 4000) -> List[Dict[str, Any]]:
+def generate_parameter_bound_samples(count: int = 5000) -> List[Dict[str, Any]]:
     """Synthesize thousands of high-variance literal parameter binding samples."""
     samples = []
     
     # 1. Job stop / remove with exact IDs
-    for i in range(1, 800):
+    for i in range(1, 1000):
         job_id = str(i) if i % 2 == 0 else f"job_{i}"
         user_texts = [
             f"Stop scheduled job {job_id}.",
@@ -128,7 +125,7 @@ def generate_parameter_bound_samples(count: int = 4000) -> List[Dict[str, Any]]:
         "ls -la", "cat Cargo.toml", "curl -s http://localhost:8000/v1/models", "bun test",
         "uv pip install -r requirements.txt", "docker ps -a", "go test ./..."
     ]
-    for i, cmd in enumerate(commands * 50):
+    for i, cmd in enumerate(commands * 80):
         user_texts = [
             f"Run {cmd}.",
             f"Execute `{cmd}` in shell.",
@@ -154,7 +151,7 @@ def generate_parameter_bound_samples(count: int = 4000) -> List[Dict[str, Any]]:
         "https://docs.rs/tokio", "https://github.com/aswin402/mivi-v2", "https://fastapi.tiangolo.com/",
         "https://tailwindcss.com/docs", "https://nextjs.org/docs", "https://huggingface.co/models"
     ]
-    for i, url in enumerate(domains * 80):
+    for i, url in enumerate(domains * 100):
         user_texts = [
             f"Research {url} and summarize it.",
             f"Fetch webpage at {url}",
@@ -182,7 +179,7 @@ def generate_parameter_bound_samples(count: int = 4000) -> List[Dict[str, Any]]:
         ("Explain what an async runtime is in Rust.", "An async runtime in Rust (like Tokio) manages asynchronous tasks using an event loop and work-stealing threadpool to efficiently handle high-concurrency I/O operations without blocking OS threads."),
         ("What is the difference between TCP and UDP?", "TCP is a connection-oriented, reliable protocol that guarantees packet order and delivery through acknowledgments, whereas UDP is connectionless and lightweight, providing faster transmission without delivery guarantees.")
     ]
-    for user_text, resp in greetings * 150:
+    for user_text, resp in greetings * 200:
         samples.append({
             "category": "negative_chat_no_tool",
             "prompt": build_prompt_with_tools(user_text, BASE_TOOLS[:5], role="MIVI Chat (Conversational Intelligence)"),
@@ -195,26 +192,11 @@ def generate_parameter_bound_samples(count: int = 4000) -> List[Dict[str, Any]]:
 
     return samples
 
-def generate_verified_coding_samples(count: int = 2500) -> List[Dict[str, Any]]:
+def generate_verified_coding_samples(count: int = 4000) -> List[Dict[str, Any]]:
     """Synthesize diverse coding tasks with strict verified execution outputs."""
     samples = []
     
-    code_templates = [
-        ("Write Python code that prints the sum of {a} and {b}.",
-         "```python\nprint({a} + {b})\n```\n\n**Verified Terminal Output:**\n```\n{ans}\n```",
-         lambda a, b: a + b),
-        ("Write a Python script that calculates the product of {a} and {b}.",
-         "```python\nprint({a} * {b})\n```\n\n**Verified Terminal Output:**\n```\n{ans}\n```",
-         lambda a, b: a * b),
-        ("Write Python code to compute {a} minus {b}.",
-         "```python\nprint({a} - {b})\n```\n\n**Verified Terminal Output:**\n```\n{ans}\n```",
-         lambda a, b: a - b),
-        ("Write Python code to reverse the string '{word}'.",
-         "```python\ntext = '{word}'\nprint(text[::-1])\n```\n\n**Verified Terminal Output:**\n```\n{ans}\n```",
-         lambda word: word[::-1]),
-    ]
-    
-    words = ["hello", "mivi", "agent", "rust", "python", "tokio", "unsloth", "llama", "stream", "vector"]
+    words = ["hello", "mivi", "agent", "rust", "python", "tokio", "unsloth", "llama", "stream", "vector", "cargo", "axum"]
     
     for i in range(count):
         if i % 4 == 3:
@@ -250,19 +232,19 @@ def generate_verified_coding_samples(count: int = 2500) -> List[Dict[str, Any]]:
         
     return samples
 
-def fetch_hf_datasets(target_count: int = 8000) -> List[Dict[str, Any]]:
+def fetch_hf_datasets(target_count: int = 6000) -> List[Dict[str, Any]]:
     """Stream open-source samples from Hugging Face if datasets is installed."""
     samples = []
     try:
         from datasets import load_dataset
-        print("🌐 Streaming high-signal agentic datasets from Hugging Face...")
+        print("🌐 Streaming high-signal agentic datasets from Hugging Face...", flush=True)
         
         # 1. Salesforce/xlam-function-calling-60k
         try:
-            print("  📥 Streaming from Salesforce/xlam-function-calling-60k...")
+            print("  📥 Streaming from Salesforce/xlam-function-calling-60k...", flush=True)
             ds = load_dataset("Salesforce/xlam-function-calling-60k", split="train", streaming=True)
             for i, row in enumerate(ds):
-                if i >= 4000:
+                if i >= 3000:
                     break
                 query = row.get("query", "")
                 tools = json.loads(row.get("tools", "[]")) if isinstance(row.get("tools"), str) else row.get("tools", [])
@@ -301,17 +283,19 @@ def fetch_hf_datasets(target_count: int = 8000) -> List[Dict[str, Any]]:
                             {"role": "assistant", "content": "", "tool_calls": tool_calls}
                         ]
                     })
-            print(f"  ✅ Collected {len(samples)} samples from xLAM.")
+                if i % 1000 == 0 and i > 0:
+                    print(f"    - Streamed {i} / 3000 xLAM samples...", flush=True)
+            print(f"  ✅ Collected {len(samples)} samples from xLAM.", flush=True)
         except Exception as e:
-            print(f"  ⚠️ Could not stream xLAM: {e}")
+            print(f"  ⚠️ xLAM stream skipped: {e}", flush=True)
 
         # 2. HuggingFaceH4/ultrafeedback_binarized (General Conversational Anchor)
         try:
-            print("  📥 Streaming conversational anchor from UltraFeedback...")
+            print("  📥 Streaming conversational anchor from UltraFeedback...", flush=True)
             ds_uf = load_dataset("HuggingFaceH4/ultrafeedback_binarized", split="train_prefs", streaming=True)
             count_uf = 0
             for row in ds_uf:
-                if count_uf >= 2000:
+                if count_uf >= 1500:
                     break
                 chosen = row.get("chosen", [])
                 if len(chosen) >= 2:
@@ -328,12 +312,14 @@ def fetch_hf_datasets(target_count: int = 8000) -> List[Dict[str, Any]]:
                             ]
                         })
                         count_uf += 1
-            print(f"  ✅ Collected {count_uf} samples from UltraFeedback.")
+                if count_uf % 500 == 0 and count_uf > 0:
+                    print(f"    - Streamed {count_uf} / 1500 UltraFeedback samples...", flush=True)
+            print(f"  ✅ Collected {count_uf} samples from UltraFeedback.", flush=True)
         except Exception as e:
-            print(f"  ⚠️ Could not stream UltraFeedback: {e}")
+            print(f"  ⚠️ UltraFeedback stream skipped: {e}", flush=True)
 
     except ImportError:
-        print("ℹ️ HuggingFace 'datasets' library not installed locally; generating offline synthetic master dataset.")
+        print("ℹ️ HuggingFace 'datasets' library not installed locally; generating offline synthetic master dataset.", flush=True)
 
     return samples
 
@@ -341,20 +327,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--total", type=int, default=15000, help="Target dataset size")
+    parser.add_argument("--fast", action="store_true", help="Fast offline mode (skip HuggingFace network streaming)")
     args = parser.parse_args()
 
     all_samples = []
 
-    # 1. Fetch online Hugging Face datasets if available
-    hf_samples = fetch_hf_datasets(target_count=8000)
-    all_samples.extend(hf_samples)
+    # 1. Fetch online Hugging Face datasets if not fast mode
+    if not args.fast:
+        hf_samples = fetch_hf_datasets(target_count=6000)
+        all_samples.extend(hf_samples)
 
     # 2. Generate Parameter Binding data
-    param_samples = generate_parameter_bound_samples(count=4000)
+    print("⚙️ Synthesizing parameter-bound tool execution data...", flush=True)
+    param_samples = generate_parameter_bound_samples(count=5000)
     all_samples.extend(param_samples)
 
     # 3. Generate Verified Coding data
-    coding_samples = generate_verified_coding_samples(count=2500)
+    print("⚙️ Synthesizing verified code generation data...", flush=True)
+    coding_samples = generate_verified_coding_samples(count=4000)
     all_samples.extend(coding_samples)
 
     # 4. Pad/Replicate to reach total requested
@@ -372,15 +362,15 @@ def main():
         for s in all_samples:
             f.write(json.dumps(s) + "\n")
 
-    print(f"\n=======================================================")
-    print(f"🎉 Master Dataset Built: {len(all_samples)} samples")
-    print(f"📁 Output File: {args.out}")
-    print(f"=======================================================")
+    print(f"\n=======================================================", flush=True)
+    print(f"🎉 Master Dataset Built: {len(all_samples)} samples", flush=True)
+    print(f"📁 Output File: {args.out}", flush=True)
+    print(f"=======================================================", flush=True)
     counts = {}
     for s in all_samples:
         counts[s["category"]] = counts.get(s["category"], 0) + 1
     for cat, c in sorted(counts.items()):
-        print(f"  * {cat:<26} {c} samples")
+        print(f"  * {cat:<26} {c} samples", flush=True)
 
 if __name__ == "__main__":
     main()
