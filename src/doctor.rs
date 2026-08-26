@@ -101,6 +101,12 @@ pub fn recommend(snapshot: &SystemSnapshot) -> RecommendedPlan {
                 "Only {avail} MB RAM available: spawn mode streams weights via mmap \
                  and keeps a single model resident."
             ));
+            notes.push(
+                "Ultra-low-RAM model tier: MIVI_REASONER_MODEL=models/LFM2.5-350M-Q4_K_M.gguf \
+                 MIVI_CODER_MODEL=models/LFM2.5-350M-Q4_K_M.gguf (438 MB RSS, 88 tok/s, \
+                 6/11 agent eval) — enable the `lfm25-350m-*` catalog entries or export the env."
+                    .to_string(),
+            );
             ("spawn", true, 2048, 1, 0)
         } else if avail < 6000 {
             notes.push(format!(

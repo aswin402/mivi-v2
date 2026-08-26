@@ -106,6 +106,28 @@
       }
     },
     {
+      "id": "lfm25-350m-reasoner",
+      "role": "reasoner",
+      "backend": "llama-cli",
+      "path": "models/LFM2.5-350M-Q4_K_M.gguf",
+      "context_tokens": 8192,
+      "ram_mb_estimate": 440,
+      "enabled": false,
+      "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
+      "notes": "Ultra-low-RAM tier: 6/11 agent eval at 438 MB RSS, 88 tok/s (2026-08-26)"
+    },
+    {
+      "id": "lfm25-350m-coder",
+      "role": "coder",
+      "backend": "llama-cli",
+      "path": "models/LFM2.5-350M-Q4_K_M.gguf",
+      "context_tokens": 8192,
+      "ram_mb_estimate": 440,
+      "enabled": false,
+      "tokenizer_path": "models/qwen2.5-0.5b-tokenizer.json",
+      "notes": "Ultra-low-RAM tier; pairs with lfm25-350m-reasoner"
+    },
+    {
       "id": "qwen2.5-0.5b-reasoner",
       "role": "reasoner",
       "backend": "llama-cli",
