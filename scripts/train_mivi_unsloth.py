@@ -78,9 +78,24 @@ def train(
     with open(dataset_path, "r", encoding="utf-8") as f:
         raw_data = [json.loads(line) for line in f if line.strip()]
 
+    def normalize_for_template(messages):
+        """Chat templates expect arguments as a dict; the dataset stores the
+        OpenAI wire format (JSON string). Convert before apply_chat_template."""
+        out = []
+        for m in messages:
+            if "tool_calls" in m:
+                m = dict(m)
+                m["tool_calls"] = [
+                    dict(tc, function=dict(tc["function"],
+                         arguments=json.loads(tc["function"]["arguments"])))
+                    for tc in m["tool_calls"]
+                ]
+            out.append(m)
+        return out
+
     formatted_texts = []
     for item in raw_data:
-        messages = item["messages"]
+        messages = normalize_for_template(item["messages"])
         # Apply standard ChatML template
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
         formatted_texts.append({"text": text})
