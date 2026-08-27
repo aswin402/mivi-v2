@@ -1,7 +1,7 @@
 # 🚀 Google Colab Fine-Tuning Guide — MIVI Turbo Master Model (High-VRAM V3)
 
 > **Platform:** Google Colab (Free T4 GPU, 15 GB VRAM)  
-> **Estimated Training Time:** 30–120 minutes on a real T4/L4 GPU; longer means inspect the preflight
+> **Estimated Training Time:** roughly 3–4 hours on a real T4/L4 GPU; longer means inspect the preflight
 > **Target Model:** `LiquidAI/LFM2.5-350M` (Hybrid 350M, 438 MB inference RAM, 88 tok/s)  
 > **Dataset:** `datasets/mivi_master_15k_sft.jsonl` (20,000 samples across 10 agentic categories with XML `<tool_call>` format)  
 > **Loss Masking:** Unsloth Response-Only Masking (`train_on_responses_only`)  
@@ -113,7 +113,7 @@ for g in ggufs:
 
 ## If training is slow, appears stuck, or runs out of memory
 
-- The job is 1,000 optimizer steps × 64 samples = 64,000 sample views. With `max_seq_length=512`, the upper bound is 32.8M token positions before padding/truncation. With batch 8 and gradient checkpointing, one hour can be normal for this 1,000-step T4 run; use the step counter and GPU utilization to judge progress.
+- The job is 1,000 optimizer steps × 64 samples = 64,000 sample views. With `max_seq_length=512`, the upper bound is 32.8M token positions before padding/truncation. With batch 8 and gradient checkpointing, roughly 3 hours is normal for this 1,000-step T4 run. Your observed 10.95 seconds per optimizer step predicts about 3 hours total; use the step counter and GPU utilization to judge progress.
 - The trainer may remove rows where the response marker was truncated: your log removed 3,412 rows and trained on 16,588. This is not an OOM; it means the 512-token limit cut off the assistant response. Do not increase sequence length on the T4 unless you reduce batch size further.
 - The training cell must print the GPU name, effective batch, and checkpoint interval before model loading. If it does not, it is not using the updated script.
 - If the loss/step counter does not advance for 10 minutes, run `!nvidia-smi` in another cell and inspect GPU utilization. Do not start a second training process.
