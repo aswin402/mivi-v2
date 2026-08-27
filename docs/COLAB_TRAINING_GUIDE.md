@@ -1,7 +1,7 @@
 # 🚀 Google Colab Fine-Tuning Guide — MIVI Turbo Master Model (High-VRAM V3)
 
 > **Platform:** Google Colab (Free T4 GPU, 15 GB VRAM)  
-> **Estimated Training Time:** 20–90 minutes on a real T4/L4 GPU; longer means inspect the preflight
+> **Estimated Training Time:** 30–120 minutes on a real T4/L4 GPU; longer means inspect the preflight
 > **Target Model:** `LiquidAI/LFM2.5-350M` (Hybrid 350M, 438 MB inference RAM, 88 tok/s)  
 > **Dataset:** `datasets/mivi_master_15k_sft.jsonl` (20,000 samples across 10 agentic categories with XML `<tool_call>` format)  
 > **Loss Masking:** Unsloth Response-Only Masking (`train_on_responses_only`)  
@@ -53,7 +53,7 @@ If this cell does not show a CUDA GPU, stop here. A CPU run is the main reason t
 import os, pathlib, subprocess
 
 REPO = 'https://github.com/aswin402/mivi-v2.git'
-BRANCH = 'feat/verifier-sandbox'
+BRANCH = "main"
 
 if not pathlib.Path('mivi-v2').exists():
     subprocess.run(['git', 'clone', '-b', BRANCH, REPO], check=True)
@@ -70,9 +70,9 @@ print('✅ Master Dataset ready:', DATASET, '| rows:', sum(1 for _ in open(DATAS
 
 ### 🔹 Cell 3: Run the canonical trainer script
 ```python
-# 1,000 optimizer steps; effective batch = 32 x 2 = 64.
+# 1,000 optimizer steps; effective batch = 8 x 8 = 64.
 # The trainer fails fast if Colab is accidentally running on CPU.
-!python3 scripts/train_mivi_unsloth.py --model LiquidAI/LFM2.5-350M --dataset datasets/mivi_master_15k_sft.jsonl --output outputs/mivi-lfm350-master --steps 1000 --max-seq-length 512 --batch-size 32 --grad-accum 2 --lr 2.5e-4 --dataset-procs 2 --loader-workers 2 --save-steps 100 --no-gradient-checkpointing
+!python3 scripts/train_mivi_unsloth.py --model LiquidAI/LFM2.5-350M --dataset datasets/mivi_master_15k_sft.jsonl --output outputs/mivi-lfm350-master --steps 1000 --max-seq-length 512 --batch-size 8 --grad-accum 8 --lr 2.5e-4 --dataset-procs 2 --loader-workers 2 --save-steps 100 --gradient-checkpointing
 ```
 
 ---
@@ -83,7 +83,7 @@ print('✅ Master Dataset ready:', DATASET, '| rows:', sum(1 for _ in open(DATAS
 !nvidia-smi
 
 # If Colab disconnects after a checkpoint, resume from the latest directory, e.g.:
-# !python3 scripts/train_mivi_unsloth.py --model LiquidAI/LFM2.5-350M --dataset datasets/mivi_master_15k_sft.jsonl --output outputs/mivi-lfm350-master --steps 1000 --max-seq-length 512 --batch-size 32 --grad-accum 2 --lr 2.5e-4 --dataset-procs 2 --loader-workers 2 --save-steps 100 --no-gradient-checkpointing --resume outputs/mivi-lfm350-master/checkpoint-500
+# !python3 scripts/train_mivi_unsloth.py --model LiquidAI/LFM2.5-350M --dataset datasets/mivi_master_15k_sft.jsonl --output outputs/mivi-lfm350-master --steps 1000 --max-seq-length 512 --batch-size 8 --grad-accum 8 --lr 2.5e-4 --dataset-procs 2 --loader-workers 2 --save-steps 100 --gradient-checkpointing --resume outputs/mivi-lfm350-master/checkpoint-500
 ```
 
 ---
@@ -112,10 +112,11 @@ for g in ggufs:
 
 ## If training is slow, appears stuck, or runs out of memory
 
-- The job is 1,000 optimizer steps × 64 samples = 64,000 sample views. With `max_seq_length=512`, the upper bound is 32.8M token positions before padding/truncation. One hour is plausible on CPU or a badly configured runtime, but not a healthy T4 run.
+- The job is 1,000 optimizer steps × 64 samples = 64,000 sample views. With `max_seq_length=512`, the upper bound is 32.8M token positions before padding/truncation. With batch 8 and gradient checkpointing, one hour can be normal for this 1,000-step T4 run; use the step counter and GPU utilization to judge progress.
+- The trainer may remove rows where the response marker was truncated: your log removed 3,412 rows and trained on 16,588. This is not an OOM; it means the 512-token limit cut off the assistant response. Do not increase sequence length on the T4 unless you reduce batch size further.
 - The training cell must print the GPU name, effective batch, and checkpoint interval before model loading. If it does not, it is not using the updated script.
 - If the loss/step counter does not advance for 10 minutes, run `!nvidia-smi` in another cell and inspect GPU utilization. Do not start a second training process.
-- If batch 32 causes an out-of-memory error, keep the same effective batch with `--batch-size 16 --grad-accum 4 --gradient-checkpointing`. This is slower but safe.
+- The T4 profile uses batch 8 with gradient checkpointing. If it still runs out of memory, keep the effective batch with `--batch-size 4 --grad-accum 16 --gradient-checkpointing`. This is slower but safer.
 - Checkpoints are written every 100 steps. Resume with the commented command in Cell 4 after a disconnect.
 
 ## 💻 Step 3: Local Benchmarking (After Download)
