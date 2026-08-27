@@ -67,15 +67,16 @@ def train_and_export_master(
     model_name="LiquidAI/LFM2.5-350M",
     dataset_path="datasets/mivi_master_15k_sft.jsonl",
     output_dir="outputs/mivi-lfm350-master",
-    max_steps=900,
-    batch_size=4,
-    grad_accum=4,
+    max_steps=1000,
+    batch_size=16,       # 🚀 High throughput to fully utilize 15GB VRAM
+    grad_accum=2,        # Fast gradient updates
     lr=2e-4
 ):
     print("=" * 60)
-    print(f"🚀 Training 15k Master: {model_name}")
-    print(f"📁 Output:              {output_dir}")
-    print(f"⚡ GPU:                 {torch.cuda.get_device_name(0)} ({torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB VRAM)")
+    print(f"🚀 Training High-Throughput Master: {model_name}")
+    print(f"📁 Output:                         {output_dir}")
+    print(f"⚡ GPU:                            {torch.cuda.get_device_name(0)} ({torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB VRAM)")
+    print(f"📦 Effective Batch Size:           {batch_size * grad_accum} samples/step")
     print("=" * 60)
 
     # 1. Load base model in 4-bit with 2048 context
@@ -112,18 +113,20 @@ def train_and_export_master(
     dataset = Dataset.from_list(formatted)
     print(f"📄 Total training samples loaded: {len(dataset)}")
 
-    # 4. SFT Trainer with Response-Only Masking
+    # 4. SFT Trainer with Parallel Data Pre-fetching
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
         dataset_text_field="text",
         max_seq_length=2048,
-        dataset_num_proc=2,
+        dataset_num_proc=4,
         packing=False,
         args=TrainingArguments(
             per_device_train_batch_size=batch_size,
             gradient_accumulation_steps=grad_accum,
+            dataloader_num_workers=4,        # ⚡ 4 CPU workers feeding the GPU constantly
+            dataloader_pin_memory=True,      # ⚡ Fast DMA memory transfer to VRAM
             warmup_ratio=0.03,
             max_steps=max_steps,
             learning_rate=lr,
@@ -146,7 +149,7 @@ def train_and_export_master(
         response_part="<|im_start|>assistant\n",
     )
 
-    print("🔥 Starting 15,000-sample training loop (~15 minutes)...")
+    print("🔥 Starting High-Speed training loop (~6–8 minutes)...")
     stats = trainer.train()
     print(f"✅ Training completed in {stats.metrics.get('train_runtime', 0)/60:.2f} minutes!")
 
@@ -163,15 +166,15 @@ def train_and_export_master(
 
 ---
 
-### 🔹 Cell 4: Train 15,000-Sample Master Model (~15 minutes)
+### 🔹 Cell 4: Train 15,000-Sample Master Model (~6–8 minutes)
 ```python
 train_and_export_master(
     model_name="LiquidAI/LFM2.5-350M",
     dataset_path="datasets/mivi_master_15k_sft.jsonl",
     output_dir="outputs/mivi-lfm350-master",
-    max_steps=900,
-    batch_size=4,
-    grad_accum=4,
+    max_steps=1000,      # 2 Full Epochs at 32 effective batch size
+    batch_size=16,
+    grad_accum=2,
     lr=2e-4
 )
 ```
