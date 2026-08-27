@@ -6,6 +6,7 @@
 > **Dataset:** `datasets/mivi_master_15k_sft.jsonl` (20,000 samples across 10 agentic categories with XML `<tool_call>` format)  
 > **Loss Masking:** Unsloth Response-Only Masking (`train_on_responses_only`)  
 > **Output:** `mivi-lfm350-master` GGUF (`Q4_K_M`, ~229 MB)
+> **T4 copy-paste profile:** use `batch_size=8`, `grad_accum=8`, and `--gradient-checkpointing` exactly as shown in Cell 3. Do not reuse the older batch-32 command; it exhausts a 14.6 GiB T4. If you already ran the old cell, restart the Colab runtime and begin again from Cell 1.
 
 ---
 

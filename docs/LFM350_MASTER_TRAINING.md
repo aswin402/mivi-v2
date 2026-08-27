@@ -7,6 +7,7 @@
 > **Loss Masking:** Unsloth Response-Only Masking (`train_on_responses_only`)
 > **Training Time:** 30–120 minutes on a real T4/L4 GPU; longer means inspect the preflight
 > **Output:** `mivi-lfm350-master` GGUF (`Q4_K_M`, ~229 MB)
+> **T4 copy-paste profile:** use `batch_size=8`, `grad_accum=8`, and `--gradient-checkpointing` exactly as shown in Cell 3. Do not reuse the older batch-32 command; it exhausts a 14.6 GiB T4. If you already ran the old cell, restart the Colab runtime and begin again from Cell 1.
 
 ---
 
