@@ -157,7 +157,6 @@ def train(
             report_to = "none",
             dataloader_num_workers = dataloader_num_workers,
             dataloader_pin_memory = True,
-            group_by_length = True,
             gradient_checkpointing = gradient_checkpointing,
             save_strategy = "steps",
             save_steps = save_steps,
