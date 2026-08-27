@@ -1,7 +1,7 @@
 # 🚀 Google Colab Fine-Tuning Guide — MIVI Turbo Master Model (High-VRAM V3)
 
 > **Platform:** Google Colab (Free T4 GPU, 15 GB VRAM)  
-> **Estimated Training Time:** ~3.5–5 minutes (High-throughput execution)  
+> **Estimated Training Time:** 20–90 minutes on a real T4/L4 GPU; longer means inspect the preflight
 > **Target Model:** `LiquidAI/LFM2.5-350M` (Hybrid 350M, 438 MB inference RAM, 88 tok/s)  
 > **Dataset:** `datasets/mivi_master_15k_sft.jsonl` (20,000 samples across 10 agentic categories with XML `<tool_call>` format)  
 > **Loss Masking:** Unsloth Response-Only Masking (`train_on_responses_only`)  
@@ -35,6 +35,19 @@ print("✅ Environment ready via uv!")
 
 ---
 
+### 🔹 Cell 1b: Confirm the GPU after installing dependencies
+```python
+import subprocess, torch
+assert torch.cuda.is_available(), "CUDA is missing: switch Colab to a T4/L4/A100 runtime."
+gpu = torch.cuda.get_device_properties(0)
+print(f"GPU: {gpu.name} | VRAM: {gpu.total_memory / 2**30:.1f} GiB")
+subprocess.run(["nvidia-smi"], check=False)
+```
+
+If this cell does not show a CUDA GPU, stop here. A CPU run is the main reason this job can take hours.
+
+---
+
 ### 🔹 Cell 2: Clone Repository & Build 20,000-Sample Master Dataset (~4 seconds)
 ```python
 import os, pathlib, subprocess
@@ -55,128 +68,22 @@ print('✅ Master Dataset ready:', DATASET, '| rows:', sum(1 for _ in open(DATAS
 
 ---
 
-### 🔹 Cell 3: High-Throughput Trainer Function
+### 🔹 Cell 3: Run the canonical trainer script
 ```python
-import os, json, glob, torch
-from unsloth import FastLanguageModel
-from unsloth.chat_templates import train_on_responses_only
-from datasets import Dataset
-from trl import SFTTrainer
-from transformers import TrainingArguments
-from google.colab import files
-
-def train_and_export_master(
-    model_name="LiquidAI/LFM2.5-350M",
-    dataset_path="datasets/mivi_master_15k_sft.jsonl",
-    output_dir="outputs/mivi-lfm350-master",
-    max_steps=600,
-    batch_size=32,       # ⚡ 4x larger batch: fills GPU VRAM, 5x faster
-    grad_accum=2,        # ⚡ Effective batch = 64
-    lr=2.5e-4
-):
-    print("=" * 60)
-    print(f"🚀 MIVI Turbo Master Training (High-VRAM Mode)")
-    print(f"📁 Model:       {model_name}")
-    print(f"📦 Dataset:     {dataset_path}")
-    print(f"⚡ GPU:         {torch.cuda.get_device_name(0)} ({torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB)")
-    print(f"🔄 Steps:       {max_steps} (Effective Batch = {batch_size * grad_accum})")
-    print(f"📊 Exposures:   {max_steps * batch_size * grad_accum} sample views")
-    print("=" * 60)
-
-    # 1. Load base model in 4-bit with 512 context
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=model_name,
-        max_seq_length=512,
-        dtype=None,
-        load_in_4bit=True,
-    )
-
-    # 2. Add LoRA adapters to all linear projections
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=16,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_alpha=32,
-        lora_dropout=0,
-        bias="none",
-        use_gradient_checkpointing="unsloth",
-        random_state=3407,
-    )
-
-    # 3. Load dataset
-    with open(dataset_path, "r", encoding="utf-8") as f:
-        raw = [json.loads(line) for line in f if line.strip()]
-
-    formatted = []
-    for item in raw:
-        if "prompt" in item and "completion" in item:
-            formatted.append({"text": item["prompt"] + item["completion"] + "<|im_end|>\n"})
-
-    dataset = Dataset.from_list(formatted)
-    print(f"📄 Loaded {len(dataset)} training samples")
-
-    # 4. High-Throughput SFT Trainer (Batch 32)
-    trainer = SFTTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        train_dataset=dataset,
-        dataset_text_field="text",
-        max_seq_length=512,
-        dataset_num_proc=2,
-        packing=False,
-        args=TrainingArguments(
-            per_device_train_batch_size=batch_size,     # ⚡ Batch 32
-            gradient_accumulation_steps=grad_accum,    # ⚡ Grad Accum 2
-            warmup_steps=20,
-            max_steps=max_steps,
-            learning_rate=lr,
-            fp16=not torch.cuda.is_bf16_supported(),
-            bf16=torch.cuda.is_bf16_supported(),
-            logging_steps=25,
-            optim="adamw_8bit",
-            weight_decay=0.01,
-            lr_scheduler_type="cosine",
-            seed=3407,
-            output_dir=output_dir,
-            report_to="none",
-        ),
-    )
-
-    # 5. Response-Only Loss Masking
-    trainer = train_on_responses_only(
-        trainer,
-        instruction_part="<|im_start|>user\n",
-        response_part="<|im_start|>assistant\n",
-    )
-
-    print("🔥 Training started with GPU acceleration (~3.5–5 minutes)...")
-    stats = trainer.train()
-    print(f"✅ Training done in {stats.metrics.get('train_runtime', 0):.1f}s!")
-
-    # 6. Export merged GGUF
-    print(f"📦 Exporting Q4_K_M GGUF...")
-    os.makedirs(output_dir, exist_ok=True)
-    model.save_pretrained_gguf(
-        output_dir,
-        tokenizer,
-        quantization_method="q4_k_m"
-    )
-    print(f"🎉 GGUF export complete: {output_dir}")
+# 1,000 optimizer steps; effective batch = 32 x 2 = 64.
+# The trainer fails fast if Colab is accidentally running on CPU.
+!python3 scripts/train_mivi_unsloth.py --model LiquidAI/LFM2.5-350M --dataset datasets/mivi_master_15k_sft.jsonl --output outputs/mivi-lfm350-master --steps 1000 --max-seq-length 512 --batch-size 32 --grad-accum 2 --lr 2.5e-4 --dataset-procs 2 --loader-workers 2 --save-steps 100 --no-gradient-checkpointing
 ```
 
 ---
 
-### 🔹 Cell 4: Train Master Model (~3.5–5 minutes)
+### 🔹 Cell 4: Verify progress and resume if needed
 ```python
-train_and_export_master(
-    model_name="LiquidAI/LFM2.5-350M",
-    dataset_path="datasets/mivi_master_15k_sft.jsonl",
-    output_dir="outputs/mivi-lfm350-master",
-    max_steps=600,        # 600 steps × 64 = 38,400 sample views (~1.92 epochs)
-    batch_size=32,        # ⚡ Uses ~6-8 GB VRAM, 5x faster
-    grad_accum=2,
-    lr=2.5e-4
-)
+# A fresh run was started in Cell 3. Check that the step counter is moving:
+!nvidia-smi
+
+# If Colab disconnects after a checkpoint, resume from the latest directory, e.g.:
+# !python3 scripts/train_mivi_unsloth.py --model LiquidAI/LFM2.5-350M --dataset datasets/mivi_master_15k_sft.jsonl --output outputs/mivi-lfm350-master --steps 1000 --max-seq-length 512 --batch-size 32 --grad-accum 2 --lr 2.5e-4 --dataset-procs 2 --loader-workers 2 --save-steps 100 --no-gradient-checkpointing --resume outputs/mivi-lfm350-master/checkpoint-500
 ```
 
 ---
@@ -203,11 +110,22 @@ for g in ggufs:
 
 ---
 
+## If training is slow, appears stuck, or runs out of memory
+
+- The job is 1,000 optimizer steps × 64 samples = 64,000 sample views. With `max_seq_length=512`, the upper bound is 32.8M token positions before padding/truncation. One hour is plausible on CPU or a badly configured runtime, but not a healthy T4 run.
+- The training cell must print the GPU name, effective batch, and checkpoint interval before model loading. If it does not, it is not using the updated script.
+- If the loss/step counter does not advance for 10 minutes, run `!nvidia-smi` in another cell and inspect GPU utilization. Do not start a second training process.
+- If batch 32 causes an out-of-memory error, keep the same effective batch with `--batch-size 16 --grad-accum 4 --gradient-checkpointing`. This is slower but safe.
+- Checkpoints are written every 100 steps. Resume with the commented command in Cell 4 after a disconnect.
+
 ## 💻 Step 3: Local Benchmarking (After Download)
 
 ```bash
+# The master dataset teaches XML <tool_call>, so benchmark it in Hermes mode.
+export MIVI_TOOL_FORMAT=hermes
+
 # 1. Copy downloaded model to models/new/
-cp ~/Downloads/*LFM2.5-350M*.gguf models/new/LFM2.5-350M.Q4_K_M.gguf
+cp ~/Downloads/*q4_k_m*.gguf models/new/LFM2.5-350M.Q4_K_M.gguf
 
 # 2. Run the 26-test deep evaluation
 python3 scripts/deep_model_test.py
