@@ -33,7 +33,7 @@ print("✅ Environment ready via uv!")
 
 ---
 
-### 🔹 Cell 2: Clone Repo & Build 15,000-Sample Master Dataset (~1–2 minutes)
+### 🔹 Cell 2: Clone Repo & Build 15,000-Sample Master Dataset (~3 seconds)
 ```python
 import os, pathlib, subprocess
 
@@ -45,8 +45,8 @@ if not pathlib.Path('mivi-v2').exists():
 os.chdir('/content/mivi-v2')
 subprocess.run(['git', 'pull', 'origin', BRANCH], check=True)
 
-# Build 15,000 Sample Master Dataset (Streaming xLAM + UltraFeedback + Verified Coding + Param Binding)
-subprocess.run(['python3', 'scripts/build_15k_agentic_dataset.py', '--total', '15000', '--out', 'datasets/mivi_master_15k_sft.jsonl'], check=True)
+# Build 15,000 Sample Master Dataset (Fast Offline Mode: Parameter Binding + Verified Coding + Tools + Chat)
+subprocess.run(['python3', 'scripts/build_15k_agentic_dataset.py', '--total', '15000', '--fast', '--out', 'datasets/mivi_master_15k_sft.jsonl'], check=True)
 DATASET = 'datasets/mivi_master_15k_sft.jsonl'
 print('✅ Master Dataset ready:', DATASET, '| rows:', sum(1 for _ in open(DATASET)))
 ```

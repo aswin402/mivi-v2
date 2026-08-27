@@ -36,7 +36,7 @@ print("✅ Environment ready via uv!")
 
 ---
 
-### 🔹 Cell 2: Clone Repository & Build Master Dataset (~10 seconds)
+### 🔹 Cell 2: Clone Repository & Build Master Dataset (~3 seconds)
 ```python
 import os, pathlib, subprocess
 
@@ -48,9 +48,9 @@ if not pathlib.Path('mivi-v2').exists():
 os.chdir('/content/mivi-v2')
 subprocess.run(['git', 'pull', 'origin', BRANCH], check=True)
 
-# Build Master SFT Dataset (280 balanced samples across all 6 agentic pillars)
-subprocess.run(['python3', 'scripts/generate_agentic_lfm_dataset.py'], check=True)
-DATASET = 'datasets/mivi_lfm_serving_master.jsonl'
+# Build 15,000 Sample Master Dataset (Fast Offline Mode: Parameter Binding + Verified Coding + Tools + Chat)
+subprocess.run(['python3', 'scripts/build_15k_agentic_dataset.py', '--total', '15000', '--fast', '--out', 'datasets/mivi_master_15k_sft.jsonl'], check=True)
+DATASET = 'datasets/mivi_master_15k_sft.jsonl'
 print('✅ Master Dataset ready:', DATASET, '| rows:', sum(1 for _ in open(DATASET)))
 ```
 
