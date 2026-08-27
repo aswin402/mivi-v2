@@ -571,8 +571,8 @@ def gen_agent_protocol():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", default="agentic_15k_dataset.jsonl", help="Output JSONL file")
-    parser.add_argument("--total", type=int, default=15000, help="Total samples to keep")
+    parser.add_argument("--out", default="datasets/mivi_master_15k_sft.jsonl", help="Output JSONL file")
+    parser.add_argument("--total", type=int, default=20000, help="Total samples to keep")
     parser.add_argument("--fast", action="store_true", help="100% offline generation (no huggingface)")
     args = parser.parse_args()
 
